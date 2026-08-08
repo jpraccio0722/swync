@@ -217,7 +217,12 @@ pub fn from_source(code: &str) -> Result<Vec<GraphicalPattern>, Diagnostic> {
         let ScreeItem::Let { name, value: Expr::List(steps) } = item else {
             continue;
         };
-        let Some(steps) = steps.iter().map(parse_step).collect::<Option<Vec<_>>>() else {
+        let mut octave = None;
+        let Some(steps) = steps
+            .iter()
+            .map(|step| parse_step(step, &mut octave))
+            .collect::<Option<Vec<_>>>()
+        else {
             continue;
         };
         let name = name.0.clone();
@@ -282,7 +287,12 @@ fn infer_mode(steps: &[GraphicalStep]) -> Mode {
 
 /// One element of a list, as a beat — or `None` when it is something a cell
 /// cannot hold, like a nested list or an expression.
-fn parse_step(item: &ListItem) -> Option<GraphicalStep> {
+/// `octave` is the register the language keeps while reading a sequence — set
+/// by every note that spells one, read by every note that does not. The panel
+/// has to keep it too: a row written `[a1, a, a, a]` is four `a1` cells, and a
+/// grid that could not read it would leave the row undrawn for no reason the
+/// person looking at the file could see.
+fn parse_step(item: &ListItem, octave: &mut Option<i32>) -> Option<GraphicalStep> {
     // A length is drawable now — it is how wide the note is — but only a plain
     // number is. `[c4;beats]` is a length the grid cannot show a cell for,
     // since it does not know what `beats` is; the row is passed over rather
@@ -305,7 +315,16 @@ fn parse_step(item: &ListItem) -> Option<GraphicalStep> {
         // A note name is a plain variable to the parser; the lowerer only reads
         // it as a pitch when nothing else has that name, and so do we.
         Expr::Var(name) => match lang::note(&name.0) {
-            NoteName::Note(note) => StepKind::Pitch { note },
+            NoteName::Note { midi, octave: spelled } => {
+                *octave = Some(spelled);
+                StepKind::Pitch { note: midi }
+            }
+            // A written value is also a note letter in one case — `e` — and the
+            // language refuses that step rather than choosing. Undrawable
+            // either way, so the row simply is not shown.
+            NoteName::PitchClass(offset) if lang::duration(&name.0).is_none() => {
+                StepKind::Pitch { note: lang::in_octave(offset, (*octave)?) }
+            }
             _ => return None,
         },
         _ => return None,
@@ -419,6 +438,35 @@ mod tests {
                 ]
             )]
         );
+    }
+
+    /// A row that carries its octave reads as the notes it stands for. The
+    /// panel keeps the same register the language does, so a hand-written
+    /// melody is drawable rather than passed over for a rule it obeys.
+    #[test]
+    fn a_hand_written_row_may_carry_its_octave() {
+        let read = from_source("let riff = [c4, ef, g, c5]\n").expect("should read");
+        assert_eq!(
+            read,
+            vec![pat("riff", vec![pitch(60.0), pitch(63.0), pitch(67.0), pitch(72.0)])]
+        );
+        // Drawing over it spells every octave out again: a grid is cells, and
+        // has nowhere to keep a register. Sharps, because the cells are
+        // semitones and only one spelling can come back out of a number.
+        assert!(
+            to_source(&read).contains("let riff = [c4, ds4, g4, c5]"),
+            "got {}", to_source(&read),
+        );
+    }
+
+    /// A row whose first note has no octave has no register to read, so there
+    /// is nothing to draw and the row is passed over — the same answer the
+    /// language gives, which is an error rather than a default octave.
+    #[test]
+    fn a_row_that_never_spells_an_octave_is_passed_over() {
+        let read = from_source("let hats = [\\, `]\nlet riff = [a, b, c]\n").expect("should read");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].name, "hats");
     }
 
     /// A file may hold more than a grid can draw. It still compiles — every
