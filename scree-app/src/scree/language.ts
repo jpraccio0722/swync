@@ -52,17 +52,22 @@ const NUMBER = /^(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?/;
 const STRING = /^"[^"\n]*"?/;
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*/;
 /**
- * Mirrors `lang::note`. Whole-string, and the octave is required — that is
- * what keeps `f` and `a` reading as ordinary names. A binding may still shadow
- * a note, which the highlighter cannot know, so this is a spelling test rather
+ * Mirrors `lang::note` with its octave spelled. A binding may still shadow a
+ * note, which the highlighter cannot know, so this is a spelling test rather
  * than a resolution.
  */
 const NOTE = /^[a-g][sf]?[0-9]$/;
 /**
- * Mirrors `lang::DURATIONS` and `lang::TUPLET`. Whole-string and single-letter,
- * which is why these cannot collide with note names — those require an octave
- * digit. A binding shadows one exactly as it shadows a note, which the
- * highlighter cannot know, so this is a spelling test rather than a resolution.
+ * Mirrors `lang::note` without one: a pitch class, which is a note only where a
+ * sequence has already given an octave — see `octaves` below for how that is
+ * tracked. Checked *after* {@link DURATION}, since `e` is the eighth note and
+ * the lowerer refuses it as a pitch rather than choosing.
+ */
+const PITCH_CLASS = /^[a-g][sf]?$/;
+/**
+ * Mirrors `lang::DURATIONS` and `lang::TUPLET`. Whole-string and single-letter.
+ * A binding shadows one exactly as it shadows a note, which the highlighter
+ * cannot know, so this is a spelling test rather than a resolution.
  */
 const DURATION = /^[whqest]$/;
 /**
@@ -92,6 +97,21 @@ const OPERATORS = [
 interface State {
   /** The previous token was `fn`, so the next identifier is a definition. */
   afterFn: boolean;
+  /**
+   * One entry per open `[`: whether a note in that list has spelled an octave
+   * yet, which is what makes a following bare letter a pitch rather than a
+   * name. Pushed on `[` and popped on `]`, so a group inherits nothing and a
+   * `let a = 3` two lines down is not coloured by a list that has closed.
+   *
+   * A stack rather than a boolean because the lowerer restores the register at
+   * a closing bracket and the colours should go back with it, and each level
+   * opens on whatever the one outside it had — the same inheritance
+   * `Expr::List` does, so a group's notes colour like the line they sit in.
+   *
+   * CodeMirror's default `copyState` slices arrays, so the per-line copies do
+   * not share this one.
+   */
+  octaves: boolean[];
 }
 
 function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<State> {
@@ -100,7 +120,7 @@ function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<State
   return {
     name: "scree",
 
-    startState: () => ({ afterFn: false }),
+    startState: () => ({ afterFn: false, octaves: [] }),
 
     token(stream, state) {
       if (stream.eatSpace()) return null;
@@ -152,8 +172,18 @@ function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<State
           state.afterFn = name === "fn";
           return "keyword";
         }
-        if (NOTE.test(name)) return "screeNote";
+        if (NOTE.test(name)) {
+          // A spelled octave opens the register for the letters after it.
+          if (state.octaves.length) state.octaves[state.octaves.length - 1] = true;
+          return "screeNote";
+        }
         if (DURATION.test(name)) return "screeDuration";
+        // Only a pitch once something has said which octave — before that it is
+        // an ordinary name, and colouring it otherwise would turn every
+        // parameter called `f` pink.
+        if (PITCH_CLASS.test(name) && state.octaves[state.octaves.length - 1]) {
+          return "screeNote";
+        }
         if (index.has(name)) return "screeBuiltin";
         // A name in call position is a user function; anything else is a value.
         return stream.match(/^\s*\(/, false) ? "fnName" : "variable";
@@ -161,7 +191,18 @@ function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<State
 
       state.afterFn = false;
 
-      if (stream.match(/^[[\]{}()]/)) return "bracket";
+      // A `[` opens an octave register inheriting the one around it, and `]`
+      // closes it — see `State.octaves`. Only the list brackets: the others
+      // group expressions rather than steps.
+      if (stream.match("[")) {
+        state.octaves.push(state.octaves[state.octaves.length - 1] ?? false);
+        return "bracket";
+      }
+      if (stream.match("]")) {
+        state.octaves.pop();
+        return "bracket";
+      }
+      if (stream.match(/^[{}()]/)) return "bracket";
       // Before the single-character rule, and before the operators: `::*` and
       // `::` are their own tokens in `lex.rs`, and `*` is not a multiplication
       // when it follows one.

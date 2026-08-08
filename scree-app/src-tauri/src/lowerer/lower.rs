@@ -39,6 +39,19 @@ pub struct Lowerer {
     /// can say what fraction of one it is, and `bpm` answers in bars per
     /// second. Everything else here already counts bars and never asks.
     pub meter: Meter,
+    /// The octave in force while a written sequence is being lowered: set by
+    /// every step that spells one, read by every note that does not, so
+    /// `[a1;q, a, a, a]` is four `a1`s.
+    ///
+    /// A field rather than a parameter because the register belongs to the
+    /// *written* sequence — `Expr::List` opens and closes it — while the note
+    /// that reads it is resolved several frames down in `Expr::Var`, past the
+    /// arithmetic and the calls in between, none of which have any business
+    /// knowing about octaves.
+    ///
+    /// `None` outside a sequence, and that is what keeps an octave-less note an
+    /// error everywhere else rather than a silent pitch.
+    pub octave: Option<i32>,
 }
 
 /// One eval produces two artifacts: the persistent graph, which is crossfaded
@@ -156,6 +169,7 @@ fn lower_inner(
         samples,
         choices: Vec::new(),
         meter,
+        octave: None,
     };
 
     if let Some(dur) = dur {

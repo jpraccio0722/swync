@@ -139,9 +139,11 @@ That file is folded into every program the project runs, so a drawn pattern
 needs no `use` — it is simply in scope.
 
 Being a real file, it goes both ways: open it in a tab, edit it by hand, save,
-and the panel redraws from what you wrote. Draw in the panel and the file is
-rewritten. Anything else you keep in that file is lost the next time a row
-changes.
+and the panel redraws from what you wrote — including a row that
+[carries its octave](#notes-and-octaves), like `[a1, a, a, a]`. Draw in the
+panel and the file is rewritten, with every octave spelled out: a grid is cells
+and has no register to write down. Anything else you keep in that file is lost
+the next time a row changes.
 
 
 ## Samples
@@ -350,6 +352,53 @@ A finished take is listed at the bottom of the settings panel, with a Reveal
 that opens it in the Finder. And since it is an ordinary audio file, the next
 program can `load` it.
 
+## Notes and octaves
+
+A pitch is written as a letter, an optional `s` for sharp or `f` for flat, and
+an octave: `c4` is middle C and MIDI 60, `af3` is A flat below it, `gs9` is the
+top of the range. Octaves run 0 to 9, and enharmonics are allowed — `bs3` is
+`c4`, `cf4` is `b3`. Flats are `f` rather than `b` because `b` is already a note
+and `db3` would collide with the `db` builtin.
+
+A note is a plain number once it is read, so everything numeric works on it:
+`c4.oct(1)`, `c4.semi(7)`, `c4 + 12`, `c4.m2h`.
+
+**The octave carries.** Inside a sequence, a note written without one takes the
+octave of the last note that spelled one, the same way a written value carries
+its length:
+
+```rust
+play([a1;q, a, a, a], bass)              // four a1s
+play([c4;q, ef, g, c5, ef, g], lead)     // two arpeggios, an octave apart
+```
+
+Only a spelled octave moves the register, so the octave of any note is found by
+reading backwards to the nearest digit. A step that *computes* its pitch —
+`c4.oct(1)`, `n + 12` — lands somewhere the text never says, so it carries
+nothing, and a bound name shadows a bare letter exactly as it shadows `c4`.
+
+A group takes the octave in with it and gives it back at the closing bracket,
+which is the rule a written value already follows: in
+`[c4;q, [g, b, d5];t, g]` that last `g` is g4, not g5.
+
+There is nothing to carry outside a sequence, so a bare letter there is an
+error rather than a guess — which is what keeps `f`, `a` and `e` usable as
+ordinary parameter names.
+
+**`e` is the one collision.** It is the eighth note and also the note E. In a
+sequence that is already in an octave either could be meant, so the step is
+refused instead of quietly becoming one of them:
+
+```rust
+play([c4;q, e, g], lead)      // refused: is `e` an eighth, or is it E?
+play([c4;q, e4, g], lead)     // the note
+play([c4;q, \;e, g], lead)    // a pitchless hit, an eighth long
+```
+
+Nowhere else is `e` ambiguous. With no octave in force it is the eighth it has
+always been, and after a `;` it is a length and never a pitch.
+
+
 ## Rhythm in note values
 
 Two words do all the work here, and they are not the same word:
@@ -373,9 +422,11 @@ play([c4;q, e4, g4], lead)      // three beats
 play([c4;q, e4, g4, c5], lead)  // four quarters — one bar, in 4/4
 ```
 
-A value carries to the steps after it, so a pass says what it is once. A bare
-`q` is a hit of that length — a written value carries no pitch, which is what
-`\` already means — so `[q, q, q]` is three quarter-note hits.
+A value carries to the steps after it, so a pass says what it is once — the
+same way [an octave carries](#notes-and-octaves), and a melody on one line can
+say both once: `[c4;q, ef, g, c5]`. A bare `q` is a hit of that length — a
+written value carries no pitch, which is what `\` already means — so
+`[q, q, q]` is three quarter-note hits.
 
 **Dots and ties.** `q.dot` is a dotted quarter, and `dot` takes a count for the
 rest: `q.dot(2)` is the doubly-dotted quarter, a quarter and an eighth and a
@@ -456,7 +507,8 @@ contents come to a plain duration would be played in exactly the time it is
 written, so `;t` would be claiming a compression that is not there.
 
 A value set inside a group stops there: `[c4;q, [e4;e, f4, g4];t, c5]` leaves
-`c5` a quarter.
+`c5` a quarter. An octave set inside one stops there too — one rule for both
+registers, so a bracket never has to be read twice.
 
 ### The two cannot be mixed
 
