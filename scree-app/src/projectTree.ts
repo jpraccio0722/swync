@@ -89,9 +89,10 @@ export function isWithin(path: string, ancestor: string): boolean {
 /**
  * The listings and the open folders, for one project.
  *
- * `version` is bumped by the panel's refresh button and by opening a project;
- * it throws every listing away, which is the only way to pick up a folder that
- * changed outside the app — nothing here watches the filesystem.
+ * `version` is bumped when the project's folder changes under the app — the
+ * backend watches it — and by whatever in the app has just changed it. It
+ * re-reads every folder that is open, which is how the tree stays what is on
+ * the disk without anything here having to know what happened.
  */
 export function useProjectTree(root: string | null, version: number): ProjectTree {
   const [listings, setListings] = useState<Record<string, Listing>>({});
@@ -131,11 +132,12 @@ export function useProjectTree(root: string | null, version: number): ProjectTre
     if (root !== null) load(root);
   }, [root, load]);
 
-  // A refresh of the project already open, which is the only way to pick up a
-  // folder changed from outside the app. Every folder that has been read is
-  // read again, and every folder that is open stays open: the tree you are
-  // looking at is the thing you asked to see the current state of, and
-  // collapsing it back to the root answers a question nobody asked.
+  // Something changed in the project already open. Every folder that has been
+  // read is read again, and every folder that is open stays open: what you are
+  // looking at is the thing being brought up to date, and collapsing it back
+  // to the root answers a question nobody asked. This runs unprompted now that
+  // the folder is watched, which makes keeping the tree still that much more
+  // important — a row must not move under a pointer that was reaching for it.
   const seen = useRef(version);
   useEffect(() => {
     if (seen.current === version) return;

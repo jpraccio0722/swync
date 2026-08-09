@@ -398,6 +398,7 @@ mod tests {
             samples: Default::default(),
             choices: Vec::new(),
             meter: Default::default(),
+            octave: None,
         }
     }
 

@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { PanelTab, PanelTabs } from "./PanelTabs";
 
-/** Which of the panel's two views is on top. */
-export type RightTab = "transport" | "docs";
+/** Which of the panel's three views is on top. */
+export type RightTab = "transport" | "docs" | "settings";
 
 interface RightPanelProps {
   open: boolean;
@@ -14,19 +14,21 @@ interface RightPanelProps {
   onTabChange: (tab: RightTab) => void;
   transport: ReactNode;
   docs: ReactNode;
+  settings: ReactNode;
 }
 
 /**
- * The right-hand panel: the engine's controls, and the language reference.
+ * The right-hand panel: the drawn patterns, the language reference, and what
+ * the app itself is set to.
  *
- * The two share a panel because neither is the program — they are the things
- * you reach for while writing one, and both want to be reachable without
- * giving up the file you are looking at.
+ * They share a panel because none of them is the program — they are the things
+ * you reach for while writing one, and all of them want to be reachable
+ * without giving up the file you are looking at.
  *
- * Like the left panel, both views stay mounted and the hidden one is only
+ * Like the left panel, every view stays mounted and the hidden ones are only
  * taken off screen: the reference keeps its search and its scroll position
- * while the transport is showing, and the transport keeps the sliders it has
- * already read from the engine.
+ * while the patterns are showing, and the settings keep the folder they have
+ * already read.
  */
 export function RightPanel({
   open,
@@ -36,6 +38,7 @@ export function RightPanel({
   onTabChange,
   transport,
   docs,
+  settings,
 }: RightPanelProps) {
   return (
     <aside
@@ -68,6 +71,11 @@ export function RightPanel({
           selected={tab === "docs"}
           onClick={() => onTabChange("docs")}
         />
+        <PanelTab
+          label="Settings"
+          selected={tab === "settings"}
+          onClick={() => onTabChange("settings")}
+        />
       </PanelTabs>
 
       {/* The transport scrolls as a whole: the patterns list has no bound, and
@@ -90,6 +98,17 @@ export function RightPanel({
         }
       >
         {docs}
+      </div>
+      {/* Scrolls as a whole, like the patterns: it is a short column of
+          controls, and a window too small for them should move them rather
+          than cut the bottom one off. */}
+      <div
+        className={
+          "min-h-0 flex-1 flex-col overflow-y-auto " +
+          (tab === "settings" ? "flex" : "hidden")
+        }
+      >
+        {settings}
       </div>
     </aside>
   );

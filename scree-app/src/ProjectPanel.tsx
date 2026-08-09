@@ -432,14 +432,13 @@ interface ProjectPanelProps {
   name: string | null;
   /** Rename the project, which is saved with the rest of its settings. */
   onRename: (name: string) => void;
-  /** Bumped to throw every listing away and read the project again. */
+  /** Bumped to read every open folder again — by the watch on the project's
+   *  folder, and by whatever in the app has just changed it. */
   version: number;
   /** The file the editor is showing, so the tree can mark it. */
   activePath: string | null;
   /** Open a file in a tab. */
   onOpenFile: (path: string) => void;
-  /** Throw the listings away and read the folder again. */
-  onRefresh: () => void;
   /** A file or folder has moved, so anything holding its old path — an open
    *  tab, the project's own files — can follow it. */
   onMoved: (from: string, to: string) => void;
@@ -472,7 +471,6 @@ export function ProjectPanel({
   version,
   activePath,
   onOpenFile,
-  onRefresh,
   onMoved,
   onDeleted,
   onProblems,
@@ -708,14 +706,9 @@ export function ProjectPanel({
             <path d="M10 4H2v16h20V6H12l-2-2zm1 6h2v3h3v2h-3v3h-2v-3H8v-2h3v-3z" />
           </svg>
         </HeaderButton>
-        {/* Nothing watches the filesystem, so a folder changed from outside the
-            app needs asking for. Collapsing and reopening does it for one
-            folder; this does it for the lot. */}
-        <HeaderButton title="Refresh" onClick={onRefresh}>
-          <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5">
-            <path d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 16.24 7.76L13 11h7V4l-2.35 2.35z" />
-          </svg>
-        </HeaderButton>
+        {/* There is no refresh button: the project's folder is watched, and a
+            change made anywhere else reaches the tree on its own. See
+            `watcher.rs`. */}
       </div>
 
       {/* The tree, and below it the rest of the panel — which is the project

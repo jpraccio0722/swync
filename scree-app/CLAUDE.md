@@ -44,6 +44,52 @@ Every stage returns `Result<_, Diagnostic>` tagged with a `Stage`, and nothing i
 
 **Two things make sound, by different routes.** The graph is continuous and lives in `engine.slot`, replaced by a 0.2s crossfade. Patterns are discrete: the scheduler thread (`scheduler/scheduler.rs`) free-runs from app start, wakes every 25ms, and pushes voices into a `Sequencer` 0.2s ahead of the audio clock. An eval never "triggers" the scheduler — it swaps the state the scheduler reads on its next pass. Ordering inside `run_code` matters and is commented where it does: instruments before patterns, clock reset before patterns are published.
 
+## Recording
+
+`src-tauri/src/recorder/` — the record button's other half. The tap is in
+`render` in `engine.rs`, on the block the device is about to be filled from, so
+a recording is the graph, the sequencer and the master fader together and
+nothing earlier.
+
+That puts half of it on the audio callback's side of the deadline, and the
+split is the whole design. `Tap` is a fixed ring of `AtomicU32` sample bits,
+allocated once at startup and sized in seconds; the callback's entire part in a
+recording is copying a block in and releasing one index. A writer thread drains
+it every 25ms and writes the file. When nothing is being recorded the callback
+does one relaxed load and returns.
+
+Three things follow from that and are what the tests pin:
+
+- **A ring that overruns drops the block and counts it.** The writer thread
+  would have to fall four seconds behind for this to happen. Waiting instead
+  would put a gap in the *output*, which everyone in the room hears, rather
+  than in the file, which one person notices later.
+- **The file's header is patched every second** (`wav::Writer::checkpoint`), so
+  a take that ends in a crash is still playable. A WAV whose sizes are still
+  zero is not a short recording, it is nothing.
+- **A failure on the writer thread has no command to be the answer to.** A
+  disk filling up mid-performance is collected by `recording_state`, which the
+  editor polls twice a second while a take runs — the same poll that draws the
+  clock on the button.
+
+Record plays as well, and the order is load-bearing: `toggleRecording` in
+`App.tsx` arms the tap and *then* evals, so the 0.2s crossfade the program
+fades in on is inside the file rather than in front of it. `play` returns
+whether the eval compiled for this one caller — a take that began with a
+program nobody could compile is stopped at once, since what it would otherwise
+hold is the silence after a typo. Stopping is the mirror — `stop_audio`, then
+`FADE_OUT_DELAY`, then close the file. The wait is the point: the graph fades
+out over 0.2s, and a file closed before that landed ends mid-waveform on a
+click.
+
+`settings.rs` is the app's own settings file, in the config dir beside the
+remembered session, and holds the output folder and the format. It is separate
+from `project.rs` on purpose: a project's file travels with the piece, and an
+absolute output path would be meaningless on anybody else's machine. The
+formats come from `recorder::formats()` rather than a TypeScript list, for the
+same reason `lang.rs` serves the builtins — a dropdown offering something the
+recorder cannot write is a promise broken after the take.
+
 ## Bars, passes, and the one place "cycle" survives
 
 Musical time is counted in **bars**. A **pass** is one trip through a pattern: a list of shares is one pass and fills the bar in any signature, while a pass written in note values is as long as its values add up to and rotates against the bar when they disagree. The two words are not interchangeable, and the tests say which they mean — `a_three_beat_pass_fills_a_three_four_bar` against `a_three_beat_pass_takes_three_quarters_of_a_four_four_bar` is the whole distinction in two cases.
@@ -62,9 +108,13 @@ So **adding a builtin means adding one entry to `UGENS` (or `LIST_BUILTINS`, etc
 
 ## Projects, patterns, imports
 
-A project is a folder with a `scree-project.json` (name, bpm, meter, volume), written debounced as you change things. `src-tauri/src/project.rs` and `files/` own it. Two other files may sit beside it — a `scree-library.json` naming what the project exports as, and a hidden `.scree/libraries/` holding vendored libraries — both covered below.
+A project is a folder with a `scree-project.json` (name, bpm, meter, volume), written debounced as you change things. What belongs to the machine rather than the piece — the recording folder and format — is in the app config dir instead; see Recording above. `src-tauri/src/project.rs` and `files/` own it. Two other files may sit beside it — a `scree-library.json` naming what the project exports as, and a hidden `.scree/libraries/` holding vendored libraries — both covered below.
 
 Drawn patterns from the right-hand panel are a real file, `patterns.scree` at the project root, folded into every eval as an implicit `use patterns::*`. The panel also sends its patterns *with* the eval rather than relying on the write having landed, so `run_code` takes `Option<Vec<GraphicalPattern>>`: `None` means "the panel has nothing to say, use the disk", `Some([])` means "the panel read this project and it has no patterns" — only the second may hide a file on disk.
+
+The project's folder is **watched** (`src-tauri/src/watcher.rs`, `notify`), which is why the tree has no refresh button. One `project-changed` event per settled 200ms burst reaches `App.tsx`, which bumps `projectVersion`; the tree re-reads the folders it has open, and the patterns and settings files are read again with it. Two filters keep that from firing on the app's own work: hidden paths are skipped, exactly as `list_dir` skips them, and content changes are ignored because the tree shows names. Anything else — including events the platform could not classify — refreshes, since an extra directory listing costs nothing and a missed file is the whole point of the watch.
+
+That the tree now re-reads unprompted is what makes two things load-bearing. `useProjectTree` keeps every open folder open across a version bump, so nothing moves under a pointer reaching for it. And `fromWire` keeps a drawn pattern's id when the same project's file names that row again — the id is what a composer tab holds, and minting a fresh one on every re-read would take the pattern out from under an open tab.
 
 `use` paths are routes, not names, and only ever go downward. Renaming or moving a file therefore rewrites the `use` lines that pointed at it (`files/reroute.rs`); a move that no rewrite can honestly follow still happens, and the broken imports are named in the problems panel. Imports read what is *saved*, so a module must be written to disk before a file that uses it is played.
 
@@ -84,7 +134,7 @@ Three things carry the weight:
 
 ## Frontend shape
 
-`src/App.tsx` is deliberately the center — tabs, project state, transport, panel wiring and all the `invoke` calls live there; the panel components are mostly presentational. Native menu items arrive as Tauri events (`file-new`, `project-open`, …) listened to in `App.tsx`.
+`src/App.tsx` is deliberately the center — tabs, project state, transport, recording, panel wiring and all the `invoke` calls live there; the panel components are mostly presentational. Native menu items arrive as Tauri events (`file-new`, `project-open`, …) listened to in `App.tsx`.
 
 `src/scree/` is the CodeMirror extension bundle. `screeExtensions()` must be called once and memoized — CodeMirror reconfigures when the extension array's identity changes, which would discard completion state on every keystroke. Values that change (drawn pattern names, the docs callback, the `Symbols` cache) are passed as getters or long-lived objects for the same reason.
 

@@ -34,7 +34,10 @@ mod lowerer;
 pub mod lang;
 mod library;
 mod project;
+mod recorder;
 mod samples;
+mod settings;
+mod watcher;
 
 /// Backend hook for the editor's "play" button.
 ///
@@ -416,6 +419,110 @@ fn create_project(
     let file = open_project(root.clone(), engine)?;
     project::write(std::path::Path::new(&root), &file.project)?;
     Ok(file)
+}
+
+/// Watch a project's folder, or stop watching when it closes.
+///
+/// Called with whatever project is open, and again whenever that changes. The
+/// tree needs no refresh button once this is running: a file made by anything
+/// else — the Finder, a script, a branch being checked out — raises
+/// `project-changed`, and the editor reads the folders it is showing again.
+///
+/// A folder that cannot be watched is worth saying so about, since what it
+/// costs is exactly the thing the button used to do: the tree carries on
+/// working, and stops noticing anything it did not do itself.
+#[tauri::command]
+fn watch_project(
+    app: tauri::AppHandle,
+    root: Option<String>,
+    watch: tauri::State<watcher::Watch>,
+) -> Result<(), String> {
+    let handle = app.clone();
+    watch.set(root.as_deref().map(std::path::Path::new), move || {
+        let _ = handle.emit(watcher::PROJECT_CHANGED, ());
+    })
+}
+
+/// The app's own settings — where recordings go, and what they are written as.
+///
+/// A separate file from a project's, in the app's config directory: see
+/// `settings.rs` for why an output folder must not travel with a piece.
+#[tauri::command]
+fn settings(app: tauri::AppHandle) -> Result<settings::Settings, String> {
+    Ok(settings::read(&config_file(&app, settings::FILE)?))
+}
+
+/// Remember them. Called as the settings panel is changed, the same way a
+/// project's file is written as the transport moves.
+#[tauri::command]
+fn set_settings(app: tauri::AppHandle, settings: settings::Settings) -> Result<(), String> {
+    settings::write(&config_file(&app, settings::FILE)?, &settings)
+}
+
+/// What a recording may be written as, for the settings panel's dropdown.
+///
+/// Served from the recorder's own table rather than written out again in
+/// TypeScript, for the same reason the language's builtins are: a format the
+/// editor offers and the recorder cannot write would be a promise broken after
+/// the take, which is the worst moment to find out.
+#[tauri::command]
+fn recording_formats() -> Vec<recorder::FormatInfo> {
+    recorder::formats()
+}
+
+/// Start recording what comes out of the engine.
+///
+/// The name is made here rather than asked for: a performance is not a save
+/// dialog, and a take that had to be named before it could begin is a take
+/// that starts several seconds late. `root` is the open project, which is
+/// where recordings go when no folder has been chosen, and what the file is
+/// named after.
+///
+/// Everything that can refuse — no folder, a folder that is gone, a name
+/// already taken — refuses here, before anything is armed, so a recording that
+/// says it started really has.
+#[tauri::command]
+fn start_recording(
+    app: tauri::AppHandle,
+    root: Option<String>,
+    name: Option<String>,
+    recorder: tauri::State<recorder::Recorder>,
+) -> Result<String, String> {
+    let settings = settings::read(&config_file(&app, settings::FILE)?);
+    let dir = settings.recording_dir_for(root.as_deref())?;
+
+    // The project's name if it has one, then the folder's, then a word that is
+    // at least not a lie about what the file is.
+    let stem = name
+        .or_else(|| {
+            root.as_deref()
+                .and_then(|root| std::path::Path::new(root).file_name()?.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "recording".to_string());
+
+    let path = recorder::unique_path(&dir, &stem, settings.recording_format)?;
+    recorder.start(&path, settings.recording_format)
+}
+
+/// Stop, and answer with the finished file.
+///
+/// This waits for the file to be closed rather than returning as soon as the
+/// tap is disarmed: the editor is about to say where the recording is, and a
+/// recording is not one until its header has been filled in.
+#[tauri::command]
+fn stop_recording(recorder: tauri::State<recorder::Recorder>) -> Result<recorder::Finished, String> {
+    recorder.stop()
+}
+
+/// How the take is going.
+///
+/// Asked for while one is running, which is also how a failure on the writer
+/// thread — a disk filling up — reaches the editor: nothing commanded it, so
+/// there is no answer for it to travel back in, and it waits here instead.
+#[tauri::command]
+fn recording_state(recorder: tauri::State<recorder::Recorder>) -> recorder::RecordingState {
+    recorder.state()
 }
 
 /// Write a project's settings out, and say where they went.
@@ -1042,10 +1149,17 @@ pub fn run() {
             library_manifest,
             export_library,
             module_symbols,
-            language_metadata
+            language_metadata,
+            settings,
+            set_settings,
+            recording_formats,
+            start_recording,
+            stop_recording,
+            recording_state,
+            watch_project
         ])
         .setup(|app| {
-            let (engine, seq) = engine::start()?;
+            let (engine, seq, tap) = engine::start()?;
             let clock = engine.clock.clone();
             let sched = SchedulerState::new();
 
@@ -1061,6 +1175,13 @@ pub fn run() {
 
             app.manage(Mutex::new(engine));
             app.manage(sched);
+            // Shares the tap with the audio callback, and is the only thing
+            // that ever arms it — the engine renders whether or not anybody is
+            // recording, and does not need to know which.
+            app.manage(recorder::Recorder::new(tap));
+            // Empty until a project is opened, which the editor does on launch
+            // as soon as it knows which one that is.
+            app.manage(watcher::Watch::default());
             // Outlives every eval: a break named by a program being edited is
             // decoded on the first run and shared by every run after it.
             app.manage(samples::Cache::default());

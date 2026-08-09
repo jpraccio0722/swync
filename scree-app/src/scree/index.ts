@@ -13,6 +13,13 @@ export { revealPosition, showErrorLines } from "./errors";
 export { Symbols } from "./symbols";
 
 /**
+ * Signature help is off for now: the hint sits above the cursor, over the line
+ * being read, and is in the way more often than it is wanted. Everything it
+ * needs is still here and still typechecked — turning it back on is this flag.
+ */
+const SIGNATURE_HELP = false;
+
+/**
  * Every scree editor extension, built from one metadata snapshot.
  *
  * Call this once per load and memoize the result: CodeMirror reconfigures when
@@ -46,7 +53,7 @@ export function screeExtensions(
     EditorView.updateListener.of((update) => {
       if (update.docChanged) symbols.refresh(update.state.doc.toString());
     }),
-    signatureHelp(index),
+    ...(SIGNATURE_HELP ? [signatureHelp(index)] : []),
     builtinHelp(index, openDocs),
     // Holds nothing until a run fails; the marks arrive by transaction, which
     // is what keeps this array's identity out of it.

@@ -2,6 +2,8 @@ import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import PlayIcon from "../assets/play.svg?react";
 import StopIcon from "../assets/stop.svg?react";
+import RecordIcon from "../assets/record.svg?react";
+import { elapsed } from "../SettingsPanel";
 import { ValueControl } from "./ValueControl";
 
 const MIN_BPM = 40;
@@ -49,8 +51,10 @@ export interface TransportState {
 }
 
 interface TransportProps {
-  /** Evaluate the active tab and hand the result to the engine. */
-  play: () => void | Promise<void>;
+  /** Evaluate the active tab and hand the result to the engine. Whether it
+   *  compiled is of no interest here — the problems panel has already been
+   *  told — so the answer is discarded rather than typed away. */
+  play: () => unknown;
   /** Silence everything the engine and scheduler are holding. */
   stop: () => void | Promise<void>;
   /**
@@ -60,15 +64,35 @@ interface TransportProps {
   state: TransportState | null;
   /** Report a move, so the open project can remember it. */
   onChange: (state: TransportState) => void;
+  /**
+   * Whether the engine is holding a program — which is what the lit play
+   * button says, and is not the same as whether anything is audible: a
+   * program that builds silence is still one the transport is running.
+   */
+  playing: boolean;
+  /**
+   * The take that is running, and how long it has been going — null when
+   * nothing is being recorded.
+   */
+  recording: { path: string; seconds: number } | null;
+  /** Start a take, or end the one that is running. */
+  onToggleRecording: () => void;
 }
 
 /**
- * Play, stop, tempo and volume, in the title bar.
+ * Play, stop, record, tempo and volume, in the title bar.
  *
  * They live here rather than in the transport panel because they are the
  * controls that must stay reachable with every panel shut — the engine keeps
  * running whatever is on screen, and the things that steer it should not be
  * behind a tab. Keyboard players still have ⌘, and ⌘.
+ *
+ * Record is here for the strongest version of that reason: a take begins
+ * because of something you just heard, and a record button behind a tab is one
+ * that gets pressed a bar late. It plays as well as records — see
+ * `toggleRecording` in `App` for why the two are one gesture. Where the file
+ * goes and what it is written as are decided in the settings panel, before any
+ * of that — see `SettingsPanel`.
  *
  * Tempo and volume belong to the engine rather than to the program, so their
  * values are never assumed here: they are read from the engine on launch and
@@ -78,7 +102,20 @@ interface TransportProps {
  * cheap enough to fire on every frame of a drag, and the audio side is built to
  * take them mid-performance.
  */
-export function Transport({ play, stop, state, onChange }: TransportProps) {
+export function Transport({
+  play,
+  stop,
+  state,
+  onChange,
+  playing,
+  recording,
+  onToggleRecording,
+}: TransportProps) {
+  // Green for playing, but not while a take is running: the record button is
+  // the light then, and two lit buttons would be two claims about one state.
+  // Which of them is on tells you what pressing the other one will do.
+  const lit = playing && recording === null;
+
   const setBpm = useCallback(
     (bpm: number) => {
       if (!state) return;
@@ -119,22 +156,66 @@ export function Transport({ play, stop, state, onChange }: TransportProps) {
   );
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       <button
         onClick={() => void play()}
-        title="Run (⌘,)"
-        className="rounded-md p-1.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-blue-400"
+        title={lit ? "Playing — run again (⌘,)" : "Run (⌘,)"}
+        aria-pressed={lit}
+        className={
+          "rounded-md p-1.5 text-xs transition-colors " +
+          (lit
+            ? "bg-green-950/60 text-green-400 hover:bg-green-900/60 hover:text-green-300"
+            : "text-neutral-400 hover:bg-neutral-800 hover:text-blue-400")
+        }
       >
-        <PlayIcon className="h-6 w-6" />
-        play
+        <div className="flex flex-col items-center min-w-10">
+          <PlayIcon className="h-6 w-6" />
+          play
+        </div>
       </button>
+
       <button
         onClick={() => void stop()}
         title="Stop (⌘.)"
         className="rounded-md p-1.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-red-400"
       >
-        <StopIcon className="h-6 w-6" />
-        stop
+        <div className="flex flex-col items-center min-w-10">
+          <StopIcon className="h-6 w-6" />
+          stop
+        </div>
+      </button>
+      <button
+        onClick={onToggleRecording}
+        title={
+          recording
+            ? "Stop — the music stops and the file is finished and saved"
+            : "Record — runs the file and captures everything you hear"
+        }
+        aria-pressed={recording !== null}
+        className={
+          "rounded-md p-1.5 text-xs transition-colors " +
+          (recording
+            ? "bg-red-950/60 text-red-400 hover:bg-red-900/60 hover:text-red-300"
+            : "text-neutral-400 hover:bg-neutral-800 hover:text-red-400")
+        }
+      >
+        {/* A stop square while a take is running, because that is what
+            pressing it now does — it ends the music as well as the file. A
+            record dot that stays a record dot reads as an invitation to start
+            a second take, which is the one thing this button cannot do while
+            one is open. The clock takes the place of the word for the same
+            reason: while it runs, how long it has been is what to know. */}
+        {recording ? (
+          <div className="flex flex-col items-center min-w-10">
+            <StopIcon className="h-6 w-6" />
+            <span className="font-mono tabular-nums">{elapsed(recording.seconds)}</span>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center min-w-10">
+            <RecordIcon className="h-6 w-6" />
+            <div>record</div>
+          </div>
+        )}
       </button>
 
       {/* Nothing to show until the engine has told us where the controls sit —

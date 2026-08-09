@@ -20,6 +20,13 @@ import { ProjectPanel } from "./ProjectPanel";
 import { isWithin } from "./projectTree";
 import { PatternComposer } from "./PatternComposer";
 import { RightPanel, type RightTab } from "./RightPanel";
+import {
+  SettingsPanel,
+  type FinishedRecording,
+  type RecordingFormat,
+  type RecordingState,
+  type Settings,
+} from "./SettingsPanel";
 import { SearchPanel } from "./SearchPanel";
 import { SidePanel, type SideTab } from "./SidePanel";
 import { toDiagnostic, type Diagnostic } from "./diagnostics";
@@ -70,6 +77,18 @@ const PATTERN_SAVE_DELAY = 400;
 /** The same for the project's settings, where the drag is a fader rather than
  *  a row of cells. */
 const PROJECT_SAVE_DELAY = 400;
+
+/**
+ * How long a take goes on recording after the engine has been silenced.
+ *
+ * `stop_audio` crossfades the graph out over 0.2s and cuts the voices the
+ * scheduler had pushed (see `engine.rs`), so the last fifth of a second of any
+ * performance is the fade itself. A file closed the moment stop was pressed
+ * would end mid-waveform at whatever level was sounding, which is a click on
+ * the end of every recording — and would cut the release off every note that
+ * was still ringing.
+ */
+const FADE_OUT_DELAY = 250;
 
 /** How long the app waits before writing the session out. Switching tabs and
  *  closing them come in bursts, and none of it is worth a write each. */
@@ -238,6 +257,16 @@ function App() {
   const [sideTab, setSideTab] = useState<SideTab>("project");
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
+  // Whether the engine is holding a program, which is what lights the play
+  // button. Not the same question as `runStatus`, which is about the last
+  // run's diagnostics: a refused eval leaves whatever is playing alone, so it
+  // is perfectly ordinary to be playing and in error at the same time.
+  //
+  // Tracked here rather than asked of the engine because the two ends of it
+  // are both this side's doing — an eval that landed, and a stop — and a poll
+  // would only be able to answer the different question of whether anything is
+  // audible, which a program that builds silence is not either way.
+  const [playing, setPlaying] = useState(false);
   // Which tab the diagnostics describe. They outlive the run, and the editor
   // may well have moved to another file by the time they are read.
   const [sourceTabId, setSourceTabId] = useState<string | null>(null);
@@ -265,9 +294,9 @@ function App() {
   // Everything that reads a project guards for it, and the patterns panel says
   // so rather than letting unsaved work look saved.
   const [projectRoot, setProjectRoot] = useState<string | null>(null);
-  // Bumped to throw the tree's listings away and read the folder again —
-  // nothing watches the filesystem, so a change made outside the app has to be
-  // asked for.
+  // Bumped to read the tree's open folders again. The backend watches the
+  // project's folder and says when something in it changed, so this is raised
+  // by the world as well as by the app: see the watch below.
   const [projectVersion, setProjectVersion] = useState(0);
   // The same, for what is installed. Bumped by the File menu's Install…, which
   // lands outside the panel that lists them.
@@ -294,6 +323,24 @@ function App() {
   // nobody could parse is left for a person to fix rather than overwritten.
   const projectFrom = useRef<string | null>(null);
   const projectOnDisk = useRef<string | null>(null);
+
+  // What the app itself is set to — where recordings go, and what they are
+  // written as. The app's, not the project's: an output folder is a path into
+  // one machine's disk and would mean nothing in a project handed to somebody
+  // else. Null until the backend has answered, which the panel draws as
+  // nothing rather than as a folder that may turn out to be wrong.
+  const [settings, setSettings] = useState<Settings | null>(null);
+  // Every format the recorder can write, from its own table. Fetched rather
+  // than listed here so the dropdown can never offer one it cannot produce.
+  const [formats, setFormats] = useState<RecordingFormat[]>([]);
+  // The take that is running, and how long it has been. Null is not recording,
+  // which is almost always.
+  const [recording, setRecording] = useState<{ path: string; seconds: number } | null>(
+    null,
+  );
+  // The last one that finished, so the settings panel can say where it went.
+  // A performance you cannot find afterwards is one you did not record.
+  const [lastRecording, setLastRecording] = useState<FinishedRecording | null>(null);
 
   const startResize = usePanelResize("right", setPanelWidth);
   const startSideResize = usePanelResize("left", setSideWidth);
@@ -368,6 +415,71 @@ function App() {
       live = false;
     };
   }, []);
+
+  /**
+   * Watch whatever project is open, and read the tree again when it changes.
+   *
+   * This is what replaced the panel's refresh button. A file made by anything
+   * else — dropped in from the Finder, written by a script, arriving with a
+   * branch — used to be invisible until somebody thought to press it, which is
+   * precisely the case where nobody knows to.
+   *
+   * The listener is set up once and the watch follows the project, so the two
+   * are separate effects: re-subscribing on every project change would leave a
+   * window in which a change is not heard, and there is nothing to gain by it.
+   *
+   * A folder that cannot be watched is logged rather than shown. What it costs
+   * is what the button used to do, and interrupting somebody's work to say
+   * "you will have to reopen the project to see new files" is worse than the
+   * quiet the alternative leaves.
+   */
+  useEffect(() => {
+    const subscription = listen("project-changed", () =>
+      setProjectVersion((v) => v + 1),
+    );
+    return () => void subscription.then((unlisten) => unlisten());
+  }, []);
+
+  useEffect(() => {
+    invoke("watch_project", { root: projectRoot }).catch((e) =>
+      console.error("could not watch the project folder:", e),
+    );
+  }, [projectRoot]);
+
+  // The app's settings and the formats a recording may be written as, fetched
+  // once. Neither changes without this window changing it, so there is nothing
+  // to watch for afterwards.
+  useEffect(() => {
+    let live = true;
+    invoke<Settings>("settings")
+      .then((s) => {
+        if (live) setSettings(s);
+      })
+      // Logged rather than shown: what it costs is a panel that opens on the
+      // defaults, and a first run has no file to read anyway.
+      .catch((e) => console.error("could not read the app's settings:", e));
+    invoke<RecordingFormat[]>("recording_formats")
+      .then((f) => {
+        if (live) setFormats(f);
+      })
+      .catch((e) => console.error("could not read the recording formats:", e));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /** Change a setting: the panel shows it at once, and it is remembered. */
+  const changeSettings = useCallback(
+    (next: Settings) => {
+      setSettings(next);
+      invoke("set_settings", { settings: next }).catch((e) =>
+        // Like a project's file: the setting itself has already taken effect,
+        // so what a failure costs is the memory of it rather than the setting.
+        report(toDiagnostic(e, "could not save the settings"), null),
+      );
+    },
+    [report],
+  );
 
   // What was open last time, fetched once. Restoring a file tab is reading the
   // file again — nothing about a buffer is kept, so a restored tab is what is
@@ -451,7 +563,16 @@ function App() {
         const file = await invoke<PatternsFile>("read_patterns", { root });
         if (projectRootRef.current !== root) return; // the project moved on
         setPatternsPath(file.path);
-        setPatterns(fromWire(file.patterns));
+        // Through the setter so the rows already on screen are in reach: a
+        // row this file also names keeps its id, and the composer tab holding
+        // it does not lose its pattern. See `fromWire`.
+        //
+        // Only for the same project, though. Two projects may each have a
+        // `hats`, and they are not the same row — carrying an id across would
+        // point an open composer at the other project's pattern.
+        setPatterns((held) =>
+          fromWire(file.patterns, patternsFrom.current === root ? held : []),
+        );
         patternsOnDisk.current = JSON.stringify(file.patterns);
         patternsFrom.current = root;
       } catch (e) {
@@ -1035,11 +1156,17 @@ function App() {
    * one of them ends up in the problems panel: this used to be an unhandled
    * `await`, so a program with a typo in it simply never started while the
    * previous one kept playing, with nothing on screen to say why.
+   *
+   * Answers whether the engine is playing what was asked for, which only
+   * `toggleRecording` reads — a take that began with an eval nobody could
+   * compile is a recording of the silence that followed it. A tab that is not
+   * there is not a failure by that measure: nothing was asked for, and
+   * whatever was already playing still is.
    */
-  const play = useCallback(async () => {
+  const play = useCallback(async (): Promise<boolean> => {
     // Nothing open is nothing to run — the transport's buttons stay live for
     // stop, which is about what the engine is holding, not about a tab.
-    if (!codeTab) return;
+    if (!codeTab) return true;
     const tabId = codeTab.id;
     try {
       // The drawn patterns go with the code: they are bindings the program can
@@ -1060,18 +1187,151 @@ function App() {
       setDiagnostics([]);
       setRunStatus("ok");
       setSourceTabId(tabId);
+      // The engine is holding this program until something stops it, which is
+      // what the lit play button says. Here rather than beside the `return`
+      // below, because that answers true for a tab that was never run.
+      setPlaying(true);
+      return true;
     } catch (e) {
       report(toDiagnostic(e), tabId);
+      return false;
     }
   }, [codeTab, patterns, projectRoot, report]);
 
   const stop = useCallback(async () => {
     try {
       await invoke("stop_audio");
+      setPlaying(false);
     } catch (e) {
+      // Left lit: the engine was not told, so whatever it is holding it is
+      // still holding, and a dark button would be a claim about silence that
+      // nothing has made true.
       report(toDiagnostic(e, "could not stop the engine"), null);
     }
   }, [report]);
+
+  /**
+   * Start a take, or end the one that is running.
+   *
+   * Record plays as well, because the two are one gesture: what you want
+   * recorded is the piece from its first note, and pressing play and then
+   * record loses the attack while pressing record and then play spends the
+   * first bar of the file on an empty room. So this presses both, and in that
+   * order — the tap is armed before the eval is sent, so the crossfade the
+   * program fades in on is in the file rather than in front of it.
+   *
+   * Stopping is the mirror: it silences the engine and then closes the file.
+   * In that order, and with a wait between them — `stop_audio` fades the graph
+   * out over 0.2s, and a take closed before that landed would end mid-waveform
+   * on a click. The button keeps its clock through the wait, which is honest:
+   * the fade is still being recorded.
+   *
+   * Nothing here decides where the file goes or what it is written as: the
+   * backend reads that out of the settings file at the moment recording
+   * starts, so a folder chosen in the panel a second ago is the folder this
+   * take lands in without anything having to be handed along.
+   *
+   * A refusal — no project and no folder chosen, a folder that has since been
+   * unplugged — opens the settings panel as well as the problems one. It is
+   * the only failure in the app whose fix is a control rather than an edit,
+   * and the panel is where that control is.
+   */
+  const toggleRecording = useCallback(async () => {
+    if (recording) {
+      // Silence first, then wait out the fade, then close the file — see the
+      // note on FADE_OUT_DELAY. A failure to stop the engine has already been
+      // reported by `stop`, and is no reason not to save what was played.
+      await stop();
+      await new Promise((done) => window.setTimeout(done, FADE_OUT_DELAY));
+      try {
+        const finished = await invoke<FinishedRecording>("stop_recording");
+        setRecording(null);
+        setLastRecording(finished);
+      } catch (e) {
+        setRecording(null);
+        report(toDiagnostic(e, "could not finish the recording"), null);
+      }
+      return;
+    }
+
+    try {
+      const path = await invoke<string>("start_recording", {
+        root: projectRoot,
+        // What the take is named after: the project as it is called in the
+        // panel, which is a piece's name rather than a folder's.
+        name: projectName,
+      });
+      setRecording({ path, seconds: 0 });
+    } catch (e) {
+      report(toDiagnostic(e, "could not start recording"), null);
+      setPanelOpen(true);
+      setPanelTab("settings");
+      return;
+    }
+
+    // The program that could not be compiled is already in the problems panel
+    // by now. What is left is a take of the silence it did not make, and
+    // leaving it running would be a red button recording nothing while its
+    // reason sits in another panel. The file it made is closed rather than
+    // removed — an empty take is still a file somebody's disk now has, and
+    // nothing in this app deletes one behind your back.
+    if (!(await play())) {
+      try {
+        setLastRecording(await invoke<FinishedRecording>("stop_recording"));
+      } catch (e) {
+        report(toDiagnostic(e, "could not finish the recording"), null);
+      }
+      setRecording(null);
+    }
+  }, [recording, projectRoot, projectName, play, stop, report]);
+
+  /**
+   * Keep the clock on the record button honest, and collect a take that ended
+   * without being asked to.
+   *
+   * Polled rather than pushed because the elapsed time has to be drawn anyway,
+   * and one ask a second answers both questions at once. The second is the
+   * important one: a disk filling up mid-performance is nobody's command to
+   * fail, so there is no rejection for it to arrive in, and this is where it
+   * is noticed. It runs only while a take is running.
+   */
+  const isRecording = recording !== null;
+  useEffect(() => {
+    if (!isRecording) return;
+    let live = true;
+
+    const tick = async () => {
+      try {
+        const state = await invoke<RecordingState>("recording_state");
+        if (!live) return;
+        if (state.recording) {
+          // Through the setter rather than off `recording`, so this effect
+          // depends on *whether* a take is running and not on how long it has
+          // been: the other way round tears the interval down and builds it
+          // again twice a second.
+          setRecording((current) =>
+            current && { path: state.path ?? current.path, seconds: state.seconds },
+          );
+          return;
+        }
+        // It stopped on its own, which only happens when writing failed.
+        setRecording(null);
+        if (state.failure) {
+          report(toDiagnostic(state.failure, "the recording stopped"), null);
+        }
+      } catch (e) {
+        if (!live) return;
+        setRecording(null);
+        report(toDiagnostic(e, "could not read the recording"), null);
+      }
+    };
+
+    const timer = window.setInterval(() => void tick(), 500);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [isRecording, report]);
 
   /**
    * A note that would not build, raised by the scheduler thread mid-pattern.
@@ -1295,6 +1555,9 @@ function App() {
               stop={stop}
               state={transport}
               onChange={setTransport}
+              playing={playing}
+              recording={recording}
+              onToggleRecording={() => void toggleRecording()}
             />
           </div>
         </div>
@@ -1400,7 +1663,6 @@ function App() {
               version={projectVersion}
               activePath={activeTab?.path ?? null}
               onOpenFile={(path) => void openPath(path)}
-              onRefresh={() => setProjectVersion((v) => v + 1)}
               onMoved={onMoved}
               onDeleted={onDeleted}
               onProblems={(diagnostics) => reportAll(diagnostics, null)}
@@ -1510,6 +1772,19 @@ function App() {
             />
           }
           docs={<DocsPanel builtins={metadata.builtins} focus={docsFocus} />}
+          settings={
+            <SettingsPanel
+              settings={settings}
+              onChange={changeSettings}
+              formats={formats}
+              projectRoot={projectRoot}
+              recording={recording}
+              last={lastRecording}
+              onError={(message) =>
+                report(toDiagnostic(message, "recording"), null)
+              }
+            />
+          }
         />
       </div>
     </div>

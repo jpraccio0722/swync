@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sized and coloured by the caller: no width/height, so a className decides
+     how big it is, and `currentColor` so it inherits the button's text colour.
+     Drawn to match play and stop — the same 24px box and the same 1.5 stroke,
+     so the three sit together without one of them looking heavier. -->
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="12" cy="12" r="4.5" fill="currentColor"/>
+</svg>

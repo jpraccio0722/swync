@@ -148,6 +148,11 @@ impl Lowerer {
 
         self.depth += 1;
         self.env.push_scope();
+        // A body is not part of the sequence that called it. Without this a
+        // bare note inside a function would take its octave from whichever
+        // list the call happens to sit in, which is a spooky action the author
+        // of the function cannot see and the author of the list did not write.
+        let outer_octave = self.octave.take();
         let result = (|| {
             for (i, param) in def.params.iter().enumerate() {
                 let by_name = named.iter().find(|(k, _)| *k == param.name.0).map(|(_, v)| v);
@@ -164,6 +169,7 @@ impl Lowerer {
             }
             self.expr(&def.body)
         })();
+        self.octave = outer_octave;
         self.env.pop_scope();
         self.depth -= 1;
         result

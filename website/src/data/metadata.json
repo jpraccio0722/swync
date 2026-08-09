@@ -2064,7 +2064,7 @@
       "category": "special",
       "receives": "pattern",
       "returns": "play",
-      "doc": "Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1, and may be an `accel` rather than a number. A list is one pass, filling the bar, divided evenly unless a step is given a length with `;` — `[220;2, 330, 440, `;4]` is a quarter, two eighths and a half of silence — and lengths are relative, so only their ratio matters. A long step is one sustained note, not several. A step may instead be given a written note value — `w` `h` `q` `e` `s` — and then the pass is as long as its values add up to rather than one bar: in 4/4 `[c4;q, e4, g4]` is three beats against a four-beat bar, so it comes round a beat early and rotates against the grid. A value carries to the steps after it. A bare `q` is a hit of that length. Written values and ratios cannot share a sequence. A group inside one is a tuplet and says so with `;t` — `[[c4;q, e4, g4];t, c5]` is a quarter triplet then a quarter — which needs no number: the count, the unit and the span it is played in all follow from what the group holds. Any further parameter is patterned by name — `play(bass, cut: [400, 2000])` — sampled at each note's onset, and lanes may be any length. In a lane a `;` is how many notes the value covers, so it has to be a whole number there. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right)."
+      "doc": "Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1, and may be an `accel` rather than a number. A list is one pass, filling the bar, divided evenly unless a step is given a length with `;` — `[220;2, 330, 440, `;4]` is a quarter, two eighths and a half of silence — and lengths are relative, so only their ratio matters. A long step is one sustained note, not several. A step may instead be given a written note value — `w` `h` `q` `e` `s` — and then the pass is as long as its values add up to rather than one bar: in 4/4 `[c4;q, e4, g4]` is three beats against a four-beat bar, so it comes round a beat early and rotates against the grid. A value carries to the steps after it. A bare `q` is a hit of that length. An octave carries the same way: a note written without one takes the octave of the last note that spelled one, so `[a1;q, a, a, a]` is four `a1`s and `[c4;q, ef, g]` is a chord's worth of arpeggio. Only a spelled octave moves it, a group gives it back at the closing bracket like a written value does, and `e` — the eighth note and also the note E — is refused where an octave is in force rather than quietly becoming one of them. Written values and ratios cannot share a sequence. A group inside one is a tuplet and says so with `;t` — `[[c4;q, e4, g4];t, c5]` is a quarter triplet then a quarter — which needs no number: the count, the unit and the span it is played in all follow from what the group holds. Any further parameter is patterned by name — `play(bass, cut: [400, 2000])` — sampled at each note's onset, and lanes may be any length. In a lane a `;` is how many notes the value covers, so it has to be a whole number there. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right)."
     },
     {
       "name": "play_once",
@@ -2191,6 +2191,26 @@
       "receives": "buffer",
       "returns": "signal",
       "doc": "Read a buffer at a position: 0 is the start, 1 is the end, and anything outside that is silence. `position` is a signal, which is where speed, direction and chopping all come from — `sample(b, ramp(1 / b.secs))` plays it forwards, `1 - ramp(...)` backwards, `ramp(...) * 0.25` reads the first quarter. Cubic interpolation, so it holds up away from its own speed. `channel` defaults to 0 and wraps if the buffer has fewer."
+    },
+    {
+      "name": "slice",
+      "params": [
+        "buffer",
+        "start",
+        "end",
+        "rate",
+        "channel"
+      ],
+      "arities": [
+        3,
+        4,
+        5
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "buffer",
+      "returns": "signal",
+      "doc": "Read a portion of a buffer, once: `slice(amen, 0, 0.25)` is the first quarter of the break, at the speed it was recorded at. `start` and `end` are positions like `sample`'s, 0 at the start of the buffer and 1 at the end, and both are compile-time numbers rather than signals. `start` past `end` plays that portion backwards. `rate` defaults to 1 and multiplies the speed — 2 reads the portion in half the time, an octave up, 0.5 in twice, an octave down — and must be above zero, since at zero the reader would stop rather than slow; backwards is the ends the other way round rather than a negative rate. This is `sample` with the phasor written for you — `sample(b, line(start, end, (end - start) * b.secs / rate))` — and it exists because that duration is the part that is easy to get wrong: scaling a `ramp`'s position without scaling its frequency to match reads the right portion at the wrong speed. The read holds on the last sample once it arrives, so an envelope is what ends the note, exactly as with `sample`; a slice ending at 1 goes quiet on its own, since past the buffer is silence. For a position or a speed that moves under a signal — scrubbing, stuttering, anything modulated — use `sample`."
     },
     {
       "name": "secs",

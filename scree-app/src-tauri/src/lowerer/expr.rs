@@ -201,17 +201,40 @@ impl Lowerer {
             // what a length goes on to *mean* is not this layer's business — a
             // pattern reads a share as time and a written value as beats, a lane
             // reads either as a count of notes, and `len` reads neither.
+            //
+            // A list is also where the octave register is open. It inherits
+            // whatever the list around it was in, so a group carries the line's
+            // octave into itself, and it is put back on the way out — a note
+            // written inside a group describes that group, exactly as a written
+            // length does, and letting either escape would make a line's
+            // meaning turn on a bracket several tokens back.
             Expr::List(items) => {
-                let mut vals = Vec::with_capacity(items.len());
-                for item in items.iter() {
-                    let value = self.expr(&item.value)?;
-                    let length = match &item.length {
-                        None => None,
-                        Some(e) => Some(self.length(e)?),
-                    };
-                    vals.push(Item { value, length });
-                }
-                Ok(Value::List(Rc::new(vals)))
+                let outer = self.octave;
+                let result = (|| {
+                    let mut vals = Vec::with_capacity(items.len());
+                    for item in items.iter() {
+                        self.check_note_ambiguity(&item.value)?;
+                        let value = self.expr(&item.value)?;
+                        // Read for this step, then set from it: a step that
+                        // spells an octave is in that octave itself and hands it
+                        // to the steps after it.
+                        if let Some(octave) = self.spelled_octave(&item.value) {
+                            self.octave = Some(octave);
+                        }
+                        // The length is outside the register on purpose. `;e` is
+                        // an eighth note wherever it appears, and there is no
+                        // pitch in the length position for the ambiguity below
+                        // to be about.
+                        let length = match &item.length {
+                            None => None,
+                            Some(e) => Some(self.length(e)?),
+                        };
+                        vals.push(Item { value, length });
+                    }
+                    Ok(Value::List(Rc::new(vals)))
+                })();
+                self.octave = outer;
+                result
             }
             
             Expr::Mul { lhs, rhs } =>
@@ -279,7 +302,23 @@ impl Lowerer {
                     crate::lang::duration(&id.0).expect("just matched"),
                 )),
                 None => match crate::lang::note(&id.0) {
-                    crate::lang::NoteName::Note(n) => Ok(Value::Number(n)),
+                    crate::lang::NoteName::Note { midi, .. } => Ok(Value::Number(midi)),
+                    // An octave-less note takes the one the sequence is in, the
+                    // same way a step with no `;` takes the length in force. It
+                    // is an error rather than a guess where there is no
+                    // sequence to have said one: a note on its own has no
+                    // register to carry, and reading `a` as some default octave
+                    // would make a typo sound instead of failing.
+                    crate::lang::NoteName::PitchClass(offset) => match self.octave {
+                        Some(octave) => Ok(Value::Number(
+                            crate::lang::in_octave(offset, octave))),
+                        None => Err(format!(
+                            "`{}` is a note without an octave, which only means \
+                             something inside a sequence where an earlier note has \
+                             given one: `[{}1;q, {}, {}]`. Write `{}1`, `{}4` — any \
+                             octave — to say which one you mean here",
+                            id.0, id.0, id.0, id.0, id.0, id.0)),
+                    },
                     crate::lang::NoteName::OctaveOutOfRange(octave) => Err(format!(
                         "note {} has octave {octave}, outside {}..={}",
                         id.0,
@@ -323,6 +362,56 @@ impl Lowerer {
                 Ok(Value::Signal(self.push_node(kind, inputs)))
             }
         }
+    }
+
+    /// The octave a step spells, when it spells one.
+    ///
+    /// Only a note written as the whole step sets the register. A step that
+    /// computes its pitch — `a1 + 12`, `n.oct(1)` — is left out deliberately:
+    /// the octave it lands in is not something the text says, so a following
+    /// bare note carrying "it" would be carrying an answer nobody wrote down.
+    ///
+    /// A bound name is not a note, which is the same precedence `Expr::Var`
+    /// resolves by: a `let a = 60` shadows the pitch and so cannot open a
+    /// register either.
+    fn spelled_octave(&self, e: &Expr) -> Option<i32> {
+        let Expr::Var(id) = e else { return None };
+        if self.env.lookup(&id.0).is_some() {
+            return None;
+        }
+        match crate::lang::note(&id.0) {
+            crate::lang::NoteName::Note { octave, .. } => Some(octave),
+            _ => None,
+        }
+    }
+
+    /// Refuse a step that is both a written value and a note, once an octave is
+    /// in force.
+    ///
+    /// There is exactly one such spelling — `e` is the eighth and also the note
+    /// E — but the check is written against the tables rather than against the
+    /// letter, so a value added to `DURATIONS` cannot quietly shadow a pitch.
+    ///
+    /// The duration wins by resolution order, which is the reading nobody means
+    /// in `[c4;q, e, g]`: an eighth-long hit with no pitch, wedged between two
+    /// notes. Refusing costs one error and never changes what an existing piece
+    /// sounds like, which is more than can be said for either of the silent
+    /// answers.
+    fn check_note_ambiguity(&self, e: &Expr) -> Result<(), String> {
+        let Expr::Var(id) = e else { return Ok(()) };
+        if self.octave.is_none() || self.env.lookup(&id.0).is_some() {
+            return Ok(());
+        }
+        let (Some(_), crate::lang::NoteName::PitchClass(_)) =
+            (crate::lang::duration(&id.0), crate::lang::note(&id.0)) else {
+            return Ok(());
+        };
+        Err(format!(
+            "`{name}` is both a written note value and the note {upper}, and this \
+             sequence is in an octave, so either could be meant here. Write \
+             `{name}4` — any octave — for the note, or `\\;{name}` for a hit of \
+             that length",
+            name = id.0, upper = id.0.to_uppercase()))
     }
 
     /// What a `;` gave the step in front of it.

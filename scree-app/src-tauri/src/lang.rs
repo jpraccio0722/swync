@@ -1309,7 +1309,7 @@ pub static SPECIALS: &[ListBuiltin] = &[
         variadic: false,
         receives: ValueKind::Pattern,
         returns: ValueKind::Play,
-        doc: "Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1, and may be an `accel` rather than a number. A list is one pass, filling the bar, divided evenly unless a step is given a length with `;` — `[220;2, 330, 440, `;4]` is a quarter, two eighths and a half of silence — and lengths are relative, so only their ratio matters. A long step is one sustained note, not several. A step may instead be given a written note value — `w` `h` `q` `e` `s` — and then the pass is as long as its values add up to rather than one bar: in 4/4 `[c4;q, e4, g4]` is three beats against a four-beat bar, so it comes round a beat early and rotates against the grid. A value carries to the steps after it. A bare `q` is a hit of that length. Written values and ratios cannot share a sequence. A group inside one is a tuplet and says so with `;t` — `[[c4;q, e4, g4];t, c5]` is a quarter triplet then a quarter — which needs no number: the count, the unit and the span it is played in all follow from what the group holds. Any further parameter is patterned by name — `play(bass, cut: [400, 2000])` — sampled at each note's onset, and lanes may be any length. In a lane a `;` is how many notes the value covers, so it has to be a whole number there. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right).",
+        doc: "Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1, and may be an `accel` rather than a number. A list is one pass, filling the bar, divided evenly unless a step is given a length with `;` — `[220;2, 330, 440, `;4]` is a quarter, two eighths and a half of silence — and lengths are relative, so only their ratio matters. A long step is one sustained note, not several. A step may instead be given a written note value — `w` `h` `q` `e` `s` — and then the pass is as long as its values add up to rather than one bar: in 4/4 `[c4;q, e4, g4]` is three beats against a four-beat bar, so it comes round a beat early and rotates against the grid. A value carries to the steps after it. A bare `q` is a hit of that length. An octave carries the same way: a note written without one takes the octave of the last note that spelled one, so `[a1;q, a, a, a]` is four `a1`s and `[c4;q, ef, g]` is a chord's worth of arpeggio. Only a spelled octave moves it, a group gives it back at the closing bracket like a written value does, and `e` — the eighth note and also the note E — is refused where an octave is in force rather than quietly becoming one of them. Written values and ratios cannot share a sequence. A group inside one is a tuplet and says so with `;t` — `[[c4;q, e4, g4];t, c5]` is a quarter triplet then a quarter — which needs no number: the count, the unit and the span it is played in all follow from what the group holds. Any further parameter is patterned by name — `play(bass, cut: [400, 2000])` — sampled at each note's onset, and lanes may be any length. In a lane a `;` is how many notes the value covers, so it has to be a whole number there. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right).",
     },
     ListBuiltin {
         name: "play_once",
@@ -1393,6 +1393,15 @@ pub static SPECIALS: &[ListBuiltin] = &[
         doc: "Read a buffer at a position: 0 is the start, 1 is the end, and anything outside that is silence. `position` is a signal, which is where speed, direction and chopping all come from — `sample(b, ramp(1 / b.secs))` plays it forwards, `1 - ramp(...)` backwards, `ramp(...) * 0.25` reads the first quarter. Cubic interpolation, so it holds up away from its own speed. `channel` defaults to 0 and wraps if the buffer has fewer.",
     },
     ListBuiltin {
+        name: "slice",
+        params: &["buffer", "start", "end", "rate", "channel"],
+        arities: &[3, 4, 5],
+        variadic: false,
+        receives: ValueKind::Buffer,
+        returns: ValueKind::Signal,
+        doc: "Read a portion of a buffer, once: `slice(amen, 0, 0.25)` is the first quarter of the break, at the speed it was recorded at. `start` and `end` are positions like `sample`'s, 0 at the start of the buffer and 1 at the end, and both are compile-time numbers rather than signals. `start` past `end` plays that portion backwards. `rate` defaults to 1 and multiplies the speed — 2 reads the portion in half the time, an octave up, 0.5 in twice, an octave down — and must be above zero, since at zero the reader would stop rather than slow; backwards is the ends the other way round rather than a negative rate. This is `sample` with the phasor written for you — `sample(b, line(start, end, (end - start) * b.secs / rate))` — and it exists because that duration is the part that is easy to get wrong: scaling a `ramp`'s position without scaling its frequency to match reads the right portion at the wrong speed. The read holds on the last sample once it arrives, so an envelope is what ends the note, exactly as with `sample`; a slice ending at 1 goes quiet on its own, since past the buffer is silence. For a position or a speed that moves under a signal — scrubbing, stuttering, anything modulated — use `sample`.",
+    },
+    ListBuiltin {
         name: "secs",
         params: &["buffer"],
         arities: &[1],
@@ -1455,23 +1464,36 @@ pub const MIN_NOTE_OCTAVE: i32 = 0;
 pub const MAX_NOTE_OCTAVE: i32 = 9;
 
 pub enum NoteName {
-    /// A MIDI note number.
-    Note(f64),
+    /// A MIDI note number, and the octave it was spelled with.
+    ///
+    /// The octave is kept as well as folded in because a sequence carries it
+    /// forward to the notes after it, and by the time the pattern lowerer sees
+    /// a step there is nothing but a number left to read it off. Recovering it
+    /// by dividing would answer for a bare frequency too, and `[220, a]` has no
+    /// octave in it to carry.
+    Note { midi: f64, octave: i32 },
+    /// A note spelled without an octave: `a`, `ef`, `gs`. Only meaningful in a
+    /// sequence, where an earlier note has said which octave is in force.
+    PitchClass(i32),
     /// Shaped like a note, but the octave is outside the supported range.
     OctaveOutOfRange(i32),
     NotANote,
 }
 
-/// Read a bare identifier as a note name: letter, optional `s`/`f`, octave.
+/// Read a bare identifier as a note name: letter, optional `s`/`f`, optional
+/// octave.
 ///
 /// Deliberately **not** seeded into the environment. Resolution happens only
 /// when a variable lookup misses, so user bindings shadow note names for free
-/// and `lower_voice` — which runs per note — pays nothing to set them up.
+/// and `lower_voice` — which runs per note — pays nothing to set them up. That
+/// shadowing is the whole of what keeps `f`, `a` and `e` usable as ordinary
+/// parameter names now that the octave is optional; outside a sequence an
+/// octave-less note is an error rather than a value, so nothing silently
+/// becomes a pitch where a name was meant.
 ///
-/// The octave is required, which is what keeps `f`, `a` and `e` usable as
-/// ordinary parameter names. Flats are `f` rather than `b`, both because `b`
-/// is itself a note and because `db3` would read against the `db` builtin.
-/// Enharmonics are allowed: `bs3` is `c4`, `cf4` is `b3`.
+/// Flats are `f` rather than `b`, both because `b` is itself a note and because
+/// `db3` would read against the `db` builtin. Enharmonics are allowed: `bs3` is
+/// `c4`, `cf4` is `b3`.
 pub fn note(name: &str) -> NoteName {
     let Some(&letter) = name.as_bytes().first() else {
         return NoteName::NotANote;
@@ -1489,7 +1511,12 @@ pub fn note(name: &str) -> NoteName {
         (0, rest)
     };
 
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    // Letter and accidental with nothing after them: a pitch class, waiting for
+    // the sequence around it to say which octave.
+    if digits.is_empty() {
+        return NoteName::PitchClass(offset + accidental);
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
         return NoteName::NotANote;
     }
     let Ok(octave) = digits.parse::<i32>() else {
@@ -1499,7 +1526,14 @@ pub fn note(name: &str) -> NoteName {
         return NoteName::OctaveOutOfRange(octave);
     }
 
-    NoteName::Note(((octave + 1) * 12 + offset + accidental) as f64)
+    NoteName::Note { midi: in_octave(offset + accidental, octave), octave }
+}
+
+/// A pitch class placed in an octave. Enharmonics run off either end by a
+/// semitone — `bs3` is `c4` and `cf4` is `b3` — which is the point of folding
+/// the accidental into the offset before it gets here.
+pub fn in_octave(offset: i32, octave: i32) -> f64 {
+    ((octave + 1) * 12 + offset) as f64
 }
 
 // ---------------------------------------------------------------------------

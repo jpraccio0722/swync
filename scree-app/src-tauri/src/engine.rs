@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use fundsp::net::{Net, NodeId};
 use fundsp::prelude::*;
 
+use crate::recorder::Tap;
 use crate::scheduler::clock::Clock;
 
 /// Unity: the master control only ever attenuates what a program asked for.
@@ -85,7 +88,12 @@ fn wire(sample_rate: f64) -> (Net, Sequencer, NodeId, Shared) {
 
 /// Start audio. The `Sequencer` is returned separately because the scheduler
 /// thread owns it outright — nothing else touches it, so it needs no mutex.
-pub fn start() -> Result<(AudioEngine, Sequencer), String> {
+///
+/// The [`Tap`] comes back for the same kind of reason as the sequencer: it is
+/// shared with the callback, and the recorder — not the engine — is what
+/// arms it. It is made here because this is where the device's sample rate is
+/// known, and a recording is written at whatever rate the stream opened at.
+pub fn start() -> Result<(AudioEngine, Sequencer, Arc<Tap>), String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or("no audio output device")?;
     let config = device.default_output_config().map_err(|e| e.to_string())?;
@@ -97,11 +105,20 @@ pub fn start() -> Result<(AudioEngine, Sequencer), String> {
     let clock = Clock::new(sample_rate);
     let audio_clock = clock.clone();
 
+    let tap = Arc::new(Tap::new(sample_rate));
+    let audio_tap = tap.clone();
+
     std::thread::spawn(move || {
         let result = match config.sample_format() {
-            cpal::SampleFormat::F32 => run_stream::<f32>(&device, &config.into(), backend, audio_clock),
-            cpal::SampleFormat::I16 => run_stream::<i16>(&device, &config.into(), backend, audio_clock),
-            cpal::SampleFormat::U16 => run_stream::<u16>(&device, &config.into(), backend, audio_clock),
+            cpal::SampleFormat::F32 => {
+                run_stream::<f32>(&device, &config.into(), backend, audio_clock, audio_tap)
+            }
+            cpal::SampleFormat::I16 => {
+                run_stream::<i16>(&device, &config.into(), backend, audio_clock, audio_tap)
+            }
+            cpal::SampleFormat::U16 => {
+                run_stream::<u16>(&device, &config.into(), backend, audio_clock, audio_tap)
+            }
             other => Err(format!("unsupported sample format: {other}")),
         };
         if let Err(e) = result {
@@ -109,7 +126,7 @@ pub fn start() -> Result<(AudioEngine, Sequencer), String> {
         }
     });
 
-    Ok((AudioEngine { net, slot, clock, master }, seq))
+    Ok((AudioEngine { net, slot, clock, master }, seq, tap))
 }
 
 /// Fill one device buffer from the graph, a block at a time. Returns the frames
@@ -127,11 +144,19 @@ pub fn start() -> Result<(AudioEngine, Sequencer), String> {
 /// longer than that takes several passes. The signal has to carry across them
 /// unbroken: a pass that re-rendered or skipped a block would be a seam in the
 /// waveform every buffer, which is the very thing this is here to avoid.
+///
+/// A recording is taken from the rendered block, which is the last point at
+/// which the signal is still what the graph produced: after this it is
+/// converted to whatever the device asked for and spread across however many
+/// channels it has. That the tap is *here*, rather than anywhere earlier, is
+/// what makes a recording the performance as it was heard — the graph, the
+/// sequencer's voices and the master fader all together.
 fn render<T>(
     backend: &mut impl AudioUnit,
     block: &mut BufferVec,
     data: &mut [T],
     channels: usize,
+    tap: &Tap,
 ) -> u64
 where
     T: SizedSample + FromSample<f32>,
@@ -144,6 +169,9 @@ where
         let n = std::cmp::min(frames - done, MAX_BUFFER_SIZE);
         backend.process(n, &BufferRef::empty(), &mut block.buffer_mut());
         let rendered = block.buffer_ref();
+        // Costs one atomic load when nothing is being recorded, which is
+        // almost always. See `recorder`: it never blocks and never allocates.
+        tap.push(&rendered, n);
         for i in 0..n {
             let frame = &mut data[(done + i) * channels..][..channels];
             frame[0] = T::from_sample(rendered.at_f32(0, i));
@@ -161,6 +189,7 @@ fn run_stream<T>(
     config: &cpal::StreamConfig,
     mut backend: impl AudioUnit + 'static,
     clock: Clock,
+    tap: Arc<Tap>,
 ) -> Result<(), String>
 where
     T: SizedSample + FromSample<f32>,
@@ -175,7 +204,7 @@ where
         .build_output_stream(
             config.clone(),
             move |data: &mut [T], _| {
-                clock.advance(render(&mut backend, &mut block, data, channels));
+                clock.advance(render(&mut backend, &mut block, data, channels, &tap));
             },
             |err| eprintln!("audio stream error: {err}"),
             None,
@@ -318,8 +347,9 @@ mod tests {
         // 512 frames is eight of fundsp's blocks, and a common device buffer.
         let mut data = vec![0.0f32; 512 * 2];
         let mut whole: Vec<f32> = Vec::new();
+        let tap = Tap::new(RATE);
         for _ in 0..40 {
-            let frames = render(&mut backend, &mut block, &mut data, 2);
+            let frames = render(&mut backend, &mut block, &mut data, 2, &tap);
             assert_eq!(frames, 512, "every frame of the buffer must be accounted for");
             whole.extend(data.chunks(2).map(|f| f[0]));
         }
@@ -344,12 +374,66 @@ mod tests {
 
         // A sentinel no rendered sample can be, so anything left is a hole.
         let mut data = vec![f32::NAN; 100 * 2];
-        assert_eq!(render(&mut backend, &mut block, &mut data, 2), 100);
+        assert_eq!(render(&mut backend, &mut block, &mut data, 2, &Tap::new(44100.0)), 100);
 
         for (i, frame) in data.chunks(2).enumerate() {
             assert!((frame[0] - 0.25).abs() < 1e-6, "frame {i} left was {}", frame[0]);
             assert!((frame[1] - 0.75).abs() < 1e-6, "frame {i} right was {}", frame[1]);
         }
+    }
+
+    /// A recording is meant to be the performance as it was heard, which means
+    /// it is taken from the same block the device is filled from — the graph
+    /// and the sequencer mixed together, with the master fader already applied.
+    ///
+    /// Tapped anywhere earlier and a take would disagree with the room it was
+    /// played in: pulling the master down would still be a full-level file,
+    /// and the sequencer's voices would be missing from it entirely.
+    #[test]
+    fn what_is_recorded_is_what_the_device_was_given() {
+        const RATE: f64 = 48000.0;
+        let (mut net, mut seq, slot, master) = wire(RATE);
+        let mut backend = net.backend();
+
+        // Something in the graph, something in the sequencer, and a master
+        // that is not unity — all three are things a tap can miss.
+        net.crossfade(slot, Fade::Smooth, 0.0, Box::new(dc((0.25, 0.25))));
+        net.commit();
+        seq.push_duration(0.0, 4.0, Fade::Smooth, 0.0, 0.0,
+            Box::new(Net::wrap(Box::new(dc((0.25, 0.25))))));
+        master.set(0.5);
+
+        let tap = Tap::new(RATE);
+        tap.arm();
+
+        let mut block = BufferVec::new(2);
+        let mut data = vec![0.0f32; 256 * 2];
+        render(&mut backend, &mut block, &mut data, 2, &tap);
+
+        let mut recorded = Vec::new();
+        assert_eq!(tap.drain(&mut recorded), 256 * 2, "every frame should be tapped");
+        assert_eq!(recorded, data, "the recording is the buffer the device was handed");
+
+        // And it really did go through the master: past its glide the two
+        // sources sum to 0.5 and the fader halves them.
+        let settled = recorded[recorded.len() - 2];
+        assert!((settled - 0.25).abs() < 1e-3, "the master was not in the path, got {settled}");
+    }
+
+    /// The state the app is in for all but a few minutes of its life. Nothing
+    /// is kept, and the callback does no work for a recording nobody asked for.
+    #[test]
+    fn nothing_is_recorded_until_a_take_is_started() {
+        let mut backend = Net::wrap(Box::new(dc((0.5, 0.5))));
+        backend.set_sample_rate(44100.0);
+        let mut block = BufferVec::new(2);
+        let mut data = vec![0.0f32; 64 * 2];
+
+        let tap = Tap::new(44100.0);
+        render(&mut backend, &mut block, &mut data, 2, &tap);
+
+        let mut recorded = Vec::new();
+        assert_eq!(tap.drain(&mut recorded), 0);
     }
 
     /// The point of the glide: a jump in the setting must not become a jump in

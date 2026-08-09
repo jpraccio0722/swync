@@ -268,12 +268,29 @@ export function toWire(patterns: GraphicalPattern[]): WirePattern[] {
  *
  * The ids are minted here because they never existed on disk: they are this
  * side's handle on a row across a rename, and the file has no use for them.
+ *
+ * `held` is what the panel is showing already, and a row in it that this file
+ * also names keeps the id it has. The file is read again far more often than
+ * it changes — the project's folder is watched, so anything appearing in it
+ * re-reads this — and a composer tab holds its pattern by id. Minting a new
+ * one for a row that is the same row would take the pattern out from under an
+ * open tab, which is how "This pattern no longer exists" appears over a
+ * pattern that plainly does.
+ *
+ * By name, because that is what the file records and what the tab is restored
+ * by across a launch. A row renamed outside the app is a new row by that
+ * measure, which is the honest answer: nothing on disk connects it to the old
+ * one.
  */
-export function fromWire(wire: WirePattern[]): GraphicalPattern[] {
+export function fromWire(
+  wire: WirePattern[],
+  held: GraphicalPattern[] = [],
+): GraphicalPattern[] {
   return wire.map((p) => {
-    counter += 1;
+    const already = held.find((h) => h.name === p.name);
+    if (!already) counter += 1;
     return {
-      id: `gp-${counter}-${Date.now()}`,
+      id: already?.id ?? `gp-${counter}-${Date.now()}`,
       name: p.name,
       // A file written before lengths existed has none; one cell each.
       steps: p.steps.map((s) => ({ ...s, length: s.length ?? 1 })),

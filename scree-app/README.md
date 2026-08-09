@@ -9,7 +9,12 @@ npm install && npm run tauri dev
 
 `Cmd/Ctrl + ,` evaluates the current tab
 
-`Cmd/Ctrl + .` stops audio. 
+`Cmd/Ctrl + .` stops audio.
+
+The play button is lit green while the engine is holding a program, and goes
+dark when it is stopped — so what is running is readable at a glance, from
+across a room. While a take is being recorded the red record button is the
+light instead, since the two would otherwise be making the same claim twice.
 
 
 ## Imports
@@ -134,9 +139,11 @@ That file is folded into every program the project runs, so a drawn pattern
 needs no `use` — it is simply in scope.
 
 Being a real file, it goes both ways: open it in a tab, edit it by hand, save,
-and the panel redraws from what you wrote. Draw in the panel and the file is
-rewritten. Anything else you keep in that file is lost the next time a row
-changes.
+and the panel redraws from what you wrote — including a row that
+[carries its octave](#notes-and-octaves), like `[a1, a, a, a]`. Draw in the
+panel and the file is rewritten, with every octave spelled out: a grid is cells
+and has no register to write down. Anything else you keep in that file is lost
+the next time a row changes.
 
 
 ## Samples
@@ -178,7 +185,69 @@ the buffer is, so `1 / amen.secs` is the frequency that reads it exactly once �
 and any multiple of that is a speed. Reading outside 0..1 is silence rather than
 a held edge, so a position that overshoots goes quiet instead of clicking.
 
-Chopping from a pattern is the same arithmetic with the slice as a lane:
+### A portion, once
+
+One thing on that list is easy to write wrong, and it is the most common one:
+**a portion of the buffer, at the buffer's own speed.** `ramp(...) * 0.25` reads
+the first quarter, but the phasor still takes the whole buffer to get there, so
+it reads that quarter at a quarter speed. Reading a portion properly means
+scaling the frequency to match the span — and then saying the span twice, once
+in each.
+
+`slice` is that written for you. Name the two ends and it draws the line between
+them:
+
+```rust
+slice(amen, 0, 0.25)        // the first quarter, once, at its own speed
+slice(amen, 0.5, 0.75)      // the third quarter
+slice(amen, 0.5, 0.25)      // that quarter backwards
+slice(amen, 0, 1)           // the whole break, once, no loop
+```
+
+Both ends are numbers written in the source rather than signals, and both are
+refused outside 0..1 — a slice you can point at is a slice that cannot silently
+read nothing.
+
+A fourth argument is the **rate**, a multiple of that own speed:
+
+```rust
+slice(amen, 0, 0.25, 2)     // the first quarter in half the time, an octave up
+slice(amen, 0, 0.25, 0.5)   // in twice the time, an octave down
+slice(amen, 0.5, 0.25, 2)   // backwards, twice as fast
+```
+
+Reading faster is reading fewer of the buffer's samples per second of output,
+so a rate is a pitch as much as a tempo — there is no way to have one without
+the other here. It has to be above zero: at zero the reader would stop rather
+than slow, which is the silent DC offset the whole builtin exists to avoid.
+Backwards is the ends written the other way round, not a negative rate.
+
+All of it is exactly `sample` with the phasor filled in:
+
+```rust
+slice(amen, 0.25, 0.5)
+sample(amen, line(0.25, 0.5, 0.25 * amen.secs))   // the same graph
+
+slice(amen, 0.25, 0.5, 2)
+sample(amen, line(0.25, 0.5, 0.25 * amen.secs / 2))   // and the same again
+```
+
+Which means the one thing to know about it is `line`'s: it **holds** on the last
+sample of the slice rather than falling silent, so a portion ending anywhere but
+the end of the buffer leaves a DC offset behind it. An envelope is what ends the
+note — the same thing that ends every other voice:
+
+```rust
+fn slam() = slice(load("door.wav"), 0, 0.15) * perc(0.001, 0.2)
+```
+
+A slice ending at `1` needs no such care: past the buffer is already silence.
+
+Reach for `sample` when the position or the speed has to **move** — scrubbing,
+stuttering, anything modulated. Reach for `slice` when you know the ends and the
+rate when you write them, which is most drums.
+
+Chopping from a pattern is the same arithmetic with the portion as a lane:
 
 ```rust
 // Sixteenths of the break, played as a pattern. `at` is where in the buffer
@@ -188,6 +257,15 @@ fn chop(n, at = 0) =
 
 play([\, \, \, \, \, \, \, \], chop, 1,
      at: [0, 0.25, 0.5, 0.0625, 0.75, 0.5, 0.125, 0.875])
+```
+
+A lane value is a number by the time the note is built, so it is a `slice` end
+like any other — which is the same chop with the phasor left to the language,
+and at the break's own speed rather than `n`'s:
+
+```rust
+fn chop(n, at = 0) =
+  slice(load("breaks/amen.wav"), at, at + 0.0625) * perc(0.001, 0.2)
 ```
 
 **An instrument names its own file.** A `fn` sees only other `fn`s — a top-level
@@ -224,6 +302,103 @@ let pos = ramp(1 / stereo.secs)
 ```
 
 
+## Recording
+
+The **record** button sits beside play and stop. Pressing it **plays the file
+and records it** — one gesture, because what you want on disk is the piece from
+its first note, and pressing play and then record loses the attack. Everything
+the engine is making goes to the file: the persistent graph, the pattern
+voices, and the master fader as you move it. What you get is the performance as
+it was heard, evals and all — there is no offline render, because half of what
+a live-coded piece is is *when* you changed it.
+
+While a take runs the button is a stop square carrying its length, so it is
+also the clock. Press it and the music stops and the file is finished and
+saved — the fade-out is recorded too, so a take ends on the release of its last
+note rather than on a click.
+
+Press record again for a second take.
+
+If the file will not compile, the take is closed straight away and the problems
+panel says why — a red button recording the silence after a typo helps nobody.
+The empty file is left where it was made rather than removed.
+
+Where the file goes and what it is written as are in the **Settings** tab of
+the right-hand panel, decided before a take rather than at the moment you press
+record:
+
+- **Output folder.** The open project's own folder unless you choose another.
+  A folder you choose is remembered for every project on this machine — it is a
+  path into *this* disk, so it lives with the app rather than in the project's
+  `scree-project.json`, which is meant to be shared.
+- **File type.** `WAV — 16-bit` is what everything can read. `WAV — 32-bit
+  float` is exactly what the engine rendered, headroom and all, and is what to
+  record if the take is going to be mixed. Nothing else is offered, because
+  nothing else can be written.
+
+A recording is named for the project and the moment it was played — `Night
+Piece 2026-08-08 21-14-03.wav` — and nothing is ever recorded over: a name
+already on the disk gets a number rather than being replaced.
+
+Two things are worth knowing about the file:
+
+- It is written as you play, and its header is brought up to date once a
+  second. A session that ends in a crash still leaves a playable take.
+- A recording is a WAV, so it stops at four gigabytes — about six hours of
+  16-bit stereo. At that point the take is closed properly and the problems
+  panel says so.
+
+A finished take is listed at the bottom of the settings panel, with a Reveal
+that opens it in the Finder. And since it is an ordinary audio file, the next
+program can `load` it.
+
+## Notes and octaves
+
+A pitch is written as a letter, an optional `s` for sharp or `f` for flat, and
+an octave: `c4` is middle C and MIDI 60, `af3` is A flat below it, `gs9` is the
+top of the range. Octaves run 0 to 9, and enharmonics are allowed — `bs3` is
+`c4`, `cf4` is `b3`. Flats are `f` rather than `b` because `b` is already a note
+and `db3` would collide with the `db` builtin.
+
+A note is a plain number once it is read, so everything numeric works on it:
+`c4.oct(1)`, `c4.semi(7)`, `c4 + 12`, `c4.m2h`.
+
+**The octave carries.** Inside a sequence, a note written without one takes the
+octave of the last note that spelled one, the same way a written value carries
+its length:
+
+```rust
+play([a1;q, a, a, a], bass)              // four a1s
+play([c4;q, ef, g, c5, ef, g], lead)     // two arpeggios, an octave apart
+```
+
+Only a spelled octave moves the register, so the octave of any note is found by
+reading backwards to the nearest digit. A step that *computes* its pitch —
+`c4.oct(1)`, `n + 12` — lands somewhere the text never says, so it carries
+nothing, and a bound name shadows a bare letter exactly as it shadows `c4`.
+
+A group takes the octave in with it and gives it back at the closing bracket,
+which is the rule a written value already follows: in
+`[c4;q, [g, b, d5];t, g]` that last `g` is g4, not g5.
+
+There is nothing to carry outside a sequence, so a bare letter there is an
+error rather than a guess — which is what keeps `f`, `a` and `e` usable as
+ordinary parameter names.
+
+**`e` is the one collision.** It is the eighth note and also the note E. In a
+sequence that is already in an octave either could be meant, so the step is
+refused instead of quietly becoming one of them:
+
+```rust
+play([c4;q, e, g], lead)      // refused: is `e` an eighth, or is it E?
+play([c4;q, e4, g], lead)     // the note
+play([c4;q, \;e, g], lead)    // a pitchless hit, an eighth long
+```
+
+Nowhere else is `e` ambiguous. With no octave in force it is the eighth it has
+always been, and after a `;` it is a length and never a pitch.
+
+
 ## Rhythm in note values
 
 Two words do all the work here, and they are not the same word:
@@ -247,9 +422,11 @@ play([c4;q, e4, g4], lead)      // three beats
 play([c4;q, e4, g4, c5], lead)  // four quarters — one bar, in 4/4
 ```
 
-A value carries to the steps after it, so a pass says what it is once. A bare
-`q` is a hit of that length — a written value carries no pitch, which is what
-`\` already means — so `[q, q, q]` is three quarter-note hits.
+A value carries to the steps after it, so a pass says what it is once — the
+same way [an octave carries](#notes-and-octaves), and a melody on one line can
+say both once: `[c4;q, ef, g, c5]`. A bare `q` is a hit of that length — a
+written value carries no pitch, which is what `\` already means — so
+`[q, q, q]` is three quarter-note hits.
 
 **Dots and ties.** `q.dot` is a dotted quarter, and `dot` takes a count for the
 rest: `q.dot(2)` is the doubly-dotted quarter, a quarter and an eighth and a
@@ -330,7 +507,8 @@ contents come to a plain duration would be played in exactly the time it is
 written, so `;t` would be claiming a compression that is not there.
 
 A value set inside a group stops there: `[c4;q, [e4;e, f4, g4];t, c5]` leaves
-`c5` a quarter.
+`c5` a quarter. An octave set inside one stops there too — one rule for both
+registers, so a bracket never has to be read twice.
 
 ### The two cannot be mixed
 
@@ -722,6 +900,7 @@ table is the signatures.
 | --- | --- | --- |
 | `load` | `load(path) -> buffer` | Read an audio file into a buffer. The path is relative to the file it is written in, the same way a `use` path is, and must be written out rather than computed — every file is decoded once, before the program runs, so no note ever waits on a disk. Any format symphonia reads: wav, mp3, flac, ogg. Nothing comes out of a buffer until `sample` reads it. |
 | `sample` | `sample(buffer, position, channel?) -> signal` | Read a buffer at a position: 0 is the start, 1 is the end, and anything outside that is silence. `position` is a signal, which is where speed, direction and chopping all come from. Cubic interpolation, so it holds up away from its own speed. `channel` defaults to 0 and wraps if the buffer has fewer; it picks which reader is built, so it must be a compile-time number. |
+| `slice` | `slice(buffer, start, end, rate?, channel?) -> signal` | Read a portion of a buffer, once: `slice(amen, 0, 0.25)` is the first quarter of the break, at the speed it was recorded at. `start` and `end` are positions like `sample`'s, and both are compile-time numbers rather than signals — a slice is refused outside 0..1, where `sample` would read silence. `start` past `end` plays the portion backwards. `rate` defaults to 1 and multiplies the speed — 2 reads the portion in half the time, an octave up — and must be above zero, since at zero the reader would stop rather than slow. It is `sample` with the phasor written for you, `sample(b, line(start, end, (end - start) * b.secs / rate))`, and exists because that duration is the part that is easy to get wrong. The read holds on the last sample once it arrives, so an envelope is what ends the note; a slice ending at 1 goes quiet on its own. Use `sample` when the position or the speed has to move. |
 | `secs` | `secs(buffer) -> number` | How long a buffer is, in seconds. A compile-time number, so it divides into a `ramp` frequency: `ramp(1 / amen.secs)` reads the whole buffer once at its own speed. |
 | `channels` | `channels(buffer) -> number` | How many channels a buffer has — 1 for mono, 2 for a stereo file. |
 

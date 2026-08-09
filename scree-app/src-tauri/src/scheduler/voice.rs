@@ -579,6 +579,50 @@ mod tests {
         assert!(late > early, "0.75 should read later than 0.0: {early} vs {late}");
     }
 
+    /// The shape a drum out of a sample is actually written in: no parameter,
+    /// a portion of a file, an envelope. It has to survive the scheduler
+    /// thread's own lowering, which is where a buffer is hardest to reach.
+    ///
+    /// The buffer rises steadily from -1 to 1 across one second, so the first
+    /// fifth of it sits well below zero — which is what says the reader is
+    /// moving through the front of the file rather than parked somewhere.
+    #[test]
+    fn a_sliced_drum_builds_into_a_voice_and_sounds() {
+        let ins = sampling_instruments(
+            "fn slam() = slice(load(\"break.wav\"), 0, 0.2) * perc(0.001, 0.2)\n");
+
+        let mut net = build_voice(&ins, "slam", 0.0, &[], 1.0).expect("should build").net;
+        net.set_sample_rate(44100.0);
+        let s: Vec<f32> = (0..44100).map(|_| net.get_mono()).collect();
+
+        assert!(s.iter().all(|v| v.is_finite()), "no NaNs may reach the output");
+        let onset = s[..2205].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(onset > 0.5, "the slice should sound immediately, peak {onset}");
+    }
+
+    /// And the portion really is the one named. A constant position — the shape
+    /// `slice` exists to stop anyone writing — reads one sample forever, which
+    /// is a DC offset and all but silent once an envelope has had it.
+    #[test]
+    fn a_slice_moves_where_a_constant_position_would_sit_still() {
+        let sliced = sampling_instruments(
+            "fn slam() = slice(load(\"break.wav\"), 0, 0.2)\n");
+        let stuck = sampling_instruments(
+            "fn slam() = sample(load(\"break.wav\"), 0.2 / load(\"break.wav\").secs * 0.15)\n");
+
+        let render = |ins: &Instruments| {
+            let mut net = build_voice(ins, "slam", 0.0, &[], 1.0).expect("should build").net;
+            net.set_sample_rate(44100.0);
+            (0..8820).map(|_| net.get_mono()).collect::<Vec<f32>>()
+        };
+
+        let moving = render(&sliced);
+        assert!(moving[0] < moving[8819], "the slice should advance through the buffer");
+
+        let still = render(&stuck);
+        assert_eq!(still[0], still[8819], "a constant position never moves");
+    }
+
     /// A lane the instrument has no parameter for is refused at bind time, but
     /// the voice builder must not panic if one reaches it anyway.
     #[test]

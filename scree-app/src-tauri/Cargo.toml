@@ -40,5 +40,12 @@ tauri-plugin-dialog = "2.7.2"
 rand = "0.10"
 rand_distr = "0.6"
 trash = "5.2.6"
+# Watches the open project's folder, so the tree picks up a file made by
+# anything else without being asked to look. See `watcher.rs`.
+notify = "8.2.0"
+# Only for naming a recording after the moment it was played. Local time, not
+# UTC: a take made at eleven at night should not be filed under the next day.
+# Already in the tree behind `trash`, so this costs nothing to build.
+chrono = "0.4"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 

@@ -392,10 +392,14 @@ fn let_expr_shares_one_node() {
 }
 
 /// The binding is scoped to the body.
+///
+/// Named `x` rather than `a`: a letter that is also a note answers with the
+/// octave-less-note error instead, which proves the same thing about scoping
+/// but says it in words this test would then be pinning for no reason.
 #[test]
 fn let_expr_does_not_leak() {
-    let err = lower_src("let a = 2 in sin(a)\nsin(a)\n").unwrap_err();
-    assert!(err.contains("unbound name: a"), "got: {err}");
+    let err = lower_src("let x = 2 in sin(x)\nsin(x)\n").unwrap_err();
+    assert!(err.contains("unbound name: x"), "got: {err}");
 }
 
 /// The value is evaluated in the enclosing scope — `let` is not `letrec`.
@@ -1579,13 +1583,109 @@ fn octave_range_covers_midi() {
     assert_eq!(num("g9"), 127.0);
 }
 
-/// The octave is required, which is what keeps short names usable.
+/// Outside a sequence there is no octave to carry, so a bare letter is an
+/// error — which is what keeps short names usable as names.
 #[test]
-fn a_bare_letter_is_not_a_note() {
-    assert!(lower_src("sin(f)\n").unwrap_err().contains("unbound name: f"));
-    assert!(lower_src("sin(as)\n").unwrap_err().contains("unbound name: as"));
+fn a_bare_letter_is_not_a_note_outside_a_sequence() {
+    assert!(lower_src("sin(f)\n").unwrap_err().contains("without an octave"));
+    assert!(lower_src("sin(as)\n").unwrap_err().contains("without an octave"));
     let g = lower_src("fn voice(f) = sin(f)\nvoice(220)\n").unwrap();
     assert_eq!(g.nodes, vec![node(NodeKind::Sin, vec![Const(220.0)])]);
+}
+
+/// The octave carries to the notes after it, like a written length does.
+#[test]
+fn an_octave_carries_forward_through_a_sequence() {
+    assert_eq!(nums("[a1, a, a, a]"), vec![33.0; 4]);
+    // And it is the *last* octave written that carries, not the first.
+    assert_eq!(nums("[c4, d4, g, c5, d, g]"),
+               vec![60.0, 62.0, 67.0, 72.0, 74.0, 79.0]);
+}
+
+/// Accidentals carry the octave as plain letters do, enharmonics included.
+///
+/// The last case is the one worth pinning: an octave-less note *reads* the
+/// register and does not set it, so `bs` running over the top of octave 3 into
+/// 60 leaves the following `cf` still in 3 rather than following it up. Only a
+/// spelled octave moves the register, which is what makes a line's octave
+/// something the reader can find by looking backwards for a digit.
+#[test]
+fn a_carried_octave_takes_accidentals() {
+    assert_eq!(nums("[c4, ef, g]"), vec![60.0, 63.0, 67.0]);
+    assert_eq!(nums("[c4, gs, bf]"), vec![60.0, 68.0, 70.0]);
+    assert_eq!(nums("[b3, bs, cf]"), vec![59.0, 60.0, 47.0]);
+}
+
+/// The register is the written sequence's, so it works in either paradigm —
+/// nothing about carrying an octave is about rhythm.
+#[test]
+fn an_octave_carries_in_both_paradigms() {
+    assert_eq!(nums("[a1;q, a, a, a]"), vec![33.0; 4]);
+    assert_eq!(nums("[a1;2, a, a;3]"), vec![33.0; 3]);
+}
+
+/// A group inherits the octave around it and gives it back at the closing
+/// bracket — the same rule a written length follows, so there is one thing to
+/// learn rather than two opposite ones.
+///
+/// Summed because the point is what the notes inside came to: `[g, c5]` is
+/// g4 and c5, so the inner `g` took octave 4 from outside the bracket, and the
+/// outer `g` after it is g4 again rather than following the group up to 5.
+#[test]
+fn a_group_inherits_the_octave_but_does_not_export_it() {
+    assert_eq!(nums("[c4, [g, c5].sum, g]"), vec![60.0, 67.0 + 72.0, 67.0]);
+}
+
+/// An octave-less note needs one to have been written first. Nothing defaults:
+/// a sequence that opens on a bare letter is a mistake, not octave 4.
+#[test]
+fn a_sequence_must_open_on_a_spelled_octave() {
+    let e = list_err("[a, b, c]");
+    assert!(e.contains("without an octave"), "got: {e}");
+}
+
+/// Only a note *written* as the whole step opens the register. A computed pitch
+/// lands in an octave nobody wrote down, so there is nothing there to carry.
+#[test]
+fn a_computed_pitch_does_not_set_the_octave() {
+    let e = list_err("[c4.oct(1), g]");
+    assert!(e.contains("without an octave"), "got: {e}");
+    // The note that opened the register is still the one that carries, so an
+    // expression between two notes does not disturb them.
+    assert_eq!(nums("[c4, c4 + 12, g]"), vec![60.0, 72.0, 67.0]);
+}
+
+/// A binding shadows an octave-less note exactly as it shadows a spelled one,
+/// and a shadowed letter cannot open a register either.
+#[test]
+fn bindings_shadow_octave_less_notes_too() {
+    assert_eq!(nums("[c4, let a = 7 in a, a]"), vec![60.0, 7.0, 69.0]);
+    let e = list_err("let a4 = 7 in [a4, g]");
+    assert!(e.contains("without an octave"), "got: {e}");
+}
+
+/// A function body is not part of the sequence that called it. Its own bare
+/// letters are unbound names, whatever octave the caller happened to be in.
+#[test]
+fn the_octave_does_not_reach_into_a_function_body() {
+    let e = lower_src("fn pitch() = g\nsin([c4, pitch()][1])\n").unwrap_err();
+    assert!(e.contains("without an octave"), "got: {e}");
+}
+
+/// `e` is the eighth note and also the note E. With an octave in force both
+/// readings are live, so the step is refused rather than silently taking the
+/// duration — which is the reading nobody means between two notes.
+#[test]
+fn a_note_that_is_also_a_written_value_is_refused() {
+    let err = list_err("[c4, e, g]");
+    assert!(err.contains("the note E"), "got: {err}");
+    assert!(err.contains("`e4`"), "got: {err}");
+
+    // Spelling the octave is the way out that means the note.
+    assert_eq!(nums("[c4, e4, g]"), vec![60.0, 64.0, 67.0]);
+    // And in the length position `e` is never a pitch, so an octave in force
+    // does not disturb it — there is nothing there for a note to be.
+    assert_eq!(nums("[c4;e, g;e]"), vec![60.0, 67.0]);
 }
 
 /// The beat reaches the persistent graph as an ordinary folded number, in both
@@ -2306,6 +2406,232 @@ fn a_second_channel_can_be_asked_for() {
     assert_eq!(read.inputs[2], Const(1.0));
 }
 
+// ---- slice ----
+
+/// Where the read head sits at each of `times`, in position units.
+///
+/// The buffer these tests share is a ramp from -1 to 1, so what a graph renders
+/// says where in the buffer it read — undo that mapping and a rendered sample
+/// *is* a position. Everything below is about which positions are read and
+/// when, which is the only thing `slice` decides.
+fn read_positions(src: &str, times: &[f64]) -> Vec<f32> {
+    use fundsp::prelude64::AudioUnit;
+
+    let lowered = sampled(src).expect("should lower");
+    let mut net = crate::scree_graph::realizer::realize(&lowered.graph).expect("should realize");
+    net.set_sample_rate(44100.0);
+
+    let last = (times.last().expect("a time") * 44100.0) as usize + 1;
+    let rendered: Vec<f32> = (0..last).map(|_| net.get_mono()).collect();
+    times
+        .iter()
+        .map(|t| (rendered[((t * 44100.0) as usize).min(last - 1)] + 1.0) / 2.0)
+        .collect()
+}
+
+/// A slice is a `Line` feeding a `Sample`, and nothing else — no new node kind,
+/// and no state anywhere. The buffer is two seconds, so a quarter of it is half
+/// a second, and that half-second is the whole feature: it is the number a
+/// hand-written phasor has to be told and can therefore be told wrong.
+#[test]
+fn a_slice_is_a_line_into_the_ordinary_reader() {
+    let g = sampled("slice(load(\"break.wav\"), 0.25, 0.5)\n").expect("should lower").graph;
+
+    assert_eq!(g.nodes.len(), 2, "a slice is two nodes: {:?}", g.nodes);
+    assert_eq!(g.nodes[0], node(NodeKind::Line, vec![Const(0.25), Const(0.5), Const(0.5)]));
+    assert_eq!(
+        g.nodes[1],
+        node(NodeKind::Sample, vec![Node(NodeId(0)), Const(0.0), Const(0.0)]),
+    );
+}
+
+/// The reason the builtin exists: the portion is read at the speed the buffer
+/// was recorded at, so a quarter of a two-second break takes half a second.
+#[test]
+fn a_slice_reads_its_portion_at_the_buffers_own_speed() {
+    let at = read_positions(
+        "slice(load(\"break.wav\"), 0.25, 0.5)\n", &[0.0, 0.25, 0.5, 0.75]);
+
+    assert!((at[0] - 0.25).abs() < 0.01, "should start at 0.25, got {}", at[0]);
+    assert!((at[1] - 0.375).abs() < 0.01, "halfway at 0.375, got {}", at[1]);
+    assert!((at[2] - 0.5).abs() < 0.01, "arrives at 0.5, got {}", at[2]);
+    assert!((at[3] - 0.5).abs() < 0.01, "and holds there, got {}", at[3]);
+}
+
+/// The thing the hand-written form kept getting wrong, pinned as a difference:
+/// scaling a `ramp`'s position without scaling its frequency reads the right
+/// portion at a quarter of the speed.
+#[test]
+fn a_slice_is_not_the_naive_scaled_phasor() {
+    let sliced = read_positions("slice(load(\"break.wav\"), 0, 0.25)\n", &[0.5]);
+    let naive = read_positions(
+        "sample(load(\"break.wav\"), ramp(1 / load(\"break.wav\").secs) * 0.25)\n", &[0.5]);
+
+    assert!((sliced[0] - 0.25).abs() < 0.01, "the slice is done, got {}", sliced[0]);
+    assert!((naive[0] - 0.0625).abs() < 0.01, "the naive one crawls, got {}", naive[0]);
+}
+
+/// And it really is only sugar: the spelling it replaces renders the same
+/// samples, so nothing was added to the audio path.
+#[test]
+fn a_slice_is_the_hand_written_form_exactly() {
+    let times = [0.0, 0.1, 0.3, 0.49, 0.6];
+    assert_eq!(
+        read_positions("slice(load(\"break.wav\"), 0.25, 0.5)\n", &times),
+        read_positions(
+            "let b = load(\"break.wav\")\nsample(b, line(0.25, 0.5, 0.25 * b.secs))\n",
+            &times,
+        ),
+    );
+
+    // And with a rate, which is the same line with the same end points and a
+    // shorter one of them — both spellings are written out in the reference.
+    assert_eq!(
+        read_positions("slice(load(\"break.wav\"), 0.25, 0.5, 2)\n", &times),
+        read_positions(
+            "let b = load(\"break.wav\")\nsample(b, line(0.25, 0.5, 0.25 * b.secs / 2))\n",
+            &times,
+        ),
+    );
+}
+
+/// Backwards costs nothing and needs no flag: the ends are simply the other way
+/// round, and the portion still takes as long as it lasts.
+#[test]
+fn a_slice_written_backwards_plays_backwards() {
+    let at = read_positions(
+        "slice(load(\"break.wav\"), 0.5, 0.25)\n", &[0.0, 0.25, 0.5]);
+
+    assert!((at[0] - 0.5).abs() < 0.01, "should start at 0.5, got {}", at[0]);
+    assert!((at[1] - 0.375).abs() < 0.01, "and fall, got {}", at[1]);
+    assert!((at[2] - 0.25).abs() < 0.01, "landing on 0.25, got {}", at[2]);
+}
+
+#[test]
+fn a_slice_can_be_asked_for_a_second_channel() {
+    let g = sampled("slice(load(\"break.wav\"), 0, 1, 1, 1)\n").expect("should lower").graph;
+    let read = g.nodes.iter().find(|n| n.kind == NodeKind::Sample).unwrap();
+    assert_eq!(read.inputs[2], Const(1.0));
+}
+
+/// The rate is spent on the line's length and nowhere else: the same portion,
+/// covered in half the time, is that portion at double speed. The buffer is two
+/// seconds, so a quarter of it is half a second at rate 1.
+#[test]
+fn a_rate_shortens_the_line_rather_than_moving_its_ends() {
+    let duration = |src: &str| {
+        let g = sampled(src).expect("should lower").graph;
+        let line = g.nodes.iter().find(|n| n.kind == NodeKind::Line).expect("a Line");
+        assert_eq!(line.inputs[0], Const(0.25), "the ends must not move");
+        assert_eq!(line.inputs[1], Const(0.5));
+        match line.inputs[2] {
+            Const(d) => d,
+            _ => panic!("the duration should be a constant"),
+        }
+    };
+
+    assert_eq!(duration("slice(load(\"break.wav\"), 0.25, 0.5)\n"), 0.5);
+    assert_eq!(duration("slice(load(\"break.wav\"), 0.25, 0.5, 2)\n"), 0.25);
+    assert_eq!(duration("slice(load(\"break.wav\"), 0.25, 0.5, 0.5)\n"), 1.0);
+}
+
+/// And it really is a speed: at rate 2 the reader is through the portion in
+/// half the time it took at rate 1.
+#[test]
+fn a_rate_reads_the_portion_faster() {
+    let at = read_positions(
+        "slice(load(\"break.wav\"), 0.25, 0.5, 2)\n", &[0.0, 0.125, 0.25, 0.5]);
+
+    assert!((at[0] - 0.25).abs() < 0.01, "should start at 0.25, got {}", at[0]);
+    assert!((at[1] - 0.375).abs() < 0.01, "halfway by 0.125 s, got {}", at[1]);
+    assert!((at[2] - 0.5).abs() < 0.01, "and done by 0.25 s, got {}", at[2]);
+    assert!((at[3] - 0.5).abs() < 0.01, "then holds, got {}", at[3]);
+}
+
+/// A rate applies to a reversed slice the same way — it is the speed of the
+/// read, not the direction of it.
+#[test]
+fn a_rate_applies_to_a_backwards_slice_too() {
+    let at = read_positions(
+        "slice(load(\"break.wav\"), 0.5, 0.25, 2)\n", &[0.0, 0.125, 0.25]);
+
+    assert!((at[0] - 0.5).abs() < 0.01, "should start at 0.5, got {}", at[0]);
+    assert!((at[1] - 0.375).abs() < 0.01, "halfway by 0.125 s, got {}", at[1]);
+    assert!((at[2] - 0.25).abs() < 0.01, "and done by 0.25 s, got {}", at[2]);
+}
+
+/// At zero the reader would stop rather than slow, which is the DC offset the
+/// whole builtin exists to keep anyone from writing by accident.
+#[test]
+fn a_rate_of_zero_is_refused() {
+    let e = sample_err("slice(load(\"break.wav\"), 0, 0.25, 0)\n");
+    assert!(e.contains("above zero"), "got: {e}");
+}
+
+/// Backwards is the ends the other way round. A negative rate would be a second
+/// spelling of it, and the message has to say which one is the real one.
+#[test]
+fn a_negative_rate_points_at_writing_the_ends_backwards() {
+    let e = sample_err("slice(load(\"break.wav\"), 0, 0.25, -1)\n");
+    assert!(e.contains("above zero"), "got: {e}");
+    assert!(e.contains("0.5, 0.25"), "should show the backwards spelling, got: {e}");
+}
+
+#[test]
+fn a_rate_that_is_a_signal_says_to_use_sample() {
+    let e = sample_err("slice(load(\"break.wav\"), 0, 0.25, ramp(1))\n");
+    assert!(e.contains("compile-time number"), "got: {e}");
+    assert!(e.contains("`sample`"), "should name the alternative, got: {e}");
+}
+
+#[test]
+fn a_slice_takes_no_more_than_five_arguments() {
+    let e = sample_err("slice(load(\"break.wav\"), 0, 0.25, 1, 0, 9)\n");
+    assert!(e.contains("slice(buffer, start, end)"), "got: {e}");
+}
+
+/// A slice is written down in the source at both ends, so an end outside the
+/// buffer is a typo rather than a position that happens to be silent — which is
+/// the one place it may differ from `sample`, where anything at all is fair.
+#[test]
+fn an_end_outside_the_buffer_is_refused() {
+    for src in [
+        "slice(load(\"break.wav\"), 0, 1.5)\n",
+        "slice(load(\"break.wav\"), -0.2, 0.5)\n",
+    ] {
+        let e = sample_err(src);
+        assert!(e.contains("between 0 and 1"), "{src} gave: {e}");
+    }
+}
+
+/// The ends are spent on a line built once, so neither can be modulated. The
+/// message has to point at the name that can be.
+#[test]
+fn an_end_that_is_a_signal_says_to_use_sample() {
+    let e = sample_err("slice(load(\"break.wav\"), 0, ramp(1))\n");
+    assert!(e.contains("compile-time number"), "got: {e}");
+    assert!(e.contains("`sample`"), "should name the alternative, got: {e}");
+}
+
+/// Which end is wrong, rather than that one of them is.
+#[test]
+fn a_refused_end_says_which_one_it_was() {
+    assert!(sample_err("slice(load(\"break.wav\"), 4, 0.5)\n").contains("start"));
+    assert!(sample_err("slice(load(\"break.wav\"), 0.5, 4)\n").contains("end"));
+}
+
+#[test]
+fn a_slice_needs_both_of_its_ends() {
+    let e = sample_err("slice(load(\"break.wav\"), 0.25)\n");
+    assert!(e.contains("slice(buffer, start, end)"), "got: {e}");
+}
+
+#[test]
+fn slicing_something_that_is_not_a_buffer_says_so() {
+    let e = sample_err("slice(220, 0, 1)\n");
+    assert!(e.contains("must be a buffer"), "got: {e}");
+}
+
 // ---- what a buffer is not ----
 
 #[test]
@@ -2380,7 +2706,8 @@ fn the_readme_sampling_examples_compile() {
         let wave = Arc::new(wave);
         crate::samples::Samples::from_pairs([
             ("breaks/amen.wav".to_string(), wave.clone()),
-            ("pad.wav".to_string(), wave),
+            ("pad.wav".to_string(), wave.clone()),
+            ("door.wav".to_string(), wave),
         ])
     }
 
@@ -2392,8 +2719,24 @@ fn the_readme_sampling_examples_compile() {
         "let amen = load(\"breaks/amen.wav\")\nsample(amen, ramp(4 / amen.secs) * 0.25)\n",
         "let amen = load(\"breaks/amen.wav\")\nsample(amen, 0.5 + ramp(4 / amen.secs) * 0.25)\n",
         "let amen = load(\"breaks/amen.wav\")\nsample(amen, ramp(1 / amen.secs) >> hold(16, 0))\n",
-        // The chopping example, entire.
+        // The `slice` examples, and the equivalence the section claims.
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0, 0.25)\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0.5, 0.75)\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0.5, 0.25)\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0, 1)\n",
+        // The rates, and both equivalences the section claims.
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0, 0.25, 2)\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0, 0.25, 0.5)\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0.5, 0.25, 2)\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0.25, 0.5)\n\
+         sample(amen, line(0.25, 0.5, 0.25 * amen.secs))\n",
+        "let amen = load(\"breaks/amen.wav\")\nslice(amen, 0.25, 0.5, 2)\n\
+         sample(amen, line(0.25, 0.5, 0.25 * amen.secs / 2))\n",
+        "fn slam() = slice(load(\"door.wav\"), 0, 0.15) * perc(0.001, 0.2)\nplay([\\], slam)\n",
+        // The chopping example, entire, and the `slice` spelling beside it.
         "fn chop(n, at = 0) =\n  sample(load(\"breaks/amen.wav\"), at + ramp(n) * 0.0625) * perc(0.001, 0.2)\n\
+         play([\\, \\, \\, \\, \\, \\, \\, \\], chop, 1,\n     at: [0, 0.25, 0.5, 0.0625, 0.75, 0.5, 0.125, 0.875])\n",
+        "fn chop(n, at = 0) =\n  slice(load(\"breaks/amen.wav\"), at, at + 0.0625) * perc(0.001, 0.2)\n\
          play([\\, \\, \\, \\, \\, \\, \\, \\], chop, 1,\n     at: [0, 0.25, 0.5, 0.0625, 0.75, 0.5, 0.125, 0.875])\n",
         // The stereo one.
         "let stereo = load(\"pad.wav\")\nlet pos = ramp(1 / stereo.secs)\n\
@@ -2474,6 +2817,16 @@ mod length_tests {
         }
     }
 
+    /// A metrical pass that does not fill its bar arrives wrapped in the `Fast`
+    /// that rotates it against the grid — see `to_pattern_timed`. Tests about
+    /// what is *in* a pass look through it rather than restating the meter.
+    fn pass_slots(p: &Pattern) -> Vec<Slot> {
+        match p {
+            Pattern::Fast(_, inner) => slots(inner),
+            other => slots(other),
+        }
+    }
+
     /// The token parses, and the number lands on the slot it followed.
     #[test]
     fn a_length_reaches_its_slot() {
@@ -2516,6 +2869,52 @@ mod length_tests {
         let onsets: Vec<f64> = evs.iter().map(|e| e.begin).collect();
         assert_eq!(onsets, vec![0.0, 0.25, 0.375]);
         assert_eq!(evs[0].duration(), 0.25, "the quarter lasts a beat");
+    }
+
+    /// The motivating melody: an octave written once, at the front.
+    #[test]
+    fn an_octave_carries_across_a_played_sequence() {
+        let got = slots(&pattern_of(&format!("{TONE}play([a1;q, a, a, a], tone)\n")));
+        assert_eq!(got.iter().map(|s| s.step.clone()).collect::<Vec<_>>(),
+                   vec![Step::Value(33.0); 4]);
+        assert!(got.iter().all(|s| s.length == 1.0), "got {got:?}");
+    }
+
+    /// A tuplet takes the line's octave in with it and hands it back, exactly
+    /// as it does with the written value in force.
+    #[test]
+    fn a_tuplet_inherits_the_octave_and_returns_it() {
+        let got = slots(&pattern_of(&format!(
+            "{TONE}play([c4;q, [g, b, d5];t, g], tone)\n")));
+        let Step::Group(inner) = &got[1].step else {
+            panic!("expected a tuplet group, got {:?}", got[1].step);
+        };
+        assert_eq!(slots(inner).iter().map(|s| s.step.clone()).collect::<Vec<_>>(),
+                   vec![Step::Value(67.0), Step::Value(71.0), Step::Value(74.0)]);
+        // The group ended on d5, and the step after it is g4 all the same.
+        assert_eq!(got[2].step, Step::Value(67.0));
+    }
+
+    /// With no octave in force `e` is the eighth it has always been, so a
+    /// rhythm written in bare values is untouched by the register existing.
+    #[test]
+    fn bare_written_values_still_read_as_a_rhythm() {
+        let got = pass_slots(&pattern_of(&format!("fn hit() = sin(50)\nplay([q, e, e], hit)\n")));
+        assert_eq!(got.iter().map(|s| s.length).collect::<Vec<_>>(),
+                   vec![1.0, 0.5, 0.5]);
+        assert!(got.iter().all(|s| s.step == Step::Value(1.0)), "got {got:?}");
+    }
+
+    /// A hit of a given length is still writable in a sequence that is in an
+    /// octave — it is `\;e`, which the ambiguity error points at.
+    #[test]
+    fn a_trigger_gives_a_pitchless_hit_inside_a_melody() {
+        let got = pass_slots(&pattern_of(&format!("{TONE}play([c4;q, \\;e, g], tone)\n")));
+        assert_eq!(got[1].step, Step::Value(1.0));
+        assert_eq!(got[1].length, 0.5);
+        // And the octave carried across it: the trigger is not a note and has
+        // no register of its own to set.
+        assert_eq!(got[2].step, Step::Value(67.0));
     }
 
     /// A length may be any expression that folds to a number, like `rate`.
