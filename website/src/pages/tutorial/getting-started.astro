@@ -1,0 +1,97 @@
+---
+import TutorialLayout from "../../layouts/TutorialLayout.astro";
+import Code from "../../components/Code.astro";
+import { pageBySlug } from "../../lib/tutorial";
+
+const page = pageBySlug("getting-started")!;
+
+const kbd =
+	"rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 font-mono text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300";
+const code =
+	"rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.9em] text-neutral-800 dark:bg-neutral-800/70 dark:text-neutral-200";
+---
+
+<TutorialLayout
+	title={page.title}
+	description={page.blurb}
+	current={page.slug}
+>
+	<header class="mb-8">
+		<p class="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+			Tutorial
+		</p>
+		<h1 class="mt-1 text-3xl font-semibold tracking-tight">{page.title}</h1>
+		<p class="mt-2 max-w-2xl text-neutral-600 dark:text-neutral-400">
+			{page.blurb}
+		</p>
+	</header>
+
+	<div class="max-w-2xl space-y-4 leading-relaxed text-neutral-700 dark:text-neutral-300">
+
+ 
+		<h2 class="pt-2 text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+			A sound
+		</h2>
+		<p>The shortest thing that makes noise is one oscillator:</p>
+		<Code code="sin(440)" />
+		<p>
+			Press <kbd class={kbd}>⌘ ,</kbd> — <kbd class={kbd}>Ctrl ,</kbd> on Windows
+			and Linux — or the play button, and the tab you are in is evaluated.
+			<kbd class={kbd}>⌘ .</kbd> stops the audio. Playing again replaces what is
+			running immediately, so the way to change a sound is to edit it and press
+			play.
+		</p>
+
+		<h2 class="pt-4 text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+			Quieter
+		</h2>
+		<p>
+			That is loud. Multiplying a signal scales its amplitude, so this is the
+			same tone at a tenth of the volume:
+		</p>
+		<Code code="sin(440) * 0.1" />
+		<p>
+			Signals add, too. Two oscillators an octave apart, named once and used
+			twice:
+		</p>
+		<Code
+			code={`let freq = 220
+(sin(freq) + sin(freq * 2)) * 0.25`}
+		/>
+
+		<h2 class="pt-4 text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
+			An instrument
+		</h2>
+		<p>
+			A file evaluates on its own like this, which is fine for one sound and no
+			use once you want that sound played in a pattern. Wrap it in a{" "}
+			<code class={code}>fn</code> and it becomes something you can name and
+			call — a function that returns a signal is an instrument.
+		</p>
+		<Code
+			code={`fn synth(freq) {
+  saw(freq) + saw(freq * 2) * 0.5
+}`}
+		/>
+		<p>
+			On its own that does nothing: it is a definition, and nothing has asked
+			for a sound yet. Call it, and there is one.
+		</p>
+		<Code
+			code={`fn synth(freq) {
+  saw(freq) + saw(freq * 2) * 0.5
+}
+
+synth(220)`}
+
+		/>
+		<p>
+			Not yet inspiring, but a sound — and it will hold that note until you
+			press <kbd class={kbd}>⌘ .</kbd>. Every name you can call is in the{" "}
+			<a
+				href="/docs/"
+				class="text-blue-700 hover:underline dark:text-blue-400">function reference</a
+			>.
+		</p>
+	</div>
+</TutorialLayout>

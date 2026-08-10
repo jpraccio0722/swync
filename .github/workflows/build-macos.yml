@@ -1,0 +1,105 @@
+# Build, sign and notarize the macOS app.
+#
+# This exists for one reason: a downloaded app carries a quarantine attribute
+# and a locally built one does not. Everything a person compiles themselves
+# already runs; everything CI hands them has to be signed by a Developer ID
+# certificate and notarized by Apple, or Gatekeeper refuses to open it.
+#
+# Nothing here can run until the secrets under `env:` exist — see
+# `swync-app/scripts/build-macos.sh` for the same job done on a laptop, and
+# the repository's setup notes for how the certificate becomes a secret.
+
+name: Build macOS
+
+on:
+  push:
+    tags: ["v*"]
+  # So a build can be exercised without minting a version tag for it.
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    permissions:
+      # Only needed by the release step, which runs on tags alone.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: swync-app/package-lock.json
+
+      # Both halves of the universal binary. A runner is Apple Silicon, so the
+      # Intel target is the one that has to be asked for.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      # A cold build of this crate is twenty minutes of fundsp, chumsky and
+      # symphonia that never change between releases.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: swync-app/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: swync-app
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          # The Developer ID Application certificate, as base64 of a .p12, and
+          # the password it was exported under. The action builds a throwaway
+          # keychain from these and tears it down afterwards — a runner has no
+          # login keychain to sign from.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # The certificate's full name, which is what `codesign` is given:
+          # "Developer ID Application: Your Name (TEAMID)".
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarization. An app-specific password from account.apple.com, not
+          # an Apple ID password. Setting these three is what makes the build
+          # notarize rather than only sign.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: swync-app
+          args: --target universal-apple-darwin
+          # No `tagName`, so this step only builds. The release is made below
+          # instead, which is what lets a manual run produce a disk image
+          # without minting a tag to attach it to.
+
+      # Proof rather than hope: `stapler validate` passes only if Apple
+      # notarized this exact binary and the ticket was written into it. A build
+      # whose secrets were missing signs anyway and fails here, which is the
+      # failure worth catching before anyone downloads it.
+      - name: Verify the signature and the notarization
+        run: |
+          APP=$(find swync-app/src-tauri/target/universal-apple-darwin/release/bundle/macos \
+            -maxdepth 1 -name '*.app' | head -1)
+          [ -n "$APP" ] || { echo "no .app was built"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep "Authority=Developer ID Application"
+          xcrun stapler validate "$APP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swync-macos-universal
+          path: swync-app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      # A draft, so the download is never public until you have opened the disk
+      # image on a Mac that did not build it — the only test that covers what a
+      # stranger actually does.
+      - name: Draft a release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft --generate-notes --title "Swync $GITHUB_REF_NAME" \
+            swync-app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg

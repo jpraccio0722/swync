@@ -8,6 +8,13 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   integrations: [react()],
 
+  // The tutorial is a sequence, so /tutorial/ means its first chapter. Every
+  // chapter is then a page of its own, named by the same slug the contents in
+  // `src/lib/tutorial.ts` uses.
+  redirects: {
+    '/tutorial': '/tutorial/getting-started/',
+  },
+
   vite: {
     plugins: [tailwindcss()]
   }

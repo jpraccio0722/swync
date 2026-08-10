@@ -1,0 +1,9 @@
+/* Tailwind's automatic source detection would scan the whole project, and its
+   Vite plugin full-reloads the page whenever a file it scanned changes. That
+   includes the .swync files the editor itself writes, so saving a patch from
+   inside the app reloaded the frontend and wiped the open tabs. Class names
+   only ever live in the frontend, so point the scanner there. */
+@import "tailwindcss" source(none);
+
+@source "../src";
+@source "../index.html";

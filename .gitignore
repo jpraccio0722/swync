@@ -1,6 +1,6 @@
 # Repo-wide OS and editor files.
 # Build-output ignores live alongside the code they belong to
-# (scree-app/.gitignore, scree-app/src-tauri/.gitignore).
+# (swync-app/.gitignore, swync-app/src-tauri/.gitignore).
 .DS_Store
 .idea
 .vscode

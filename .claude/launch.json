@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "scree-vite",
+      "name": "swync-vite",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd scree-app && npm run dev"],
+      "runtimeArgs": ["-c", "cd swync-app && npm run dev"],
       "port": 1420
     },
     {
