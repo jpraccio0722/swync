@@ -30,6 +30,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The tag is the version — see the same step in `build-macos.yml`. Tauri
+      # names the installers from the `version` in `tauri.conf.json` and knows
+      # nothing about the ref it was built from, so without this a tag ships
+      # whatever version happens to be committed.
+      #
+      # Only on a tag: a `workflow_dispatch` run has no version to take, and
+      # builds the committed one.
+      - name: Stamp the version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: bash swync-app/scripts/set-version.sh "$GITHUB_REF_NAME"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -78,6 +90,19 @@ jobs:
           if (-not $found) { throw "no installer was built" }
           $found | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
           if ($found | Where-Object { $_.Length -lt 1MB }) { throw "an installer came out implausibly small" }
+
+          # The stamp step is upstream of a twenty minute build, so this is
+          # where you find out whether it took. Tauri puts the version in the
+          # filename, which is also the only place a person downloading the
+          # installer will see it before running it.
+          if ($env:GITHUB_REF_NAME -and $env:GITHUB_REF -like 'refs/tags/v*') {
+            $want = $env:GITHUB_REF_NAME -replace '^v', ''
+            $wrong = $found | Where-Object { $_.Name -notlike "*_${want}_*" }
+            if ($wrong) {
+              throw "tag $env:GITHUB_REF_NAME wants $want, but built: $($wrong.Name -join ', ')"
+            }
+            "version $want matches the tag"
+          }
 
       - uses: actions/upload-artifact@v4
         with:
