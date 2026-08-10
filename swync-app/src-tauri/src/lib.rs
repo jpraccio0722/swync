@@ -29,7 +29,7 @@ mod imports;
 mod parser;
 mod swync_graph;
 mod lowerer;
-// Public for `src/bin/dump-metadata.rs`, which writes the same tables the
+// Public for `examples/dump-metadata.rs`, which writes the same tables the
 // editor reads out to the website's reference so the two cannot disagree.
 pub mod lang;
 mod library;

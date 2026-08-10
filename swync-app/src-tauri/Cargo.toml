@@ -4,9 +4,6 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["Jesse Raccio"]
 edition = "2021"
-# `src/bin/` holds tooling that is not the app — without this, adding the second
-# binary made a bare `cargo run` ambiguous and stopped launching Swync.
-default-run = "swync"
 
 [lib]
 name = "swync_lib"

@@ -4,7 +4,7 @@ import metadata from "../data/metadata.json";
  * The language's callable surface.
  *
  * Nothing here is hand-maintained: `src/data/metadata.json` is written by
- * `cargo run --bin dump-metadata` in `swync-app/src-tauri`, out of the same
+ * `cargo run --example dump-metadata` in `swync-app/src-tauri`, out of the same
  * `lang::metadata()` the editor's docs panel reads. A UGen added to `UGENS` in
  * Rust reaches this site by re-running that command — the reference is
  * generated from the tables the lowerer dispatches on, never transcribed from
