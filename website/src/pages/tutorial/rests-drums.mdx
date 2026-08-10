@@ -1,0 +1,64 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: rests-drums
+---
+
+## Can I kick it?
+
+Here's a kick drum
+
+```swync
+fn kick() = {
+  let sweep = 50 + 150 * perc(0.001, 0.05)
+  let click = noise() * perc(0.001, 0.006)
+  sin(sweep) * perc(0.002, 0.4) * 0.9 + click * 0.1
+}
+```
+
+It's a kick with no pitched component, no pitched input, so how do we trigger it?
+```swync
+play([d2;q, f, g, e2], kick)
+```
+
+This will still work. The pitch information is irrelevant and tossed away, simply acting to trigger the kick.
+
+We can also use the trigger symbol `\`:
+
+```swync
+play([\, \, \, \], kick)
+```
+
+It works proportionally and with rhythmic values:
+```swync
+play([\;q, \, \, \;e, \], kick)
+```
+
+Cool, but now you the kick only on one and three. Introducing the rest symbol `\``
+```swync
+play([\;q, `, \, `], kick)
+```
+
+Rests work like every other rhythm. Let's put the kick on 1 and 4 making the rest 2 beats:
+
+```swync
+play([\;q, `;h, \;q], kick)
+```
+
+Cool, now how do you actually make two things happen at the same time?
+Like a kick and a hi-hat, maybe.
+
+```swync
+fn kick() = {
+  let sweep = 50 + 150 * perc(0.001, 0.05)
+  let click = noise() * perc(0.001, 0.006)
+  sin(sweep) * perc(0.002, 0.4) * 0.9 + click * 0.1
+}
+
+fn hat() = noise() * perc(0.001, 0.025) * 0.25 >> highpass(7000, 0.7)
+
+
+play([\;q, `, \, `], kick)
+play([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], hat)
+```
+
+Both plays will start together. Now I have a simple beat to mess with.

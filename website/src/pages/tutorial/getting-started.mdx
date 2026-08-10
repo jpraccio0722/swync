@@ -1,0 +1,73 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: getting-started
+---
+
+## Your first sound
+
+Type or copy the following into the IDE:
+
+```swync
+sin(440)
+```
+
+Set your volume at a reasonable level before you start. You can do this in the app with the volume control or use your main audio.
+
+Press <kbd>⌘ ,</kbd> — <kbd>Ctrl ,</kbd> on Windows and Linux — or the play
+button, and the tab you are in is evaluated.
+
+<kbd>⌘ .</kbd> stops the audio.
+
+If your volume was all the way, that was loud. Whenever you are messing with sound like this, watch your
+eardrums! 
+
+## Make it quieter
+
+Multiplying a signal scales its amplitude, so this is the same tone at
+a tenth of the volume:
+
+```swync
+sin(440) * 0.1
+```
+
+Signals add, too. Here are two oscillators an octave apart.
+
+```swync
+(sin(220) + sin(220 * 2)) * 0.25
+```
+
+We repeated 220 more than once, so we can put it in a variable that we can reuse. For that we use `let`.
+
+```swync
+let freq = 220
+(sin(freq) + sin(freq * 2)) * 0.25
+```
+
+## An instrument
+
+A file evaluates on its own like this, which is fine for one sound. For more complex projects, we need to make things more contained. 
+
+We can wrap our instrument in a `fn` and it becomes
+something you can name and call — a function that returns a signal.
+
+```swync
+fn synth(freq) {
+  saw(freq) + saw(freq * 2) * 0.5
+}
+```
+
+On its own that does nothing: it is the definition of an instrument. Nothing has asked for a
+sound yet. We need to *call* the function.
+
+```swync
+fn synth(freq) {
+  saw(freq) + saw(freq * 2) * 0.5
+}
+
+synth(220)
+```
+
+Not yet inspiring, but it's sound! The note won't stop playing until you
+press <kbd>⌘ .</kbd>. 
+
+

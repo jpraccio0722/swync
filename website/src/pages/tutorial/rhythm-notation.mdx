@@ -1,0 +1,72 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: rhythm-notation
+---
+
+## How to notate rhythms
+
+From the previous chapter, we have a pattern in proportional notation. 
+If we have our time set to 4/4 this represents three quarter notes and two eighths.
+
+```swync
+play([d2, f, g, [e2, bf1]], synth)
+```
+
+We may feel more comfortable thinking more musically and less mathemtically. There's an option for that:
+
+```swync
+play([d2;q, f, g, e2;e, bf1], synth)
+```
+
+Just like the use of the semi-colon to represent a different proportion in the last chapter. 
+Here we are using it to indicate a rhythmic value. Below is the current set of usable values:
+
+
+| Name | Note | Beats | Bar in 4/4 |
+|------|------|-------|-----------|
+| `w` | Whole | 4 | 1 |
+| `h` | Half | 2 | 1/2 | 
+| `q` | Quarter | 1 | 1/4 | 
+| `e` | Eighth | 1/2 | 1/8 | 
+| `s` | Sixteenth | 1/4 | 1/16 |
+
+There is currently no thirthy second notes. 
+
+Like before, the rhythm carries forward.
+
+```swync
+play([d2;q, f, g, e2;e, bf1], synth)
+```
+So d2, f and g are all quarter notes and bf1 is an eighth note.
+
+
+We can modify rhythms in to ways:
+
+| Marker | Meaning |
+|--------|---------|
+| `.dot` | Lengthens by half. Takes an optional count from 1 to 8 — `q.dot` is 3/2 beats, `q.dot(2)` is 7/4, following (2^(n+1) − 1)/2^n. |
+| `;t` | Tuplet. Plays a bracketed group in the next lower power of two — three quarters in the time of two, five eighths in the time of four.
+
+
+Going back to out proportional example, the nested group of three is an eighth note triplet.
+
+```swync
+play([d2, f, g, [e2, bf1, g2]], synth)
+```
+
+With this notation, we can make that explicit.
+
+```swync
+play([d2;q, f, g, [e2;e, bf1, g2];t], synth)
+```
+
+In this case the ;t is required. Otherwise, you don't require brackets at all for straight eighths.
+With this notation, we can make that explicit.
+
+```swync
+play([d2;q, f, g, e2;e, bf1, g2], synth)
+```
+And yes, this produces a four and one half note pattern that would syncopate over the bar. 
+There are no guards to prevent interesting things like this.
+
+Ok, that's all, right? Well, how do we make silence? What about drums?
