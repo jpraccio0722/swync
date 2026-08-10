@@ -1,0 +1,113 @@
+# Build the Windows installers.
+#
+# The mirror of `build-macos.yml`, and shorter for one reason: Windows has no
+# notarization step. Tauri produces an NSIS `.exe` setup and an MSI, and both
+# are usable the moment they come out of the build — there is no equivalent of
+# Gatekeeper refusing to open a downloaded app outright.
+#
+# What there is instead is SmartScreen. An unsigned installer downloaded from
+# the internet raises "Windows protected your PC", and getting past it takes a
+# click on "More info" and then "Run anyway". That is a warning, not a wall,
+# and it fades as a signed binary accumulates reputation — but only a signed
+# one accumulates any. See the signing note further down for what turning that
+# off would involve; nothing here needs a secret to run today.
+
+name: Build Windows
+
+on:
+  push:
+    tags: ["v*"]
+  # So a build can be exercised without minting a version tag for it.
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      # Only needed by the release step, which runs on tags alone.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: swync-app/package-lock.json
+
+      # No target list: the runner is x86_64 and the MSVC toolchain it hosts is
+      # the one being built for. Windows on ARM would be a second job rather
+      # than a second target here — `cpal` binds to WASAPI through the platform
+      # SDK, so it wants a native runner, not a cross-compile.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # A cold build of this crate is twenty minutes of fundsp, chumsky and
+      # symphonia that never change between releases.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: swync-app/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: swync-app
+        run: npm ci
+
+      # No signing environment. Tauri takes Windows code signing from
+      # `bundle.windows` in `tauri.conf.json` — a certificate thumbprint naming
+      # a certificate already in the machine's store, or a `signCommand` — not
+      # from environment variables the way the macOS path does. So wiring a
+      # certificate in is a config change plus an import step before this one,
+      # and until there is a certificate to import there is nothing for a
+      # half-written `env:` block to do but look like it works.
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: swync-app
+          # No `tagName`, so this step only builds. The release is made below
+          # instead, which is what lets a manual run produce installers without
+          # minting a tag to attach them to.
+
+      # The bundle directory is the only claim worth checking on this platform:
+      # there is no signature to verify and no notarization ticket to validate,
+      # so what is left is that both installers exist and neither is a stub. A
+      # build that half-failed still exits 0 often enough to be worth a look.
+      - name: Check the installers were built
+        shell: pwsh
+        run: |
+          $bundle = "swync-app/src-tauri/target/release/bundle"
+          $found = Get-ChildItem -Path "$bundle/nsis/*.exe", "$bundle/msi/*.msi" -ErrorAction SilentlyContinue
+          if (-not $found) { throw "no installer was built" }
+          $found | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
+          if ($found | Where-Object { $_.Length -lt 1MB }) { throw "an installer came out implausibly small" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swync-windows-x64
+          path: |
+            swync-app/src-tauri/target/release/bundle/nsis/*.exe
+            swync-app/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      # A draft, so the download is never public until you have run the
+      # installer on a Windows machine that did not build it — the only test
+      # that covers what a stranger actually does.
+      #
+      # Create-then-upload rather than create alone: this job and the macOS one
+      # both fire on the same tag and race for the same release. Whichever
+      # arrives second finds it already there, and `|| true` lets it fall
+      # through to the upload that was the point.
+      - name: Draft a release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `nullglob`, because an unmatched glob is otherwise passed through
+          # as a literal path and `gh` fails on a filename with a `*` in it —
+          # an unhelpful way to be told the MSI half of the bundle is missing.
+          shopt -s nullglob
+          installers=(swync-app/src-tauri/target/release/bundle/nsis/*.exe
+                      swync-app/src-tauri/target/release/bundle/msi/*.msi)
+          [ ${#installers[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" \
+            --draft --generate-notes --title "Swync $GITHUB_REF_NAME" || true
+          gh release upload "$GITHUB_REF_NAME" --clobber "${installers[@]}"
