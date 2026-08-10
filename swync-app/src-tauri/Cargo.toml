@@ -25,6 +25,20 @@ opt-level = 1
 opt-level = 3
 
 [dependencies]
+# Pinned in `Cargo.lock` against this crate, and it has to stay pinned to build
+# for Windows: `windows-core` is held at 0.61.2 there. cpal asks for `windows`
+# and `windows-core` as two independent ranges — both `>=0.61, <=0.62` — and
+# nothing makes the resolver answer them with the same number. Left to float it
+# takes `windows` 0.61.3, which the Tauri tree already fixes, and `windows-core`
+# 0.62.2, which it reaches through `chrono`'s `iana-time-zone`. The WASAPI
+# backend then implements 0.61's COM interfaces against 0.62's `Interface`
+# trait and fails to compile, eighteen times, none of them mentioning versions.
+#
+# So `cargo update` on this tree is not free: floating `windows-core` back to
+# 0.62.2 breaks the Windows build and nothing else. Re-pin with
+# `cargo update -p windows-core@0.62.2 --precise 0.61.2`, and check it with
+# `cargo check -p cpal --target x86_64-pc-windows-msvc`, which is the one part
+# of a Windows build that cross-compiles from a Mac.
 cpal = "0.18.1"
 chumsky = "0.13.0"
 fundsp = "0.23.0"
