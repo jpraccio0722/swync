@@ -106,11 +106,17 @@ jobs:
       # A draft, so the download is never public until you have opened the disk
       # image on a Mac that did not build it — the only test that covers what a
       # stranger actually does.
+      #
+      # Create-then-upload rather than create alone: this job and the Windows
+      # one both fire on the same tag and race for the same release. Whichever
+      # arrives second finds it already there, and `|| true` lets it fall
+      # through to the upload that was the point.
       - name: Draft a release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            --draft --generate-notes --title "Swync $GITHUB_REF_NAME" \
+            --draft --generate-notes --title "Swync $GITHUB_REF_NAME" || true
+          gh release upload "$GITHUB_REF_NAME" --clobber \
             swync-app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
