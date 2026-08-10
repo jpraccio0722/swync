@@ -19,12 +19,42 @@ export const TUTORIAL: TutorialPage[] = [
 	{
 		slug: "getting-started",
 		title: "Getting started",
-		blurb: "Make a sound, quiet it down, and wrap it in a function you can play.",
+		blurb: "Make a sound, quiet it down, and wrap it in a function you can play",
 	},
 	{
-		slug: "make-some-noise",
-		title: "Make some noise",
-		blurb: "Make a sound, quiet it down, and wrap it in a function you can play.",
+		slug: "making-noise",
+		title: "Making Noise",
+		blurb: "Exploring simple synthesis in the language",
+	},
+	{
+		slug: "patterns",
+		title: "Patterns",
+		blurb: "Let's make some music",
+	},
+	{
+		slug: "notes-basics",
+		title: "Note Basics",
+		blurb: "How to write different notes different ways",
+	},
+	{
+		slug: "rhythm-basics",
+		title: "Rhythm Basics",
+		blurb: "I got rhythm, I got propotional representation, who can ask for anything more?",
+	},
+	{
+		slug: "rhythm-notation",
+		title: "Rhythmic Notation",
+		blurb: "I got more rhythm, and it has western note values, seriously, is there anything more?",
+	},
+	{
+		slug: "rests-drums",
+		title: "Rests and Drum Triggers",
+		blurb: "Seriously, there's more?",
+	},
+	{
+		slug: "lanes",
+		title: "Lanes",
+		blurb: "Making sounds that live more interesting lives",
 	},
 ];
 

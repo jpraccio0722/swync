@@ -1,0 +1,78 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: rhythm-basics
+---
+
+## Rhythm
+```swync
+play([d2, f, e2, bf1], synth)
+```
+
+Ok, so we have a little pattern from last chapter, but we want something more interesting than just 4 quarters.
+
+Hold on to your seat, because this can get complicated. Trust me, there is a simpler way in the next chapter.
+If you want to jump to that, feel free. But you may miss some useful context here.
+
+If you are familiar with somthing like strudel you will be probably be comfortable with proportional rhythm in patterns.
+
+The fundamental unit of measure is a cycle which, in swync, is equivalent to a bar. 
+This can be changed via tempo and meter in the transport toolbar. 
+So in 3/4, the cycle is 3 beats. The system adjusts.
+
+Each slot in a pattern is equivalent to 1 unit by default. How long that unit is depends on the above and how many slots are used. 
+so: 
+
+```swync
+play([d2, f, e2, bf1], synth)
+play([d2, f, e2], synth)
+play([d2, f, e2, f, e2], synth)
+```
+the first is 4 quarters. While the second is a half note triplet over the full bar in 4/4.
+The third represents a quintuplet over the full bar. Listen to their differences. 
+
+You can comment out that ones you don't want to play with <kbd>⌘ /</kbd> or <kbd>Ctrl /</kbd> or type `//`.
+
+You can nest divisions with nested lists, the following creates three quarters and two eights
+
+```swync
+play([d2, f, g, [e2, bf1]], synth)
+```
+
+Turn the last grouping into a triplet
+
+```swync
+play([d2, f, g, [e2, bf1, g2]], synth)
+```
+
+### But wait, there's more
+
+I can tell a note to take up more space than the others
+
+```swync
+play([d2;2, f, g], synth)
+```
+
+The semi-colon `;` is used to communicate that we are setting a rhythm. 
+Here we are making the rhythm twice the length of the underlying unit. 
+In this case, in 4/4, it would be a half note followed by two quarters.
+
+```swync
+play([d2;3, f], synth)
+```
+
+The above would be three beats followed by one. Everything is weighed proportionally.
+
+This works with nested patterns too:
+```swync
+play([d2, f, [e2, bf1];2], synth)
+```
+The above will play 4 quarter notes rather two quarters and two eights.
+
+For fun, you can also use variables:
+```swync
+let length = 2
+play([d2, f, [e2, bf1];length], synth)
+```
+
+Great you may say, but this is complicated and you just want quarter notes and stuff. 
+Jump on over to the next chapter!

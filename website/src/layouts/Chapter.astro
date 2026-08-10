@@ -1,0 +1,29 @@
+---
+import TutorialLayout from "./TutorialLayout.astro";
+import { pageBySlug } from "../lib/tutorial";
+
+interface Props {
+	/** An MDX page's frontmatter, whole. `slug` is the only part read: a
+	 *  chapter's title and blurb belong to the contents in
+	 *  `src/lib/tutorial.ts`, so they are looked up rather than repeated here. */
+	frontmatter: { slug: string };
+}
+
+const page = pageBySlug(Astro.props.frontmatter.slug)!;
+---
+
+<TutorialLayout title={page.title} description={page.blurb} current={page.slug}>
+	<header class="mb-8">
+		<p class="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+			Tutorial
+		</p>
+		<h1 class="mt-1 text-3xl font-semibold tracking-tight">{page.title}</h1>
+		<p class="mt-2 max-w-2xl text-neutral-600 dark:text-neutral-400">
+			{page.blurb}
+		</p>
+	</header>
+
+	{/* Markdown has nowhere to hang a class, so the chapter's typography is a
+	    stylesheet instead: see `.chapter` in `src/styles/global.css`. */}
+	<div class="chapter"><slot /></div>
+</TutorialLayout>

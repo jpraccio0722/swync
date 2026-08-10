@@ -1,0 +1,92 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: making-noise
+---
+
+Let's continue from where we left off. Here's our synth from the last chapter:
+
+```swync
+fn synth(freq) {
+  saw(freq) + saw(freq * 2) * 0.5
+}
+
+synth(220)
+```
+
+## Chaining
+
+This buzzy saw is decent material for a bass. Let's send the audio through a lowpass filter and use a lower frequency.
+
+
+```swync
+fn synth(freq) {
+  saw(freq) + saw(freq * 2) * 0.5 >> lowpass(100, 0.5)
+}
+
+synth(120)
+```
+
+If you typed this code or hover over a function while holding <kbd>⌘</kbd> or <kbd>Ctrl</kbd> you will notice the tooltip for a lowpass has 3 arguments: audio, cuttoff and q. Yet we only typed two.
+Using the chaining operator `>>` will route audio from left to right. We could rewrite this like this:
+
+
+```swync
+fn synth(freq) {
+  let sig = saw(freq) + saw(freq * 2) * 0.5 
+  lowpass(sig, 100, 0.5)
+}
+```
+
+The above is equally valid. The chaining operator simplifies things for many use cases.
+
+## For loop
+
+We can simplfy things further with a for loop.
+
+```swync
+fn synth(freq) {
+  let sig = for i in 1..=2 { saw(freq * i) } * 0.5 
+  lowpass(sig, 100, 0.5)
+}
+```
+
+or on one line as an argument to the `lowpass`
+
+```swync
+fn synth(freq) {
+  lowpass(for i in 1..=2 { saw(freq * i) } * 0.5, 100, 0.5)
+}
+```
+
+or using the chain operator `>>`
+
+```swync
+fn synth(freq) {
+  for i in 1..=2 { saw(freq * i) } * 0.5 >> lowpass(100, 0.5)
+}
+```
+
+There are lots of options when it comes to writing out statements. They all have their place.
+
+## Function arguments
+
+Let's wrap up by making this a more flexible instrument by adding some arguments to the function and an envelope.
+
+```swync
+fn synth(freq, partials=2, fundVol=1, cutoff=80) {
+  let sig = for i in 1..=partials { saw(freq * i) * fundVol/i } * 
+      env(0.01, 0.1, 0.8, 1, 1)
+  sig >> lowpass(cutoff, 0.5)
+}
+
+synth(80, 10, 0.8)
+```
+
+Here I added a function parameter for partials, the fundamental's volume, and the filter cutoff; plus an adsr envelope that will shape the sound. 
+Each paramater can give me more control over the sound and make it a more flexble instrument. Play around with the settings and try different [signals](/docs/signals). 
+
+You will notice, with the envelope, the sound will stop playing after one second. We will get into patterns next. 
+For now you can hit play again or <kbd>⌘ ,</kbd> to retrigger the sound. There is no need to hit stop. The sound will simply replace the existing one which is silent.
+
+Remember, with volume, nothing will stop you from blowing out your speakers (and ears) so be cautious and keep those values smaller than you think.
+

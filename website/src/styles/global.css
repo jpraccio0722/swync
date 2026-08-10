@@ -3,3 +3,121 @@
 a {
     @apply text-blue-700 hover:underline dark:text-blue-400;
 }
+
+/* A tutorial chapter is MDX: prose written as markdown, which leaves no place
+   to put a class. These are the classes the chapters used to carry inline. */
+.chapter {
+    @apply max-w-2xl space-y-4 leading-relaxed text-neutral-700 dark:text-neutral-300;
+}
+
+.chapter h2 {
+    @apply pt-2 text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-100;
+}
+
+.chapter pre {
+    @apply my-4 overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed dark:border-neutral-800 dark:bg-neutral-900;
+}
+
+.chapter pre code {
+    @apply font-mono text-neutral-800 dark:text-neutral-200;
+}
+
+/* The colours for a ```swync fence, hung on the classes `rehypeSwync` writes
+   during the build — see `src/lib/highlight.ts` for what decides which token
+   gets which.
+
+   The dark half is the editor's palette, so a reader with the app open beside
+   the tutorial is reading one set of colours: every `dark:` shade here is the
+   Tailwind name of the hex `swync-app/src/swync/language.ts` sets, which is
+   where those hexes came from. Tailwind 4 restates the palette in oklch, so
+   they are the same colour rather than the same bytes. The editor is dark-only
+   and has nothing to say about the light half, which is the same hue taken to
+   a shade that holds on paper-white — the pairs the editor keeps close (a def
+   against a duration, a trigger against a path) are kept close here rather
+   than pulled apart.
+
+   Every token clears 4.5:1 against the block it sits in, in both schemes. Two
+   deliberately leave the editor to do it, and say so where they are. */
+
+/* Grey, but a step up from the editor's in the dark: #6b7280 on this
+   background is 3.7:1, and a chapter's comments are the prose of the example
+   rather than something to skim past. */
+.chapter .tok-comment {
+    @apply italic text-gray-500 dark:text-gray-400;
+}
+
+.chapter .tok-number {
+    @apply text-fuchsia-700 dark:text-fuchsia-300;
+}
+
+.chapter .tok-string {
+    @apply text-green-700 dark:text-green-300;
+}
+
+.chapter .tok-keyword {
+    @apply text-purple-700 dark:text-purple-400;
+}
+
+.chapter .tok-builtin {
+    @apply text-teal-700 dark:text-teal-300;
+}
+
+.chapter .tok-note {
+    @apply text-rose-700 dark:text-rose-300;
+}
+
+.chapter .tok-duration {
+    @apply text-amber-700 dark:text-amber-400;
+}
+
+.chapter .tok-fn {
+    @apply text-blue-700 dark:text-blue-300;
+}
+
+.chapter .tok-def {
+    @apply text-yellow-700 dark:text-amber-300;
+}
+
+.chapter .tok-variable {
+    @apply text-gray-800 dark:text-gray-200;
+}
+
+/* Warm for silence, cool-bright for a hit: the pair has to be separable at a
+   glance inside a dense pattern like `[\, `, \, [\, \]]`. */
+.chapter .tok-rest {
+    @apply font-bold text-orange-700 dark:text-orange-400;
+}
+
+/* Emerald rather than the path's green, and a shade deeper than it wants to
+   be: the editor's green-400 lands at 3.5:1 on this background, and a trigger
+   is a single character — the one glyph on the page that cannot afford to be
+   faint. */
+.chapter .tok-trigger {
+    @apply font-bold text-emerald-700 dark:text-green-400;
+}
+
+.chapter .tok-operator,
+.chapter .tok-punct {
+    @apply text-slate-500 dark:text-slate-400;
+}
+
+/* Backticks in the prose, as against a fenced block. */
+.chapter :not(pre) > code {
+    @apply rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.9em] text-neutral-800 dark:bg-neutral-800/70 dark:text-neutral-200;
+}
+
+.chapter kbd {
+    @apply rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 font-mono text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300;
+}
+
+.chapter table {
+    @apply my-4 w-full border-collapse text-sm;
+}
+
+.chapter th {
+    @apply border-b border-neutral-300 px-3 py-2 text-left font-semibold text-neutral-900 dark:border-neutral-700 dark:text-neutral-100;
+}
+
+.chapter td {
+    @apply border-b border-neutral-200 px-3 py-2 dark:border-neutral-800;
+}
