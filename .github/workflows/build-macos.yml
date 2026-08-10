@@ -27,6 +27,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The tag is the version. Tauri names the disk image from the `version`
+      # in `tauri.conf.json` and knows nothing about the ref it was built from,
+      # so without this a tag of v0.0.1 ships whatever is committed there —
+      # which is how Swync_0.1.0_universal.dmg came to be the download for
+      # v0.0.1. Stamping before the build makes the two impossible to disagree.
+      #
+      # Only on a tag: a `workflow_dispatch` run has no version to take, and
+      # builds the committed one.
+      - name: Stamp the version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: bash swync-app/scripts/set-version.sh "$GITHUB_REF_NAME"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -96,6 +108,27 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" 2>&1 | grep "Authority=Developer ID Application"
           xcrun stapler validate "$APP"
+
+      # The stamp above is upstream of a twenty minute build, so this is where
+      # you find out whether it took. It reads the version back off the two
+      # things a person actually meets — the filename they download and the
+      # number the Finder shows in Get Info — rather than trusting that the
+      # step that wrote it wrote it everywhere.
+      - name: Check the built version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          BUNDLE=swync-app/src-tauri/target/universal-apple-darwin/release/bundle
+          WANT="${GITHUB_REF_NAME#v}"
+          DMG=$(find "$BUNDLE/dmg" -maxdepth 1 -name '*.dmg' | head -1)
+          APP=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' | head -1)
+          GOT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+            "$APP/Contents/Info.plist")
+          echo "tag $GITHUB_REF_NAME wants $WANT; got $GOT in $(basename "$DMG")"
+          [ "$GOT" = "$WANT" ] || { echo "the app's version is not the tag's"; exit 1; }
+          case "$(basename "$DMG")" in
+            *"_${WANT}_"*) ;;
+            *) echo "the disk image is not named for the tag"; exit 1 ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:
