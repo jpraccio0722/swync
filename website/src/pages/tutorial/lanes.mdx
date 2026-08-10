@@ -2,3 +2,42 @@
 layout: ../../layouts/Chapter.astro
 slug: lanes
 ---
+
+Let's go back to our bass.
+```swync
+fn synth(freq, partials=3, fundVol=1, cutoff=120) {
+  let sig = for i in 1..=partials { saw(freq * i) * fundVol/i } * 
+      env(0.01, 0.1, 0.8, 0.1, dur*0.8)
+  sig >> lowpass(cutoff, 0.5)
+}
+
+play([d2;h, a2], synth)
+```
+
+What if we wanted to modulate the cutoff. We can modulate it inside the synth easy, but that's only one note. 
+What if we wanted to give each note a different cuttoff value. 
+
+For that we can use lanes. Any parameter can be a lane. In this case we change cutoff by passing it a pattern.
+```swync
+play([d2;h, a2], synth, cutoff: [180, 90])
+```
+
+A lane's pattern can be longer than the main pattern.
+```swync
+play([d2;h, a2], synth, cutoff: [180, 120, 80, 20])
+```
+
+The pattern will play twice and each note will have a different cutoff.
+
+You can make this more interesting with a for loop since they will return a pattern. 
+The following creates a cutoff that goes from 120 to 0.
+
+```swync
+play([d2;h, a2], synth, cutoff: for i in 1..=16 { 120 * (16-i)/16 })
+```
+
+Here's a simple crescendo.
+
+```swync
+play([a4;e], synth, fundVol: for i in 1..=16 { 1 * i/16 })
+```
