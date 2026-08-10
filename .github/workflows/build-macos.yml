@@ -57,9 +57,20 @@ jobs:
           # login keychain to sign from.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # The certificate's full name, which is what `codesign` is given:
-          # "Developer ID Application: Your Name (TEAMID)".
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # `APPLE_SIGNING_IDENTITY` is deliberately not set here. It names the
+          # certificate to sign with, and on this path the certificate has
+          # already been named — Tauri imports the .p12 above and signs with
+          # the identity it reads out of it. Setting it as well only adds a
+          # second copy of that name, checked as a substring of the first, and
+          # a copy that has drifted fails the build with both strings masked to
+          # `***` in the log. The laptop script is where the variable earns its
+          # place: no certificate is handed to it, so it reads the identity out
+          # of the login keychain and passes it this way.
+          #
+          # Nothing is unguarded by leaving it out — the verification step
+          # below reads the authority back off the built app, which is the
+          # claim worth checking and a stronger one than a string compare.
+          #
           # Notarization. An app-specific password from account.apple.com, not
           # an Apple ID password. Setting these three is what makes the build
           # notarize rather than only sign.
