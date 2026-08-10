@@ -10,7 +10,7 @@
     "build": "astro check && astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "reference": "cd ../swync-app/src-tauri && cargo run --quiet --bin dump-metadata > ../../website/src/data/metadata.json",
+    "reference": "cd ../swync-app/src-tauri && cargo run --quiet --example dump-metadata > ../../website/src/data/metadata.json",
     "astro": "astro"
   },
   "dependencies": {

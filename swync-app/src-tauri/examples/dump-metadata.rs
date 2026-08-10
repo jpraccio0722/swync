@@ -5,8 +5,14 @@
 //! dispatches on rather than transcribed from them. A UGen added in Rust
 //! reaches the docs by re-running this — not by anyone remembering to.
 //!
+//! An example rather than a `src/bin/` binary on purpose: Tauri's bundler
+//! copies every binary the crate declares into `Swync.app`, and a universal
+//! build only lipos the app's own binary into the universal target directory,
+//! so a second binary here fails the bundle outright. Examples are invisible
+//! to it.
+//!
 //! ```sh
-//! cargo run --bin dump-metadata > ../../website/src/data/metadata.json
+//! cargo run --example dump-metadata > ../../website/src/data/metadata.json
 //! ```
 
 fn main() {
