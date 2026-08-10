@@ -3,10 +3,10 @@ import Layout from "../layouts/Layout.astro";
 import IslandCheck from "../components/IslandCheck.tsx";
 ---
 
-<Layout title="Scree">
-	<main class="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-8 px-6 py-16">
+<Layout title="Swync">
+	<main class="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-8 px-6 py-16">
 		<div class="space-y-3">
-			<h1 class="text-6xl font-semibold tracking-tight">Scree</h1>
+			<h1 class="text-6xl font-semibold tracking-tight">Swync</h1>
 			<p class="text-lg text-neutral-600 dark:text-neutral-400">
 				A rust-like live coding and synthesis language built on top of{" "}
 				<a
@@ -15,11 +15,27 @@ import IslandCheck from "../components/IslandCheck.tsx";
 				>.
 			</p>
 		</div>
+
+		<div class="flex flex-col text-md text-neutral-600 dark:text-neutral-400 gap-1.5">
+			<h2 class="text-3xl font-semibold text-neutral-50">Features</h2>
+			<div><span class="text-md text-neutral-50">Live </span> change the code, hear it immediately</div>
+			<div><span class="text-md text-neutral-50">Musical:</span> work with time signatures, bars, and western note values and pitches</div>
+			<div><span class="text-md text-neutral-50">Patterns:</span> lists you can visualize</div>
+			<div><span class="text-md text-neutral-50">Arrange:</span> create arrangments through a rich set of pattern chains play/playn/then/then_after</div>
+			<div><span class="text-md text-neutral-50">Stochastic form:</span> random choice at a structural level</div>
+			<div><span class="text-md text-neutral-50">Rust-like simplicity:</span> let, fn, use, for, ranges, blocks. Synths are functions</div>
+		</div>
 		
 		<div class="flex flex-col gap-1.5">
 			<div>
 				<a
 					href="/tutorial/getting-started/"
+					class="inline-flex items-center gap-1.5 text-md font-medium text-blue-700 hover:underline dark:text-blue-400"
+				>Getting Started</a>
+			</div>
+			<div>
+				<a
+					href="/tutorial/make-some-noise/"
 					class="inline-flex items-center gap-1.5 text-md font-medium text-blue-700 hover:underline dark:text-blue-400"
 				>Tutorial</a>
 			</div>
@@ -31,7 +47,7 @@ import IslandCheck from "../components/IslandCheck.tsx";
 			</div>
 			<div>
 				<a
-					href="https://github.com/jpraccio0722/scree"
+					href="https://github.com/jpraccio0722/swync"
 					class="inline-flex items-center gap-1.5 text-md font-medium text-blue-700 hover:underline dark:text-blue-400"
 				>Github</a>
 			</div>	

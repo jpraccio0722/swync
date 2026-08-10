@@ -15,7 +15,7 @@ const { title, description, current } = Astro.props;
 const nav = CATEGORIES.map((c) => ({ ...c, count: membersOf(c.key).length }));
 ---
 
-<Layout title={`${title} · Scree`} description={description}>
+<Layout title={`${title} · Swync`} description={description}>
 	<div class="mx-auto flex max-w-6xl gap-10 px-6 py-10">
 		<aside class="hidden w-56 shrink-0 lg:block">
 			<div class="sticky top-10 space-y-6">
@@ -23,7 +23,7 @@ const nav = CATEGORIES.map((c) => ({ ...c, count: membersOf(c.key).length }));
 					href="/"
 					class="block text-sm font-semibold tracking-tight hover:text-blue-700 dark:hover:text-blue-400"
 				>
-					Scree
+					Swync
 				</a>
 
 				<nav aria-label="Reference categories">
