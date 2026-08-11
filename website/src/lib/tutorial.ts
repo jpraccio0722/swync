@@ -56,6 +56,11 @@ export const TUTORIAL: TutorialPage[] = [
 		title: "Lanes",
 		blurb: "Making sounds that live more interesting lives",
 	},
+	{
+		slug: "play-arrange",
+		title: "Simple arrangment",
+		blurb: "Arranging our work into a song",
+	},
 ];
 
 export function pageBySlug(slug: string): TutorialPage | undefined {
