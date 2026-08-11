@@ -1,0 +1,10 @@
+---
+name: cents
+params: [hz, cents]
+arities: [2]
+variadic: false
+receives: number
+returns: number
+---
+
+Detune a frequency by cents, 1/100 of a semitone: `440.cents(-14)` flattens A4 slightly.

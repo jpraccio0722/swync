@@ -1,0 +1,10 @@
+---
+name: walk
+params: [count, start, step]
+arities: [3]
+variadic: false
+receives: number
+returns: list
+---
+
+A random walk: `count` numbers beginning at `start`, each drifting from the one before by up to `step` either way. Neighbours stay close, so it moves rather than jumps — what `rands` is not. Good for a cutoff or a pan.

@@ -1,0 +1,10 @@
+---
+name: load
+params: [path]
+arities: [1]
+variadic: false
+receives: text
+returns: buffer
+---
+
+Read an audio file into a buffer: `let amen = load("breaks/amen.wav")`. The path is relative to the file it is written in, the same way a `use` path is, and must be written out rather than computed — every file is decoded once, before the program runs, so no note ever waits on a disk. Any format symphonia reads: wav, mp3, flac, ogg. Nothing comes out of a buffer until `sample` reads it.

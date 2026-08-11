@@ -1,0 +1,10 @@
+---
+name: secs
+params: [buffer]
+arities: [1]
+variadic: false
+receives: buffer
+returns: number
+---
+
+How long a buffer is, in seconds. A compile-time number, so it divides into a `ramp` frequency: `ramp(1 / amen.secs)` is a phasor that reads the whole buffer once at its own speed.

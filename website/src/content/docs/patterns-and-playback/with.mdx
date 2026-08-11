@@ -1,0 +1,10 @@
+---
+name: with
+params: [play, section]
+arities: [2]
+variadic: false
+receives: play
+returns: play
+---
+
+Run a section *alongside* this one, from where it began: `playn(verse, lead, 4).with(drums).then(chorus)`. `play_all` opens its sections together as a group; this makes one concurrent with a section already placed, so an arrangement reads in the order it happens. The pair finishes when the later of them does.

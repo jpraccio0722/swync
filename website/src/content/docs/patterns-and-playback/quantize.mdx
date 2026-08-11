@@ -1,0 +1,10 @@
+---
+name: quantize
+params: [play, grid]
+arities: [1, 2]
+variadic: false
+receives: play
+returns: play
+---
+
+Round where the chain has reached up to a multiple of `grid` bars, without touching what is already playing: `playn(pat, inst, 3, 2).quantize().then(chorus)`. `grid` defaults to 1. The cure for a section whose length is not a whole number of bars — `rate` divides into the count, so `playn(pat, inst, 3, 2)` is 1.5 bars long and every `.then` after it would otherwise be permanently off the downbeat.

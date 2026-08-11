@@ -1,0 +1,10 @@
+---
+name: accel
+params: [from, to, bars]
+arities: [3]
+variadic: false
+receives: number
+returns: rate
+---
+
+A rate that moves: `from` to `to` over `bars` bars, holding at `to` after that. Written where a `play` takes a number — `playn(riff, lead, 8, accel(1, 2, 4))` runs eight passes, speeding up to double over the first four bars — and it is a straight line in rate, so the pattern covers the area under it rather than the rate at either end. Measured from the section's own first note, and started afresh each time a `wthen` window comes round again. `to` below `from` is a ritardando. Both rates must be above zero: at zero the pattern would stop rather than slow, and a bounded section would never finish.

@@ -1,0 +1,10 @@
+---
+name: take
+params: [play, bars]
+arities: [2]
+variadic: false
+receives: play
+returns: play
+---
+
+This section, cut to `bars`: `play(riff, lead).take(8).then(chorus)`. What gives a plain `play` an end — `playn` only bounds a single play, not a `play_all` group or a whole nested section. A part that already stops sooner is left alone, since a cut is a ceiling and not a length.

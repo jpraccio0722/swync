@@ -25,5 +25,5 @@ const page = pageBySlug(Astro.props.frontmatter.slug)!;
 
 	{/* Markdown has nowhere to hang a class, so the chapter's typography is a
 	    stylesheet instead: see `.chapter` in `src/styles/global.css`. */}
-	<div class="chapter"><slot /></div>
+	<div class="chapter prose-swync"><slot /></div>
 </TutorialLayout>

@@ -1,7 +1,7 @@
 ---
 import Layout from "./Layout.astro";
 import ReferenceSearch from "../components/ReferenceSearch.tsx";
-import { CATEGORIES, builtins, membersOf } from "../lib/reference";
+import { categories, membersOf, searchEntries } from "../lib/reference";
 
 interface Props {
 	title: string;
@@ -12,7 +12,14 @@ interface Props {
 
 const { title, description, current } = Astro.props;
 
-const nav = CATEGORIES.map((c) => ({ ...c, count: membersOf(c.key).length }));
+const nav = await Promise.all(
+	(await categories()).map(async (c) => ({
+		slug: c.id,
+		label: c.data.label,
+		count: (await membersOf(c.id)).length,
+	})),
+);
+const entries = await searchEntries();
 ---
 
 <Layout title={`${title} · Swync`} description={description}>
@@ -72,7 +79,7 @@ const nav = CATEGORIES.map((c) => ({ ...c, count: membersOf(c.key).length }));
 
 		<div class="min-w-0 flex-1">
 			<div class="mb-8 max-w-md">
-				<ReferenceSearch builtins={builtins} client:load />
+				<ReferenceSearch entries={entries} client:load />
 			</div>
 			<slot />
 		</div>

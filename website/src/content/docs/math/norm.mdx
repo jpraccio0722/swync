@@ -1,0 +1,10 @@
+---
+name: norm
+params: [x, lo, hi]
+arities: [3]
+variadic: false
+receives: number
+returns: number
+---
+
+Map 0..1 onto `lo..hi`. Values outside 0..1 extrapolate; `clamp` first if you do not want that.

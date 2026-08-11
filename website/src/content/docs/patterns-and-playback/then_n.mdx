@@ -1,0 +1,10 @@
+---
+name: then_n
+params: [play, section, times]
+arities: [3]
+variadic: false
+receives: play
+returns: play
+---
+
+Run a section `times` times, back to back: `play_once(intro, lead).then_n(verse, 4)`. Lowered afresh each pass rather than written once and repeated, so a `rand` inside the section is a different number every time round — the same rule a voice already follows, and it holds whether the section is a `fn` named here or a play written out.
