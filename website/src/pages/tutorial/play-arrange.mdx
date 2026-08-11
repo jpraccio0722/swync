@@ -66,15 +66,14 @@ How you structure any arrangement is up to you. There are lots of ways to do so 
 ```swync
 fn mainKick(times) = playn([\;e, `, `, \, `, `, \, `], kick, times, vol: 0.5)
 fn mainSnare(times) = playn([`;e, `, \, `, `, \, `, `], snare, times, vol: 0.5)
-fn mainHat(times) = playn([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], hat, times, 
+fn hatSixEnd(times) = playn([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], hat, times, 
     vol: for i in 1..=16 { rand(0.1, 0.25) })
-
 
 fn mainGroove(times) {
   play_all(
     mainKick(times),
     mainSnare(times),
-    mainHat(times)
+    hatSixEnd(times)
   )
 }
 
@@ -144,6 +143,39 @@ fn fillA() {
 mainGroove(3).then(fillA).loop(4)
 ```
 
+First we added a duration mod to the snare so I can create a machine gun like effect
+
+```swync 
+fn snare(t, vol=0.6, durMod=1) = {
+  let body = sin(190) * perc(0.001, 0.12 * durMod) * 0.4
+  let crack = noise() * perc(0.001, 0.14 * durMod) >> highpass(1800, 0.8)
+  (body + crack * 0.7) * vol
+}
+```
+
+Next we have a new kick and hat to make the fill work. 
+Since the kick is really only going to be used for once offs, we can change it to a `play_once`.
+
+```swync
+fn kickNoLast() = play_once([\;e, `, `, \, `, `, `, `], kick, vol: 0.5)
+fn hatStraightEight(times) = playn([\;e, \, \, \, \, \, \, \], hat, times, 
+    vol: for i in 1..=16 { rand(0.1, 0.25) })
+```
+
+Now our new snare for the fill is more complex. 
+We cut off the last beat of the original snare creating a 7 eighth note pattern.
+We then wrap it in a `play_once` and use `.then`. 
+
+`Then` allows us to play a pattern and then follow it with another pattern or patterns. 
+We can chain `.then` infinitely and there are a number of varieties to check out.
 
 
-
+```swync
+fn machineGunSnare() = 
+  play_once([`;e, `, \, `, `, `, `], snare, vol: 0.5).then(
+      play_once([[\;s, \, \, \, \, \];t], snare, 4, 
+          vol: for i in 1..=6 { i/6 * 0.5 },
+          durMod: 0.35
+      )
+  )
+```
