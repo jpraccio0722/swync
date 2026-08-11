@@ -1,0 +1,10 @@
+---
+name: then_after
+params: [play, bars, section]
+arities: [3]
+variadic: false
+receives: play
+returns: play
+---
+
+`then`, with `bars` of silence in between: `playn(verse, lead, 4).then_after(1, chorus)` leaves a bar's rest before the chorus. The gap cannot be negative — `overlap` is how a section starts early.

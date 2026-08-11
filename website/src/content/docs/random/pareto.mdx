@@ -1,0 +1,10 @@
+---
+name: pareto
+params: [scale, shape]
+arities: [0, 1, 2]
+variadic: false
+receives: number
+returns: number
+---
+
+A power-law draw at or above `scale` (default 1). A smaller `shape` (default 1) makes big values likelier. Everything is near the floor, with rare excursions far above it.

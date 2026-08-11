@@ -1,0 +1,10 @@
+---
+name: walki
+params: [count, start, step]
+arities: [3]
+variadic: false
+receives: number
+returns: list
+---
+
+`walk` in whole steps: each move is a whole number from `-step` to `step`, so the result stays on the semitone grid. `walki(16, 60, 2)` wanders a melody around middle C. `step` must be whole.

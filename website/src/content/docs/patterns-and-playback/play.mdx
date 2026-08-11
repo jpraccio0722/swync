@@ -1,0 +1,10 @@
+---
+name: play
+params: [pattern, instrument, rate]
+arities: [2, 3]
+variadic: false
+receives: pattern
+returns: play
+---
+
+Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1, and may be an `accel` rather than a number. A list is one pass, filling the bar, divided evenly unless a step is given a length with `;` — ``[220;2, 330, 440, `;4]`` is a quarter, two eighths and a half of silence — and lengths are relative, so only their ratio matters. A long step is one sustained note, not several. A step may instead be given a written note value — `w` `h` `q` `e` `s` — and then the pass is as long as its values add up to rather than one bar: in 4/4 `[c4;q, e4, g4]` is three beats against a four-beat bar, so it comes round a beat early and rotates against the grid. A value carries to the steps after it. A bare `q` is a hit of that length. An octave carries the same way: a note written without one takes the octave of the last note that spelled one, so `[a1;q, a, a, a]` is four `a1`s and `[c4;q, ef, g]` is a chord's worth of arpeggio. Only a spelled octave moves it, a group gives it back at the closing bracket like a written value does, and `e` — the eighth note and also the note E — is refused where an octave is in force rather than quietly becoming one of them. Written values and ratios cannot share a sequence. A group inside one is a tuplet and says so with `;t` — `[[c4;q, e4, g4];t, c5]` is a quarter triplet then a quarter — which needs no number: the count, the unit and the span it is played in all follow from what the group holds. Any further parameter is patterned by name — `play(bass, cut: [400, 2000])` — sampled at each note's onset, and lanes may be any length. In a lane a `;` is how many notes the value covers, so it has to be a whole number there. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right).

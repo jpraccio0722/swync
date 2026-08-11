@@ -1,0 +1,10 @@
+---
+name: then_each
+params: [play, list, body]
+arities: [3]
+variadic: false
+receives: play
+returns: play
+---
+
+One pass of the section per element of the list, in sequence, with the element passed in: `play_once(intro, lead).then_each([1, 2, 4], faster)` calls `faster(1)`, then `faster(2)`, then `faster(4)`. `body` takes exactly one parameter — the element. Arrangement by list — every list function in the language already builds the shape of a piece, and this is what spends one. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once.

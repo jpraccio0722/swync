@@ -1,0 +1,10 @@
+---
+name: lowshelf
+params: [audio, frequency, q, gain]
+arities: [4]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Low shelf filter. Scales everything below the center frequency by `gain` (an amplitude multiplier).

@@ -1,0 +1,10 @@
+---
+name: play_all
+params: [section]
+arities: [1]
+variadic: true
+receives: section
+returns: play
+---
+
+Treat several sections that run at once as one: `play_all(verse, bassline).then(chorus)`. Each is a no-parameter `fn` or a play written out, exactly as in `seq` — the difference is that these all start together rather than one after another, and the group finishes when the last of them does. A plain `play` among them never finishes, so nothing may follow.

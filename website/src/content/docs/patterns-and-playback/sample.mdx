@@ -1,0 +1,10 @@
+---
+name: sample
+params: [buffer, position, channel]
+arities: [2, 3]
+variadic: false
+receives: buffer
+returns: signal
+---
+
+Read a buffer at a position: 0 is the start, 1 is the end, and anything outside that is silence. `position` is a signal, which is where speed, direction and chopping all come from — `sample(b, ramp(1 / b.secs))` plays it forwards, `1 - ramp(...)` backwards, `ramp(...) * 0.25` reads the first quarter. Cubic interpolation, so it holds up away from its own speed. `channel` defaults to 0 and wraps if the buffer has fewer.

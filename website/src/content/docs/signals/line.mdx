@@ -1,0 +1,10 @@
+---
+name: line
+params: [start, end, duration]
+arities: [3]
+variadic: false
+receives: number
+returns: signal
+---
+
+One straight segment: `start` to `end` over `duration` seconds, held at `end` after that. Measured from the onset — the note's in a voice, the eval's in the persistent graph — so it needs no note length and works in either: `sin(line(880, 220, 0.05))` is a kick's pitch drop. Unlike `perc` it ends at a level rather than at silence, so it holds a voice open past its note only when `end` is 0 and the shape really finishes. All three arguments are constants; for a sweep between signals, scale it — `start + (end - start) * line(0, 1, d)`.

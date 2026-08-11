@@ -1,0 +1,10 @@
+---
+name: channels
+params: [buffer]
+arities: [1]
+variadic: false
+receives: buffer
+returns: number
+---
+
+How many channels a buffer has — 1 for mono, 2 for a stereo file. Useful for deciding whether a second `sample` on channel 1 would say anything different.

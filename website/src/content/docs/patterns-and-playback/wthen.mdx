@@ -1,0 +1,10 @@
+---
+name: wthen
+params: [play, sections, weights]
+arities: [3]
+variadic: false
+receives: play
+returns: play
+---
+
+Choose between sections, afresh each time round: `playn(intro, lead, 2).wthen([verse, chorus], [0.7, 0.3])`. Weights are relative and need not sum to 1. Unlike `choice`, which draws once while the program is lowered, this is decided by the scheduler as the music reaches it — so the block repeats forever and deals a new hand every time. Every arm must finish, and they all come back to the same place; the block itself never finishes, so bound it with `.take(n)` if something should follow. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once.

@@ -1,0 +1,10 @@
+---
+name: tri
+params: [lo, hi, mode]
+arities: [2, 3]
+variadic: false
+receives: number
+returns: number
+---
+
+A triangular draw over `lo..hi`, peaking at `mode` — the midpoint if you leave it out. Bounded like `rand` but with a centre, so it favours a value without ever leaving the range.

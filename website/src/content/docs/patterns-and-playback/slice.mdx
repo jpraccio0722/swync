@@ -1,0 +1,10 @@
+---
+name: slice
+params: [buffer, start, end, rate, channel]
+arities: [3, 4, 5]
+variadic: false
+receives: buffer
+returns: signal
+---
+
+Read a portion of a buffer, once: `slice(amen, 0, 0.25)` is the first quarter of the break, at the speed it was recorded at. `start` and `end` are positions like `sample`'s, 0 at the start of the buffer and 1 at the end, and both are compile-time numbers rather than signals. `start` past `end` plays that portion backwards. `rate` defaults to 1 and multiplies the speed — 2 reads the portion in half the time, an octave up, 0.5 in twice, an octave down — and must be above zero, since at zero the reader would stop rather than slow; backwards is the ends the other way round rather than a negative rate. This is `sample` with the phasor written for you — `sample(b, line(start, end, (end - start) * b.secs / rate))` — and it exists because that duration is the part that is easy to get wrong: scaling a `ramp`'s position without scaling its frequency to match reads the right portion at the wrong speed. The read holds on the last sample once it arrives, so an envelope is what ends the note, exactly as with `sample`; a slice ending at 1 goes quiet on its own, since past the buffer is silence. For a position or a speed that moves under a signal — scrubbing, stuttering, anything modulated — use `sample`.

@@ -1,0 +1,10 @@
+---
+name: gauss
+params: [mean, deviation]
+arities: [0, 1, 2]
+variadic: false
+receives: number
+returns: number
+---
+
+A normally distributed number: clustered around `mean`, two thirds of it within one `deviation`. Both default to the standard 0 and 1. Unbounded — `clamp` it if a stray value would hurt.

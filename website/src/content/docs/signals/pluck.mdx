@@ -1,0 +1,10 @@
+---
+name: pluck
+params: [excitation, frequency, gain_per_second, damping]
+arities: [4]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Karplus-Strong plucked string. Feed it a burst — `impulse()` or a short noise envelope — as the excitation. Frequency, gain and damping (0..=1) are constants.

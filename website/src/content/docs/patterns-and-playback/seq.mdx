@@ -1,0 +1,10 @@
+---
+name: seq
+params: [section]
+arities: [1]
+variadic: true
+receives: section
+returns: play
+---
+
+Sections one after another without the nesting: `seq(intro, verse, chorus, verse)`. Each is a no-parameter `fn` or a play written out, and each must finish for the next to follow.

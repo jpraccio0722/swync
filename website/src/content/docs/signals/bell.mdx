@@ -1,0 +1,10 @@
+---
+name: bell
+params: [audio, frequency, q, gain]
+arities: [4]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Bell equalizer. Boosts or cuts a band around the center frequency by `gain` (an amplitude multiplier, not dB).

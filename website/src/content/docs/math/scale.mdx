@@ -1,0 +1,10 @@
+---
+name: scale
+params: [note, scale]
+arities: [2]
+variadic: false
+receives: number
+returns: number
+---
+
+Snap a MIDI note to the nearest tone of a scale, given as semitone offsets within an octave: `61.scale([0, 2, 4, 5, 7, 9, 11])` is 60. Ties snap down.

@@ -1,0 +1,10 @@
+---
+name: choices
+params: [list, count]
+arities: [2]
+variadic: false
+receives: list
+returns: list
+---
+
+`count` elements drawn without replacement, in a random order — `choice` several times over may repeat itself, and this cannot. Asking for the whole list is `scramble`; asking for more than it holds is an error.

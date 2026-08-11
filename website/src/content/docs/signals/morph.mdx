@@ -1,0 +1,10 @@
+---
+name: morph
+params: [signal, frequency, q, morph]
+arities: [4]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Filter that morphs continuously between modes: `morph` runs -1 (lowpass) to 0 (peak) to 1 (highpass).
