@@ -25,7 +25,9 @@ That is the only way to run the app — `npm run dev` alone serves the frontend 
 
 There is no linter and no frontend test runner. The Rust suite is the test suite — ~725 tests, mostly `#[cfg(test)]` modules beside the code, with larger ones in `lowerer/tests.rs`, `imports/tests.rs`, `files/tests.rs` and `library/tests.rs`.
 
-Three tests fail on a fresh clone and always have: `the_example_project_compiles`, `every_example_compiles_and_realizes` and `a_program_without_imports_needs_no_folder`. The first two want fixture files under `examples/`, which is not checked in; the third is confused by a stray `src-tauri/patterns.swync` if one is sitting there. Confirm against `HEAD` before assuming a change caused them.
+Three tests fail on a fresh clone and always have: `the_example_project_compiles`, `every_example_compiles_and_realizes` and `a_program_without_imports_needs_no_folder`. The first two want fixture files under `examples/`, which is not checked in; the third is confused by a stray `src-tauri/patterns.swync` if one is sitting there — and one is checked in, so it fails on every clone, not only a dirty one. Confirm against `HEAD` before assuming a change caused them.
+
+`.github/workflows/test.yml` runs on every pull request into `main` and is the same suite with those three `--skip`ped, plus `npm run build` in both `swync-app/` and `website/`, a diff of the website's generated language reference against `lang.rs`, and `scripts/check-version.sh`. It counts the skips and fails if the number is not three, so a new test whose name contains one of those three strings gets caught rather than quietly filtered out. Nothing there checks formatting: this tree is not rustfmt-clean.
 
 `[profile.dev]` in `Cargo.toml` raises `opt-level` for this crate and to 3 for dependencies. That is not incidental: an unoptimized `fundsp` misses the real-time deadline and the audio crackles. Leave it alone.
 
