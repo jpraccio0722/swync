@@ -6,3 +6,162 @@ slug: samples
 Sampling is currently minimal in swync. 
 
 First grab a sample. [Freesound](https://freesound.org/) is a good place to get free sounds. 
+
+We can use the classsic amen break for this chapter, but anything will do. Drop the file in
+your project folder next to the file you're writing.
+
+`load` reads an audio file. The path is relative to the file you write it in. Wav, mp3, flac and ogg are all valid formats 
+
+```swync
+let amen = load("amen.wav")
+```
+ 
+The above creates a buffer: the audio sitting in memory. Files are decoded once before your program runs, so this
+costs nothing to re-evaluate and no note ever waits on your disk.
+
+`sample` reads a buffer at a position, where 0 is the start of the file and 1 is the end.
+Anything outside that is silence.
+
+To traversse the sample we can use `ramp(f)`. `Ramp` rises from 0 to 1, `f` times a second.
+We can use the buffer's attribute `secs` to tell us how long the buffer is, so `1 / amen.secs` is the frequency that
+gets from one end to the other exactly once.
+
+```swync
+let amen = load("amen.wav")
+sample(amen, ramp(1 / amen.secs))
+```
+
+There's the break, looping, at the speed it was recorded. 
+
+```swync
+let amen = load("amen.wav")
+
+sample(amen, 1 - ramp(1 / amen.secs))              // backwards
+sample(amen, ramp(2 / amen.secs))                  // twice as fast, an octave up
+sample(amen, ramp(0.5 / amen.secs))                // half speed, an octave down
+sample(amen, ramp(1 / amen.secs) >> hold(16, 0))   // the position frozen in 16 steps
+```
+
+Try them one at a time. 
+
+`1 / amen.secs` is the file's own speed, which has nothing to do with our tempo. If the
+break is one bar long, we'd rather read it once per bar however fast we've set the project.
+
+`qvh` is the quarter note in hertz, so a bar of 4/4 is `qvh / 4`.
+
+```swync
+let amen = load("amen.wav")
+sample(amen, ramp(qvh / 4))
+```
+
+Now drag the tempo around. 
+
+Let's take just the first quarter of the break. You'd think:
+
+```swync
+let amen = load("amen.wav")
+sample(amen, ramp(1 / amen.secs) * 0.25)
+```
+
+You do get the first quarter. At a quarter speed. 
+
+```swync
+let amen = load("amen.wav")
+sample(amen, ramp(4 / amen.secs) * 0.25)
+```
+Now it's the first quarter at the right speed.
+
+## slice
+
+`slice` will do all the work of the above for you when given a start and end.
+
+```swync
+let amen = load("amen.wav")
+slice(amen, 0, 0.25)
+```
+
+The first quarter, played once. 
+
+```swync
+let amen = load("amen.wav")
+
+slice(amen, 0.5, 0.75)   // the third quarter
+slice(amen, 0.5, 0.25)   // that same quarter backwards
+slice(amen, 0, 1)        // the whole break, once, no loop
+```
+A fourth argument is the rate, a multiple of the file's own speed:
+
+```swync
+let amen = load("amen.wav")
+
+slice(amen, 0, 0.25, 2)     // in half the time, an octave up
+slice(amen, 0, 0.25, 0.5)   // in twice the time, an octave down
+slice(amen, 0.5, 0.25, 2)   // backwards, twice as fast
+```
+
+Rate must be above zero.
+
+When a slice runs out it parks on the last sample it read and holds it. That's a DC offset
+sitting in your mix, not silence. Add an envelope to get a clean end of a slice.
+
+```swync
+fn brk() = slice(load("amen.wav"), 0, 0.25) * perc(0.001, 0.3)
+
+play([\;q, `, \, `], brk)
+```
+
+A slice ending at exactly 1 doesn't need the envelope, because past the end of the file is
+already silence. Everything else does.
+
+Now let's do some chopping
+
+```swync
+fn chop(t, at=0, len=0.0625) =
+  slice(load("amen.wav"), at, at + len) * perc(0.001, dur)
+
+play([\, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \], chop,
+    at: for i in 1..=16 { (i-1)/16 })
+```
+
+Sixteen triggers with no rhythm written on them are sixteen equal shares of the bar, and the
+`at` lane walks the buffer in sixteen equal pieces to match. If the break is a bar long at
+the tempo you're at, that's it played straight through, which is a lot of typing for
+something `slice(amen, 0, 1)` already did.
+
+But of course, we can mess with the order:
+
+```swync
+fn chop(t, at=0, len=0.0625) =
+  slice(load("amen.wav"), at, at + len) * perc(0.001, dur)
+
+play([\, \, \, \, \, \, \, \], chop, len: 0.125,
+    at: [0, 0.5, 0.125, 0.5, 0.75, 0.25, 0.875, 0.375])
+```
+
+If you'd rather not choose, `scramble` will do it for you. It re-rolls on every eval, so
+each press is a different mangling.
+
+```swync
+fn chop(t, at=0, len=0.0625) =
+  slice(load("amen.wav"), at, at + len) * perc(0.001, dur)
+
+play([\, \, \, \, \, \, \, \], chop, len: 0.125,
+    at: scramble([0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875]))
+```
+
+
+An instrument is mono. `b.channels` tells you how many a file has, and the last argument of
+`slice` picks which one to read, so a stereo file becomes a voice by summing them yourself.
+
+```swync
+fn hit() {
+  let b = load("clap.wav")
+  (slice(b, 0, 1) + slice(b, 0, 1, 1, 1)) * 0.5
+}
+
+play([\;q, `, \, `], hit)
+```
+
+The channel is the fifth argument, so the rate before it has to be written out as `1` to get
+there. 
+
