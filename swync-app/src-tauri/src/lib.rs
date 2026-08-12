@@ -1140,6 +1140,7 @@ pub fn run() {
             files::create_dir,
             files::create_file,
             files::move_path,
+            files::copy_path,
             files::delete_path,
             files::search::search_project,
             list_libraries,

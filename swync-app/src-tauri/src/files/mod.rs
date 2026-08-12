@@ -10,7 +10,10 @@
 //!
 //! Nothing is ever overwritten. A move onto an existing path is refused rather
 //! than merged or replaced, because the tree gives no way to see what you were
-//! about to lose and no way to get it back.
+//! about to lose and no way to get it back. A copy keeps the same rule by the
+//! other route — it takes a free name beside the one it collided with — because
+//! pasting a file back into the folder it came from is the ordinary case for a
+//! copy and refusing it would make the command useless where it is most used.
 //!
 //! Nothing is ever destroyed. A delete goes to the platform's trash, so the way
 //! back is the one every other application on the machine has taught the user
@@ -117,7 +120,11 @@ pub fn create_file(path: String) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
-/// A move that happened, and what it cost.
+/// A move or a copy that happened, and what it cost.
+///
+/// One type for both because the two answer the same two questions — where the
+/// thing landed, and which `use` paths the landing broke — and the panel does
+/// the same thing with either answer.
 #[derive(serde::Serialize, Debug)]
 pub struct Moved {
     /// Where the file or folder ended up.
@@ -179,6 +186,120 @@ pub fn move_path(from: String, to: String, root: Option<String>) -> Result<Moved
         path: to.display().to_string(),
         unfollowed: reroute::follow(&surveyed, &from, &to),
     })
+}
+
+/// Copy a file or folder, for the tree's Paste.
+///
+/// `to` is where the paste asked for it, and is the name it gets if that name
+/// is free. If it is not, the copy takes the next free one beside it —
+/// `drums copy.swync`, then `drums copy 2.swync` — rather than being refused
+/// the way a move onto an occupied path is. Pasting into the folder something
+/// was copied from is what a copy is usually for, and there is no other name
+/// for the panel to have offered.
+///
+/// The copy's own imports are then corrected, which is the part that is not
+/// filesystem bookkeeping. `use lib::drums` in a file pasted one folder up
+/// resolves somewhere else, or nowhere; rewriting it to the route from where
+/// the copy now sits is what makes the copy mean what the original meant. Only
+/// the copy is surveyed, so nothing else in the project is touched — the file
+/// every other program imported is still exactly where it was.
+#[tauri::command]
+pub fn copy_path(from: String, to: String) -> Result<Moved, String> {
+    let (from, to) = (PathBuf::from(from), PathBuf::from(to));
+
+    if !from.exists() {
+        return Err(format!("{} is no longer there", name_of(&from)));
+    }
+    // The same refusal a move makes, and for a worse reason: a copy that walked
+    // into its own destination would copy what it had just written, forever.
+    if from.is_dir() && to.starts_with(&from) {
+        return Err(format!("{} cannot be copied inside itself", name_of(&from)));
+    }
+
+    // Before anything is written, since afterwards the copy is on the disk and
+    // a survey could not tell it from the original.
+    let sources = if from.is_dir() {
+        walk(&from)
+    } else {
+        vec![from.clone()]
+    };
+    let surveyed = reroute::survey(&sources);
+
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let landed = unused(&to);
+
+    if from.is_dir() {
+        copy_tree(&from, &landed).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::copy(&from, &landed).map_err(|e| e.to_string())?;
+    }
+
+    Ok(Moved {
+        path: landed.display().to_string(),
+        unfollowed: reroute::follow(&surveyed, &from, &landed),
+    })
+}
+
+/// The path asked for, or the first free name beside it.
+///
+/// `drums.swync` becomes `drums copy.swync` and then `drums copy 2.swync`, and
+/// a folder the same without an extension to keep. The word goes before the
+/// extension rather than after it: `drums.swync copy` is a file the language no
+/// longer recognises, which is a copy of the wrong thing.
+fn unused(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+
+    let dir = path.parent().unwrap_or(Path::new(""));
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+
+    for nth in 1.. {
+        let suffix = if nth == 1 {
+            " copy".to_string()
+        } else {
+            format!(" copy {nth}")
+        };
+        let candidate = dir.join(format!("{stem}{suffix}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("the loop returns on the first free name")
+}
+
+/// Copy a folder and everything under it.
+///
+/// Symlinks are skipped rather than followed or recreated. Following one copies
+/// a tree that is not inside this folder and may be this folder; recreating one
+/// copies a path that means nothing once the copy is somewhere else. Skipping
+/// is the only one of the three that cannot quietly do something enormous, and
+/// it is what [`walk`] already does for the same reason.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let landing = to.join(entry.file_name());
+
+        if kind.is_symlink() {
+            continue;
+        } else if kind.is_dir() {
+            copy_tree(&entry.path(), &landing)?;
+        } else {
+            std::fs::copy(entry.path(), &landing)?;
+        }
+    }
+    Ok(())
 }
 
 /// Move a file or folder to the platform's trash.

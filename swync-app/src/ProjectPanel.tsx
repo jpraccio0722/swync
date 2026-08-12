@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { toDiagnostic, type Diagnostic } from "./diagnostics";
 import {
   basename,
@@ -31,6 +32,35 @@ interface Moved {
 
 /** How far in each level of the tree sits, in pixels. */
 const INDENT = 12;
+
+/**
+ * What the platform calls the thing Reveal opens.
+ *
+ * Everywhere else in the app the button beside a path can simply say "Reveal",
+ * because the path is right there and there is nothing else it could mean. A
+ * row in a context menu is read among Rename and Delete with no path in sight,
+ * so it has to name the application it is about to bring to the front — and
+ * "Finder" on a machine that has no Finder is a menu item nobody trusts.
+ */
+const REVEAL = /Mac|iPhone|iPad/.test(navigator.userAgent)
+  ? "Reveal in Finder"
+  : /Win/.test(navigator.userAgent)
+    ? "Show in Explorer"
+    : "Show in File Manager";
+
+/**
+ * A row held for a paste, and what pasting it will do.
+ *
+ * One entry rather than a stack: the tree selects one row at a time, so there
+ * is never a second thing to have cut.
+ */
+interface Clipped {
+  path: string;
+  isDir: boolean;
+  /** A cut is carried out by the paste and then spent; a copy stays, so the
+   *  same file can be pasted into three folders without being copied again. */
+  mode: "copy" | "cut";
+}
 
 /** A row being typed into, before the thing it names exists. */
 interface Draft {
@@ -80,6 +110,13 @@ interface Tree {
   draft: Draft | null;
   commitDraft: (name: string) => void;
   remove: (entry: Entry) => void;
+  /** Hand a row to the platform's file browser. */
+  reveal: (path: string) => void;
+  clipboard: Clipped | null;
+  clip: (entry: Entry, mode: "copy" | "cut") => void;
+  /** Paste into the row given, or beside it if it is a file. Null for the
+   *  project folder, which is what the space below the tree means. */
+  paste: (into: Entry | null) => void;
   openMenu: (menu: Menu) => void;
   /** The row being dragged, so a folder can refuse to be dropped into itself
    *  before the pointer is over it rather than after. */
@@ -263,6 +300,10 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
   const isActive = !entry.isDir && entry.path === ctx.activePath;
   const isSelected = entry.path === ctx.selected?.path;
   const icon = entry.isDir ? <Chevron open={open} /> : <FileIcon />;
+  // A cut row is dimmed exactly as a dragged one is, and for the same reason:
+  // both say "this is on its way somewhere", and a cut that looked like every
+  // other row is one you forget you are holding.
+  const isCut = ctx.clipboard?.mode === "cut" && isWithin(entry.path, ctx.clipboard.path);
 
   if (ctx.renaming === entry.path) {
     return (
@@ -363,7 +404,41 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
           } else if ((e.key === "Delete" || e.key === "Backspace") && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             ctx.remove(entry);
+          } else if (e.metaKey || e.ctrlKey) {
+            // The three of them together: they are one interaction, and the
+            // key is the only thing that differs between them.
+            const key = e.key.toLowerCase();
+            if (key === "c" || key === "x") {
+              e.preventDefault();
+              ctx.clip(entry, key === "c" ? "copy" : "cut");
+            } else if (key === "v") {
+              e.preventDefault();
+              ctx.paste(entry);
+            }
           }
+        }}
+        // The other half of those three keys.
+        //
+        // ⌘C, ⌘X and ⌘V are the platform's Edit menu's before they are ours,
+        // and which of the two sees a press depends on what the menu item
+        // thinks of the moment: with the keyboard on a row there is no
+        // selection and nothing editable, so the item is disabled and the key
+        // reaches the handler above — but a selection left in the editor is
+        // enough to change that, and then the menu takes it and the webview is
+        // handed a clipboard event instead. Both routes end here. Only one of
+        // them ever runs for a given press: the `preventDefault` above is what
+        // stops a key that was handled from going on to raise these.
+        onCopy={(e) => {
+          e.preventDefault();
+          ctx.clip(entry, "copy");
+        }}
+        onCut={(e) => {
+          e.preventDefault();
+          ctx.clip(entry, "cut");
+        }}
+        onPaste={(e) => {
+          e.preventDefault();
+          ctx.paste(entry);
         }}
         style={{ paddingLeft: 8 + depth * INDENT }}
         className={
@@ -375,7 +450,7 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
               : isSelected
                 ? "bg-neutral-800/60 text-neutral-100"
                 : "text-neutral-300 hover:bg-neutral-900") +
-          (ctx.dragging?.path === entry.path ? " opacity-40" : "") +
+          (ctx.dragging?.path === entry.path || isCut ? " opacity-40" : "") +
           " focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-blue-500"
         }
       >
@@ -483,9 +558,37 @@ export function ProjectPanel({
   const [menu, setMenu] = useState<Menu | null>(null);
   const [dragging, setDragging] = useState<Selected | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [clipboard, setClipboard] = useState<Clipped | null>(null);
+
+  // A different project empties the clipboard. A cut carries a promise to
+  // correct the `use` lines it leaves behind, and that promise is bounded by
+  // one project's folder — the survey `move_path` takes is of the project it
+  // is pasting into. Rather than keep an entry that would half-work, the one
+  // rule is that the clipboard is about the tree it was filled from.
+  useEffect(() => setClipboard(null), [root]);
 
   const fail = useCallback(
     (e: unknown, doing: string) => onProblems([toDiagnostic(e, doing)]),
+    [onProblems],
+  );
+
+  /** Imports a move or a copy could not keep pointing at what they pointed at.
+   *  Not a failure: it has happened, and the program that will now refuse to
+   *  run should say so before it is played rather than after. */
+  const reportUnfollowed = useCallback(
+    (unfollowed: Unfollowed[]) => {
+      if (unfollowed.length === 0) return;
+      onProblems(
+        unfollowed.map((u) => ({
+          stage: "import" as const,
+          message: u.detail,
+          line: null,
+          column: null,
+          snippet: null,
+          file: u.file,
+        })),
+      );
+    },
     [onProblems],
   );
 
@@ -560,22 +663,11 @@ export function ProjectPanel({
           tree.reveal(moved.path);
           setSelected({ path: moved.path, isDir: from.isDir });
           onMoved(from.path, moved.path);
-          if (moved.unfollowed.length > 0) {
-            onProblems(
-              moved.unfollowed.map((u) => ({
-                stage: "import" as const,
-                message: u.detail,
-                line: null,
-                column: null,
-                snippet: null,
-                file: u.file,
-              })),
-            );
-          }
+          reportUnfollowed(moved.unfollowed);
         })
         .catch((e) => fail(e, `could not move ${basename(from.path)}`));
     },
-    [root, tree, onMoved, onProblems, fail],
+    [root, tree, onMoved, reportUnfollowed, fail],
   );
 
   const commitRename = useCallback(
@@ -596,6 +688,50 @@ export function ProjectPanel({
     [move],
   );
 
+  /**
+   * Paste whatever is held, into a folder.
+   *
+   * A cut is the move the tree already does, so it corrects the imports of
+   * everything that pointed at what moved, and is spent by the paste that
+   * carried it out. A copy is a second file, so what needs correcting is the
+   * copy's own imports — the backend does that, and neither the original nor
+   * anything importing it is touched. Pasting a copy leaves it on the
+   * clipboard, which is how the same module is put into three folders.
+   */
+  const paste = useCallback(
+    (into: Entry | null) => {
+      if (clipboard === null) return;
+      const folder = target(into);
+      if (folder === null) return;
+      const landing = join(folder, basename(clipboard.path));
+
+      if (clipboard.mode === "cut") {
+        setClipboard(null);
+        // `move` refuses the no-op itself, which is what pasting a cut back
+        // into the folder it was cut from is.
+        move(clipboard, landing);
+        return;
+      }
+
+      invoke<Moved>("copy_path", { from: clipboard.path, to: landing })
+        .then((copied) => {
+          tree.refresh(folder);
+          tree.reveal(copied.path);
+          setSelected({ path: copied.path, isDir: clipboard.isDir });
+          reportUnfollowed(copied.unfollowed);
+        })
+        .catch((e) => fail(e, `could not copy ${basename(clipboard.path)}`));
+    },
+    [clipboard, target, move, tree, reportUnfollowed, fail],
+  );
+
+  const reveal = useCallback(
+    (path: string) => {
+      void revealItemInDir(path).catch((e) => fail(e, `could not reveal ${basename(path)}`));
+    },
+    [fail],
+  );
+
   const remove = useCallback(
     (entry: Entry) => {
       void (async () => {
@@ -611,13 +747,17 @@ export function ProjectPanel({
           const parent = parentOf(entry.path);
           if (parent !== null) tree.refresh(parent);
           if (selected !== null && isWithin(selected.path, entry.path)) setSelected(null);
+          // Whatever was held is in the Trash now. Leaving it on the clipboard
+          // would offer a paste whose only possible answer is "that is no
+          // longer there".
+          if (clipboard !== null && isWithin(clipboard.path, entry.path)) setClipboard(null);
           onDeleted(entry.path);
         } catch (e) {
           fail(e, `could not delete ${entry.name}`);
         }
       })();
     },
-    [tree, selected, onDeleted, fail],
+    [tree, selected, clipboard, onDeleted, fail],
   );
 
   // A menu is dismissed by whatever happens next, including the Escape that
@@ -665,6 +805,10 @@ export function ProjectPanel({
     draft,
     commitDraft,
     remove,
+    reveal,
+    clipboard,
+    clip: (entry, mode) => setClipboard({ path: entry.path, isDir: entry.isDir, mode }),
+    paste,
     openMenu: setMenu,
     dragging,
     setDragging,
@@ -774,6 +918,39 @@ export function ProjectPanel({
                 startDraft(target(menuEntry), "folder");
               }}
             />
+            <div className="my-1 border-t border-neutral-800" />
+            {menuEntry && (
+              <>
+                <MenuItem
+                  label="Cut"
+                  hint="⌘X"
+                  onClick={() => {
+                    setMenu(null);
+                    setClipboard({ path: menuEntry.path, isDir: menuEntry.isDir, mode: "cut" });
+                  }}
+                />
+                <MenuItem
+                  label="Copy"
+                  hint="⌘C"
+                  onClick={() => {
+                    setMenu(null);
+                    setClipboard({ path: menuEntry.path, isDir: menuEntry.isDir, mode: "copy" });
+                  }}
+                />
+              </>
+            )}
+            {/* Shown with nothing to paste rather than hidden: a menu whose
+                rows move about depending on what you did last is one you have
+                to read every time. */}
+            <MenuItem
+              label="Paste"
+              hint="⌘V"
+              disabled={clipboard === null}
+              onClick={() => {
+                setMenu(null);
+                paste(menuEntry);
+              }}
+            />
             {menuEntry && (
               <>
                 <div className="my-1 border-t border-neutral-800" />
@@ -796,6 +973,16 @@ export function ProjectPanel({
                 />
               </>
             )}
+            <div className="my-1 border-t border-neutral-800" />
+            {/* With no row, the project folder — which is what a right-click on
+                the space below the tree is about everywhere else in this menu. */}
+            <MenuItem
+              label={REVEAL}
+              onClick={() => {
+                setMenu(null);
+                reveal(menuEntry?.path ?? root);
+              }}
+            />
           </div>
         </>
       )}
@@ -806,17 +993,25 @@ export function ProjectPanel({
 function MenuItem({
   label,
   hint,
+  disabled,
   onClick,
 }: {
   label: string;
   hint?: string;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       role="menuitem"
+      disabled={disabled}
       onClick={onClick}
-      className="flex w-full items-center justify-between gap-6 px-3 py-1 text-left text-neutral-300 transition-colors hover:bg-neutral-800 hover:text-neutral-100"
+      className={
+        "flex w-full items-center justify-between gap-6 px-3 py-1 text-left transition-colors " +
+        (disabled
+          ? "text-neutral-600"
+          : "text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100")
+      }
     >
       <span>{label}</span>
       {hint && <span className="font-mono text-[10px] text-neutral-500">{hint}</span>}
