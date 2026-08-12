@@ -282,7 +282,7 @@
       "category": "ugen",
       "receives": "number",
       "returns": "signal",
-      "doc": "Time-based ADSR for one-shot voices. Attack, decay and sustain fill `duration`; the release starts where that ends and rings on for its own time past it, so the note is held for `duration` and the voice lasts `duration + release`. Pass the voice-bound `dur` as the duration — `legato` shortens the held part and leaves the release alone. All arguments are constants."
+      "doc": "Time-based ADSR for one-shot voices. Attack, decay and sustain fill `duration`. The note is held for `duration` and the voice lasts `duration + release`. All arguments are constants."
     },
     {
       "name": "dsf_square",
@@ -449,7 +449,7 @@
       "category": "ugen",
       "receives": "number",
       "returns": "signal",
-      "doc": "One straight segment: `start` to `end` over `duration` seconds, held at `end` after that. Measured from the onset — the note's in a voice, the eval's in the persistent graph — so it needs no note length and works in either: `sin(line(880, 220, 0.05))` is a kick's pitch drop. Unlike `perc` it ends at a level rather than at silence, so it holds a voice open past its note only when `end` is 0 and the shape really finishes. All three arguments are constants; for a sweep between signals, scale it — `start + (end - start) * line(0, 1, d)`."
+      "doc": "One straight segment: `start` to `end` over `duration` seconds, held constant at `end` value after `duration`."
     },
     {
       "name": "lorenz",
@@ -659,7 +659,7 @@
       "category": "ugen",
       "receives": "number",
       "returns": "signal",
-      "doc": "Self-contained percussive envelope: rise, fall, silence. Needs no note length, so it works in a voice or the persistent graph — and in a voice the shape is measured from the onset and always finishes, so a drum longer than the step it sits on rings on into the next rather than being cut off. Both times are constants."
+      "doc": "Self-contained percussive envelope: rise, fall, silence. Both times are constants."
     },
     {
       "name": "pink",
@@ -774,7 +774,7 @@
       "category": "ugen",
       "receives": "signal",
       "returns": "signal",
-      "doc": "Rising ramp from 0 to 1 at the given repetition frequency, starting at 0. Not bandlimited — useful as a phasor, not as audio. Its zero is the start of its own period, which is what lets it drive `sample`: `sample(b, ramp(1 / b.secs))` reads a buffer once, end to end."
+      "doc": "Rising ramp from 0 to 1 at the given repetition frequency, starting at 0. Not bandlimited — useful as a phasor, not as audio."
     },
     {
       "name": "resonator",
@@ -946,7 +946,7 @@
       "category": "ugen",
       "receives": "signal",
       "returns": "signal",
-      "doc": "Tapped delay line with cubic interpolation. Unlike `delay`, the delay time is a signal, so it can be modulated — it must stay within the constant `min_delay`..=`max_delay` bounds, in seconds."
+      "doc": "Tapped delay line with cubic interpolation. Unlike `delay`, the delay time is a signal, so it can be modulated. It must stay within the constant `min_delay`..=`max_delay` bounds, in seconds."
     },
     {
       "name": "tick",
@@ -1002,7 +1002,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "Pair elements positionally: `zip([1, 2], [3, 4])` is `[[1, 3], [2, 4]]`. Every argument must be a list, and all must be the same length."
+      "doc": "Pair elements positionally: `zip([1, 2], [3, 4])` is `[[1, 3], [2, 4]]`. Every argument must be a list and all must be the same length."
     },
     {
       "name": "stack",
@@ -1016,7 +1016,7 @@
       "category": "list",
       "receives": "pattern",
       "returns": "pattern",
-      "doc": "Patterns that sound at once instead of in turn: `stack([c4;2, e4;2], [g4;4])` is a two-note line under a held g. Each argument keeps its own division, so the layers need not agree on a rhythm — a three against a four is written by stacking them. This is how a chord is written, and how a drawn part with overlapping notes is split into voices. Lanes read a stack as all its values in order, layer by layer."
+      "doc": "Creates patterns that sound at once instead of in turn: `stack([c4;2, e4;2], [g4;4])`. Each argument keeps its own division, so the layers need not agree on a rhythm. Creates chords and polyphony."
     },
     {
       "name": "rev",
@@ -1030,7 +1030,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "The list, back to front."
+      "doc": "Reverse a list"
     },
     {
       "name": "palindrome",
@@ -1091,7 +1091,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "A new list with `value` appended. Lists are immutable — the original is unchanged."
+      "doc": "A new list with `value` appended."
     },
     {
       "name": "pop",
@@ -1105,7 +1105,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "A new list without its last element. Index the list to read that element."
+      "doc": "A new list without its last element."
     },
     {
       "name": "sort",
@@ -1119,7 +1119,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "The list sorted ascending. Every element must be a compile-time number."
+      "doc": "The list sorted ascending."
     },
     {
       "name": "sum",
@@ -1133,7 +1133,7 @@
       "category": "list",
       "receives": "list",
       "returns": "any",
-      "doc": "Add every element together. Folds numbers at compile time and emits mixing nodes for signals, so a list of oscillators sums into the graph."
+      "doc": "Add every element together."
     },
     {
       "name": "split",
@@ -1148,7 +1148,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "Break the list into chunks of `size`. A short final chunk is kept."
+      "doc": "Break the list into chunks of `size`."
     },
     {
       "name": "choice",
@@ -1177,7 +1177,7 @@
       "category": "list",
       "receives": "list",
       "returns": "any",
-      "doc": "One element picked at random, weighted. The two lists run in parallel; weights must be finite and >= 0."
+      "doc": "Weighted random choice The two lists run in parallel; weights must be finite and >= 0."
     },
     {
       "name": "scramble",
@@ -1206,7 +1206,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "Apply a function to every element: `riff.map(up)`. The transform is an ordinary user `fn` of one argument, and may answer with anything — mapping to oscillators is the only way to hold several voices apart, since a `for` over audio sums instead of collecting."
+      "doc": "Apply a function to every element: `riff.map(up)`."
     },
     {
       "name": "dot",
@@ -1222,7 +1222,7 @@
       "category": "list",
       "receives": "duration",
       "returns": "duration",
-      "doc": "Dot a written note value: `q.dot` is a dotted quarter, a quarter and an eighth. `dots` defaults to 1; `q.dot(2)` is the doubly-dotted quarter, which is a quarter and an eighth and a sixteenth. Written as a count rather than by repeating `.dot`, because each dot adds half of the note itself rather than half of what the last one left."
+      "doc": "Dot a written note value: `q.dot` is a dotted quarter, a quarter and an eighth. `dots` defaults to 1; `q.dot(2)` is the doubly-dotted quarter. Can be chained as well `q.dot.dot`."
     },
     {
       "name": "filter",
@@ -1237,7 +1237,7 @@
       "category": "list",
       "receives": "list",
       "returns": "list",
-      "doc": "Keep the elements the predicate answers non-zero for. The predicate is an ordinary user `fn` of one argument."
+      "doc": "Filter a list based on the predicate."
     },
     {
       "name": "m2h",
@@ -1251,7 +1251,7 @@
       "category": "math",
       "receives": "number",
       "returns": "number",
-      "doc": "MIDI note number to frequency in hertz: `69.m2h` is 440. Equal temperament, A4 = 440 Hz."
+      "doc": "MIDI note number to frequency in hertz: `69.m2h` is 440. Equal temperament."
     },
     {
       "name": "h2m",
@@ -1279,7 +1279,7 @@
       "category": "math",
       "receives": "number",
       "returns": "number",
-      "doc": "Decibels to a linear amplitude: `0.db` is 1, `-6.db` is about 0.5. Use it to write gains the way you hear them."
+      "doc": "Decibels to a linear amplitude: `0.db` is 1, `-6.db` is about 0.5."
     },
     {
       "name": "amp",
@@ -1322,7 +1322,7 @@
       "category": "math",
       "receives": "number",
       "returns": "number",
-      "doc": "Beats per minute to bars per second. The beat is the quarter note; how many of them make a bar is the project's time signature, so `120.bpm` is 0.5 in 4/4 — the default tempo — and 0.667 in 3/4, where the bar is shorter."
+      "doc": "Beats per minute to bars per second."
     },
     {
       "name": "oct",
@@ -1367,7 +1367,7 @@
       "category": "math",
       "receives": "number",
       "returns": "number",
-      "doc": "Snap a MIDI note to the nearest tone of a scale, given as semitone offsets within an octave: `61.scale([0, 2, 4, 5, 7, 9, 11])` is 60. Ties snap down."
+      "doc": "Snap a MIDI note to the nearest tone of a scale, given as semitone offsets within an octave: `61.scale([0, 2, 4, 5, 7, 9, 11])` is 60."
     },
     {
       "name": "clamp",
@@ -1486,7 +1486,7 @@
       "category": "math",
       "receives": "number",
       "returns": "number",
-      "doc": "`x` raised to a power: `2.pow(10)` is 1024. Good for exponential curve shaping."
+      "doc": "`x` raised to a power: `2.pow(10)` is 1024."
     },
     {
       "name": "sqrt",
@@ -1545,7 +1545,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "A uniform whole number in `lo..hi`, with `hi` excluded: `randi(60, 72)` is an octave of notes that never repeats the root. Both bounds must be whole."
+      "doc": "A uniform whole number in `lo..hi`, with `hi` excluded. Both bounds must be whole."
     },
     {
       "name": "coin",
@@ -1560,7 +1560,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "1 or 0, at odds you choose. `coin()` is even; `coin(0.25)` answers 1 one time in four. Multiply by it to drop a note, or add it to a velocity."
+      "doc": "1 or 0, `coin()` is even 50/50 probability. `coin(0.25)` is 1 one time in four."
     },
     {
       "name": "seed",
@@ -1574,7 +1574,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "Fix every draw made after it, and answer with the seed. `seed(42)` at the top of a program makes its lists, lanes and patterns come out the same on every evaluation — which is how a happy accident gets kept. A voice is lowered per note and does not see a top-level seed, so a `seed` inside an instrument pins that instrument instead, identically on every note."
+      "doc": "Use a fixed seed for all random values after it is set. A voice is lowered per note and does not see a top-level seed, so a `seed` inside an instrument pins that instrument identically on every note."
     },
     {
       "name": "gauss",
@@ -1591,7 +1591,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "A normally distributed number: clustered around `mean`, two thirds of it within one `deviation`. Both default to the standard 0 and 1. Unbounded — `clamp` it if a stray value would hurt."
+      "doc": "A normally distributed number: clustered around `mean`, two thirds of it within one `deviation`. Both default to the standard 0 and 1. Unbounded."
     },
     {
       "name": "humanize",
@@ -1606,7 +1606,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "Nudge a number off its grid: `x` plus a normal draw of deviation `amount`, so most nudges are small and a few are not. `0.5.humanize(0.05)` is a velocity that no longer sounds typed in."
+      "doc": "Nudge a number off its grid: `x` plus random `amount`."
     },
     {
       "name": "expo",
@@ -1621,7 +1621,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "An exponentially distributed number above zero with the given `mean` (default 1). Short values are common and long ones rare — the shape of a wait between events."
+      "doc": "An exponentially distributed number above zero with the given `mean` (default 1)."
     },
     {
       "name": "tri",
@@ -1638,7 +1638,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "A triangular draw over `lo..hi`, peaking at `mode` — the midpoint if you leave it out. Bounded like `rand` but with a centre, so it favours a value without ever leaving the range."
+      "doc": "A triangular draw over `lo..hi`, peaking at `mode`."
     },
     {
       "name": "cauchy",
@@ -1655,7 +1655,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "A heavy-tailed draw around `median` (default 0) with the given `spread` (default 1). Mostly close in, but far more prone to a wild outlier than `gauss` — which is the point when you want the occasional lurch."
+      "doc": "A heavy-tailed draw around `median` (default 0) with the given `spread` (default 1)."
     },
     {
       "name": "pareto",
@@ -1672,7 +1672,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "A power-law draw at or above `scale` (default 1). A smaller `shape` (default 1) makes big values likelier. Everything is near the floor, with rare excursions far above it."
+      "doc": "A power-law draw at or above `scale` (default 1). A smaller `shape` (default 1) makes big values likelier."
     },
     {
       "name": "poisson",
@@ -1687,7 +1687,7 @@
       "category": "random",
       "receives": "number",
       "returns": "number",
-      "doc": "A whole count averaging `mean` (default 1) — how many things happened, when each was independent. Good for deciding how many hits land in a bar."
+      "doc": "A whole count averaging `mean` (default 1)."
     },
     {
       "name": "rands",
@@ -1704,7 +1704,7 @@
       "category": "random",
       "receives": "number",
       "returns": "list",
-      "doc": "A list of `count` uniform numbers, from 0..1 or from `lo..hi`. A pattern in one line: `rands(8, 0.2, 0.9)` is eight velocities."
+      "doc": "A list of `count` uniform numbers, from 0..1 or from `lo..hi`."
     },
     {
       "name": "randis",
@@ -1720,7 +1720,7 @@
       "category": "random",
       "receives": "number",
       "returns": "list",
-      "doc": "A list of `count` whole numbers in `lo..hi`, `hi` excluded: `randis(8, 60, 72) >> play(lead)` is an eight-note riff."
+      "doc": "A list of `count` whole numbers in `lo..hi`, `hi` excluded."
     },
     {
       "name": "walk",
@@ -1736,7 +1736,7 @@
       "category": "random",
       "receives": "number",
       "returns": "list",
-      "doc": "A random walk: `count` numbers beginning at `start`, each drifting from the one before by up to `step` either way. Neighbours stay close, so it moves rather than jumps — what `rands` is not. Good for a cutoff or a pan."
+      "doc": "A random walk. `Count` numbers beginning at `start`, each drifting from the one before by up to `step` either way."
     },
     {
       "name": "walki",
@@ -1767,7 +1767,7 @@
       "category": "random",
       "receives": "list",
       "returns": "list",
-      "doc": "`count` elements drawn without replacement, in a random order — `choice` several times over may repeat itself, and this cannot. Asking for the whole list is `scramble`; asking for more than it holds is an error."
+      "doc": "`count` elements chosen. Does not repeat. Asking for the whole list is equivalent to `scramble`. > len is an error."
     },
     {
       "name": "randscale",
@@ -1785,7 +1785,7 @@
       "category": "random",
       "receives": "number",
       "returns": "list",
-      "doc": "`count` notes drawn evenly from the tones of a scale, given as semitone offsets within an octave, between MIDI `lo` and `hi` (60..72 by default). Unlike snapping a uniform draw with `scale`, every degree is equally likely and nothing lands outside the range: `randscale(8, [0, 3, 5, 7, 10], 48, 72)` is a pentatonic riff over two octaves."
+      "doc": "`count` notes drawn evenly from the tones of a scale given as semitone offsets within an octave between MIDI `lo` and `hi` (60..72 by default). Unlike snapping a uniform draw with `scale`, every degree is equally likely and nothing lands outside the range: `randscale(8, [0, 3, 5, 7, 10], 48, 72)` is a pentatonic riff over two octaves."
     },
     {
       "name": "then",
@@ -1800,7 +1800,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Sequence one section after another: `playn(verse, lead, 4).then(chorus)`. The left side must be `play_once` or `playn` — plain `play` never finishes. `section` is either a no-parameter `fn` named here or a play written out — `.then(playn(riff, lead, 2))` needs no name — and either way its own `play` calls start where this one stops. A play bound to a `let` is not a section: it already sounded where it was written, so name it as a `fn` instead. Lowered at eval time, not called by the audio thread."
+      "doc": "Sequence one section after another: `playn(verse, lead, 4).then(chorus)`."
     },
     {
       "name": "then_after",
@@ -1816,7 +1816,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "`then`, with `bars` of silence in between: `playn(verse, lead, 4).then_after(1, chorus)` leaves a bar's rest before the chorus. The gap cannot be negative — `overlap` is how a section starts early."
+      "doc": "`then`, with `bars` of silence in between the previous play: `playn(verse, lead, 4).then_after(1, chorus)` leaves a bar's rest before the chorus. The gap cannot be negative."
     },
     {
       "name": "overlap",
@@ -1832,7 +1832,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "`then`, but the section starts `bars` *before* this one ends, so the two really do sound together over the join: `playn(verse, lead, 8).overlap(2, chorus)`. Never earlier than the receiver's own start. The chain carries on from whichever of the two ends later."
+      "doc": "`then`, but the section starts `bars` *before* the first one ends. Two functions will sound together over the join: `playn(verse, lead, 8).overlap(2, chorus)`. The chain carries on from whichever of the two ends later."
     },
     {
       "name": "with",
@@ -1847,7 +1847,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Run a section *alongside* this one, from where it began: `playn(verse, lead, 4).with(drums).then(chorus)`. `play_all` opens its sections together as a group; this makes one concurrent with a section already placed, so an arrangement reads in the order it happens. The pair finishes when the later of them does."
+      "doc": "Run a section *alongside* the previous play in the chain: `playn(verse, lead, 4).with(drums).then(chorus)`. The pair finishes when the later of them does."
     },
     {
       "name": "at",
@@ -1862,7 +1862,7 @@
       "category": "special",
       "receives": "number",
       "returns": "play",
-      "doc": "Place a section at an absolute bar, counted from the origin: `at(8, chorus)`. Bars are counted from 0, so `at(8, …)` is the ninth bar — it is a distance from the start, the same number `then_after` would have added up to. The escape hatch from chaining, for an arrangement whose shape you already know."
+      "doc": "Place a section at an absolute bar, counted from the origin: `at(8, chorus)`. Bars are counted from 0, so `at(8, …)` is the ninth bar"
     },
     {
       "name": "seq",
@@ -1876,7 +1876,7 @@
       "category": "special",
       "receives": "section",
       "returns": "play",
-      "doc": "Sections one after another without the nesting: `seq(intro, verse, chorus, verse)`. Each is a no-parameter `fn` or a play written out, and each must finish for the next to follow."
+      "doc": "Plays plays one after another without the nesting: `seq(intro, verse, chorus, verse)`. Only plays the next when the previous pattern completes."
     },
     {
       "name": "then_n",
@@ -1892,7 +1892,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Run a section `times` times, back to back: `play_once(intro, lead).then_n(verse, 4)`. Lowered afresh each pass rather than written once and repeated, so a `rand` inside the section is a different number every time round — the same rule a voice already follows, and it holds whether the section is a `fn` named here or a play written out."
+      "doc": "Run a section n `times`. `play_once(intro, lead).then_n(verse, 4)`."
     },
     {
       "name": "loop",
@@ -1907,7 +1907,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Everything chained so far, `times` times through: `playn(groove, kit, 3).then_fill(roll).loop(4)` is four bars of groove-and-fill. The counterpart to `then_n` — that one names a `fn` and runs it *after* this section, this one takes no section at all because the section it repeats is the chain it is written on. The whole chain has to finish, so bound an endless part with `.take(n)` or `.stop()` first. The passes are copies, so a `rand` inside the chain was already spent and every pass is the same music; `then_n` is the one that draws afresh."
+      "doc": "Loops the entire chain prior to its call n `times`. `playn(groove, kit, 3).then_fill(roll).loop(4)` is four bars of groove-and-fill."
     },
     {
       "name": "then_each",
@@ -1923,7 +1923,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "One pass of the section per element of the list, in sequence, with the element passed in: `play_once(intro, lead).then_each([1, 2, 4], faster)` calls `faster(1)`, then `faster(2)`, then `faster(4)`. `body` takes exactly one parameter — the element. Arrangement by list — every list function in the language already builds the shape of a piece, and this is what spends one. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once."
+      "doc": "One pass of the section per element of the list, in sequence, with the element from the list passed in: `play_once(intro, lead).then_each([1, 2, 4], faster)` calls `faster(1)`, then `faster(2)`, then `faster(4)`."
     },
     {
       "name": "then_fill",
@@ -1940,7 +1940,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "One pass of a pattern on this section's *own* instrument: `playn(groove, drums, 4).then_fill([1, 1, 1, 1])`. Unlike `then` there is no `fn` and no second `play` — a fill is played by whoever just played, so the instrument and every lane are inherited and only the pattern is new. The left side has to be a single `play`: a group of them has no one instrument to be a fill for. `rate` defaults to 1, and here is a plain number — a fill is one pass, with no room to speed up over."
+      "doc": "A fill is played by the play it chains from: `playn(groove, drums, 4).then_fill([1, 1, 1, 1])`. The instrument and every lane are inherited and only the pattern is new."
     },
     {
       "name": "quantize",
@@ -1956,7 +1956,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Round where the chain has reached up to a multiple of `grid` bars, without touching what is already playing: `playn(pat, inst, 3, 2).quantize().then(chorus)`. `grid` defaults to 1. The cure for a section whose length is not a whole number of bars — `rate` divides into the count, so `playn(pat, inst, 3, 2)` is 1.5 bars long and every `.then` after it would otherwise be permanently off the downbeat."
+      "doc": "Round where a chain of plays has reached up to a multiple of `grid` bars, without touching what is already playing: `playn(pat, inst, 3, 2).quantize().then(chorus)`. `grid` defaults to 1. Useful when a section's length is not a whole number of bars."
     },
     {
       "name": "take",
@@ -1971,7 +1971,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "This section, cut to `bars`: `play(riff, lead).take(8).then(chorus)`. What gives a plain `play` an end — `playn` only bounds a single play, not a `play_all` group or a whole nested section. A part that already stops sooner is left alone, since a cut is a ceiling and not a length."
+      "doc": "Interrupts a play after n number of bars, `play(riff, lead).take(8).then(chorus)`."
     },
     {
       "name": "stop",
@@ -1985,7 +1985,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Cut everything still open in this section at the moment its last *counted* part finishes: `play_all(play(groove, drums), playn(riff, lead, 8)).stop()` lets the eight-bar riff decide when the endless drums give up. One pattern as the trigger to stop the rest. Needs at least one `play_once` or `playn` among them, or there is no moment to stop at."
+      "doc": "Stops a play."
     },
     {
       "name": "wthen",
@@ -2001,7 +2001,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Choose between sections, afresh each time round: `playn(intro, lead, 2).wthen([verse, chorus], [0.7, 0.3])`. Weights are relative and need not sum to 1. Unlike `choice`, which draws once while the program is lowered, this is decided by the scheduler as the music reaches it — so the block repeats forever and deals a new hand every time. Every arm must finish, and they all come back to the same place; the block itself never finishes, so bound it with `.take(n)` if something should follow. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once."
+      "doc": "Weighted choice between sections each iteration: `playn(intro, lead, 2).wthen([verse, chorus], [0.7, 0.3])`. Weights are relative and need not sum to 1."
     },
     {
       "name": "rthen",
@@ -2016,7 +2016,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "`wthen` with every section equally likely: `playn(intro, lead, 2).rthen([verse, chorus, bridge])`. Rerolls each time round and never finishes, exactly as `wthen` does. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once."
+      "doc": "Random choice without weighting: `playn(intro, lead, 2).rthen([verse, chorus, bridge])`. Rerolls each iteration."
     },
     {
       "name": "maybe",
@@ -2032,7 +2032,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Play a section with probability `chance` (0 to 1), decided afresh each time round: `playn(groove, drums, 4).maybe(0.25, fill)`. A `wthen` whose other arm is silence — it repeats and rerolls for the same reason, since a coin flipped once is just an `if`. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once."
+      "doc": "Play a section with probability `chance` (0 to 1). Maybe decides each iteration: `playn(groove, drums, 4).maybe(0.25, fill)`."
     },
     {
       "name": "shuffle_then",
@@ -2047,7 +2047,7 @@
       "category": "special",
       "receives": "play",
       "returns": "play",
-      "doc": "Every section once each, in an order drawn now: `play_once(intro, lead).shuffle_then([verse, chorus, bridge])`. The counterpart to `rthen` rather than a variant of it — a weighted choice may pass a section over for a long time, and this cannot. It settles at eval time like `scramble`, so it has a length and a `.then` may follow it. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once."
+      "doc": "Plays every section in a randomized order: `play_once(intro, lead).shuffle_then([verse, chorus, bridge])`. It is evaluated like `scramble`."
     },
     {
       "name": "play",
@@ -2064,7 +2064,7 @@
       "category": "special",
       "receives": "pattern",
       "returns": "play",
-      "doc": "Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1, and may be an `accel` rather than a number. A list is one pass, filling the bar, divided evenly unless a step is given a length with `;` — `[220;2, 330, 440, `;4]` is a quarter, two eighths and a half of silence — and lengths are relative, so only their ratio matters. A long step is one sustained note, not several. A step may instead be given a written note value — `w` `h` `q` `e` `s` — and then the pass is as long as its values add up to rather than one bar: in 4/4 `[c4;q, e4, g4]` is three beats against a four-beat bar, so it comes round a beat early and rotates against the grid. A value carries to the steps after it. A bare `q` is a hit of that length. An octave carries the same way: a note written without one takes the octave of the last note that spelled one, so `[a1;q, a, a, a]` is four `a1`s and `[c4;q, ef, g]` is a chord's worth of arpeggio. Only a spelled octave moves it, a group gives it back at the closing bracket like a written value does, and `e` — the eighth note and also the note E — is refused where an octave is in force rather than quietly becoming one of them. Written values and ratios cannot share a sequence. A group inside one is a tuplet and says so with `;t` — `[[c4;q, e4, g4];t, c5]` is a quarter triplet then a quarter — which needs no number: the count, the unit and the span it is played in all follow from what the group holds. Any further parameter is patterned by name — `play(bass, cut: [400, 2000])` — sampled at each note's onset, and lanes may be any length. In a lane a `;` is how many notes the value covers, so it has to be a whole number there. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right)."
+      "doc": "Schedule a pattern on an instrument: `pat >> play(kick)`. The instrument must name a user `fn`. `rate` defaults to 1. Any further function parameter is added as a lane — `play(bass, cut: [400, 2000])` lane's values are sampled at each note's onset. Two names are reserved and reach the note rather than the instrument: `legato:` scales its length, and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right). All children of `play` follow the same conventions."
     },
     {
       "name": "play_once",
@@ -2081,7 +2081,7 @@
       "category": "special",
       "receives": "pattern",
       "returns": "play",
-      "doc": "`play`, stopping after one pass of the pattern: `[60, 64, 67] >> play_once(stab)`. Started while something is already playing it begins on the next bar, so the one-shot lands on a downbeat. Re-evaluating fires it again."
+      "doc": "`play`, stopping after one pass of the pattern: `[60, 64, 67] >> play_once(stab)`."
     },
     {
       "name": "playn",
@@ -2099,7 +2099,7 @@
       "category": "special",
       "receives": "pattern",
       "returns": "play",
-      "doc": "`play`, stopping after `times` passes of the pattern: `playn([220, 330], bass, 4)`. `rate` follows the count and still defaults to 1 — at rate 2 the four passes take two bars. Lanes work as they do on `play`."
+      "doc": "`play`, stopping after `times` passes of the pattern: `playn([220, 330], bass, 4)`. Lanes work as they do on `play`."
     },
     {
       "name": "play_all",
@@ -2113,7 +2113,7 @@
       "category": "special",
       "receives": "section",
       "returns": "play",
-      "doc": "Treat several sections that run at once as one: `play_all(verse, bassline).then(chorus)`. Each is a no-parameter `fn` or a play written out, exactly as in `seq` — the difference is that these all start together rather than one after another, and the group finishes when the last of them does. A plain `play` among them never finishes, so nothing may follow."
+      "doc": "Executes all plays simultaneously. `play_all(verse, bassline).then(chorus)`."
     },
     {
       "name": "accel",
@@ -2129,7 +2129,7 @@
       "category": "special",
       "receives": "number",
       "returns": "rate",
-      "doc": "A rate that moves: `from` to `to` over `bars` bars, holding at `to` after that. Written where a `play` takes a number — `playn(riff, lead, 8, accel(1, 2, 4))` runs eight passes, speeding up to double over the first four bars — and it is a straight line in rate, so the pattern covers the area under it rather than the rate at either end. Measured from the section's own first note, and started afresh each time a `wthen` window comes round again. `to` below `from` is a ritardando. Both rates must be above zero: at zero the pattern would stop rather than slow, and a bounded section would never finish."
+      "doc": "Accelerates a play's rate `from` to `to` over `bars` bars. Holds at `to` upon completion. Use in the rate parameter of `play` — `play(riff, lead, accel(1, 2, 4))`. A `to` less than from `from` slows down — `play(riff, lead, accel(2, 1, 4))` Both rates must be above zero: at zero the pattern would stop rather than slow."
     },
     {
       "name": "dur",
@@ -2139,7 +2139,7 @@
       "category": "special",
       "receives": "nothing",
       "returns": "number",
-      "doc": "The current note's length in seconds. Bound only inside a voice — pass it to `env`."
+      "doc": "The current note's length in seconds. Passed to a function used in a `play` scoped to the function."
     },
     {
       "name": "qvs",
@@ -2149,7 +2149,7 @@
       "category": "special",
       "receives": "nothing",
       "returns": "number",
-      "doc": "The quarter note in seconds: 0.5 at the default 120 bpm. Anything that takes a length of time can be written in beats with it — `perc(0, qvs / 2)` decays over an eighth, `delay(qvs * 0.75)` is a dotted-eighth delay. Inside a voice it is the beat of the clock that note is played on, so a `play` at rate 2 gives its instrument a beat half as long; in the persistent graph it is the transport's own, fixed at the eval that wrote it."
+      "doc": "The quarter note in seconds. Use with lengths: `perc(0, qvs / 2)` or `delay(qvs * 0.75)`"
     },
     {
       "name": "qvh",
@@ -2159,7 +2159,7 @@
       "category": "special",
       "receives": "nothing",
       "returns": "number",
-      "doc": "The quarter note in hertz — `1 / qvs`, which is 2 at the default 120 bpm. What an oscillator wants: `sin(qvh * 2)` sweeps on the eighth, `sin(qvh / 2)` on the half. Multiplying is what makes it faster here, because this is a rate and not a length. Rate and tempo reach it exactly as they reach `qvs`."
+      "doc": "The quarter note in hertz — `1 / qvs`. Use in oscillators: `sin(qvh * 2)`"
     },
     {
       "name": "load",
@@ -2173,7 +2173,7 @@
       "category": "special",
       "receives": "text",
       "returns": "buffer",
-      "doc": "Read an audio file into a buffer: `let amen = load(\"breaks/amen.wav\")`. The path is relative to the file it is written in, the same way a `use` path is, and must be written out rather than computed — every file is decoded once, before the program runs, so no note ever waits on a disk. Any format symphonia reads: wav, mp3, flac, ogg. Nothing comes out of a buffer until `sample` reads it."
+      "doc": "Read an audio file into a buffer: `let amen = load(\"breaks/amen.wav\")`. The path is relative to the file it is written in. Any format symphonia reads: wav, mp3, flac, ogg."
     },
     {
       "name": "sample",
@@ -2190,7 +2190,7 @@
       "category": "special",
       "receives": "buffer",
       "returns": "signal",
-      "doc": "Read a buffer at a position: 0 is the start, 1 is the end, and anything outside that is silence. `position` is a signal, which is where speed, direction and chopping all come from — `sample(b, ramp(1 / b.secs))` plays it forwards, `1 - ramp(...)` backwards, `ramp(...) * 0.25` reads the first quarter. Cubic interpolation, so it holds up away from its own speed. `channel` defaults to 0 and wraps if the buffer has fewer."
+      "doc": "Read a buffer at a position: 0 is the start, 1 is the end. Anything outside that is silence. `position` is a signal: `sample(b, ramp(1 / b.secs))` -- plays forwards, `1 - ramp(...)` backwards. `channel` defaults to 0 and wraps if the buffer has fewer."
     },
     {
       "name": "slice",
@@ -2210,7 +2210,7 @@
       "category": "special",
       "receives": "buffer",
       "returns": "signal",
-      "doc": "Read a portion of a buffer, once: `slice(amen, 0, 0.25)` is the first quarter of the break, at the speed it was recorded at. `start` and `end` are positions like `sample`'s, 0 at the start of the buffer and 1 at the end, and both are compile-time numbers rather than signals. `start` past `end` plays that portion backwards. `rate` defaults to 1 and multiplies the speed — 2 reads the portion in half the time, an octave up, 0.5 in twice, an octave down — and must be above zero, since at zero the reader would stop rather than slow; backwards is the ends the other way round rather than a negative rate. This is `sample` with the phasor written for you — `sample(b, line(start, end, (end - start) * b.secs / rate))` — and it exists because that duration is the part that is easy to get wrong: scaling a `ramp`'s position without scaling its frequency to match reads the right portion at the wrong speed. The read holds on the last sample once it arrives, so an envelope is what ends the note, exactly as with `sample`; a slice ending at 1 goes quiet on its own, since past the buffer is silence. For a position or a speed that moves under a signal — scrubbing, stuttering, anything modulated — use `sample`."
+      "doc": "Read a portion of a buffer, once: `slice(amen, 0, 0.25)`. `start` and `end` are between 0 and 1. `start` past `end` plays that portion backwards. `rate` defaults to 1."
     },
     {
       "name": "secs",
@@ -2224,7 +2224,7 @@
       "category": "special",
       "receives": "buffer",
       "returns": "number",
-      "doc": "How long a buffer is, in seconds. A compile-time number, so it divides into a `ramp` frequency: `ramp(1 / amen.secs)` is a phasor that reads the whole buffer once at its own speed."
+      "doc": "Attribute on a buffer. How long a buffer is, in seconds."
     },
     {
       "name": "channels",
@@ -2238,7 +2238,7 @@
       "category": "special",
       "receives": "buffer",
       "returns": "number",
-      "doc": "How many channels a buffer has — 1 for mono, 2 for a stereo file. Useful for deciding whether a second `sample` on channel 1 would say anything different."
+      "doc": "How many channels a buffer has — 1 for mono, 2 for a stereo file."
     }
   ],
   "keywords": [
