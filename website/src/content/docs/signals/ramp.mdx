@@ -11,6 +11,3 @@ Rising ramp from 0 to 1 at the given repetition frequency,
 starting at 0.
 Not bandlimited — useful as a phasor,
 not as audio.
-Its zero is the start of its own period,
-which is what lets it drive `sample`: `sample(b, ramp(1 / b.secs))` reads a buffer once,
-end to end.
