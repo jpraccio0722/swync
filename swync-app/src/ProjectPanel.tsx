@@ -33,6 +33,27 @@ interface Moved {
 /** How far in each level of the tree sits, in pixels. */
 const INDENT = 12;
 
+/** What a swync program is called on disk. Mirrors `EXTENSION` in `imports/mod.rs`. */
+const EXTENSION = ".swync";
+
+/**
+ * What a name typed into the tree's New File row actually makes.
+ *
+ * A project is made of swync programs, and `use drums` names one by the route
+ * to it rather than by its filename — so `drums` is what the piece calls the
+ * file, and typing the extension every time is a tax on the ordinary case.
+ *
+ * A name that already carries an extension is left exactly as typed. That
+ * covers `drums.swync` from anyone used to typing it, and it covers the rest of
+ * what a project is allowed to hold — `swync-project.json`, a `README.md` —
+ * which nobody means to end up as `README.md.swync`.
+ */
+function withExtension(typed: string): string {
+  // The dot that decides this is one in the name, not one in a folder the name
+  // carries: `lib.old/drums` is still a program in want of an extension.
+  return basename(typed).includes(".") ? typed : typed + EXTENSION;
+}
+
 /**
  * What the platform calls the thing Reveal opens.
  *
@@ -629,7 +650,9 @@ export function ProjectPanel({
       if (draft === null) return;
       const { parent, kind } = draft;
       setDraft(null);
-      const path = join(parent, typed);
+      // A folder is named exactly as typed; a file is a swync program unless
+      // its name says otherwise. See [`withExtension`].
+      const path = join(parent, kind === "file" ? withExtension(typed) : typed);
 
       invoke<string>(kind === "folder" ? "create_dir" : "create_file", { path })
         .then((made) => {
