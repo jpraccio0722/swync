@@ -1,0 +1,181 @@
+# Everything that has to be true before a branch reaches main.
+#
+# The release workflows run on a tag, which is after the decision has been
+# made — by then a mistake is a version people can download. This runs on the
+# pull request instead, and holds the three claims worth making at that point:
+# the Rust suite passes, both TypeScript projects typecheck and build, and the
+# manifests still agree about what version this is.
+#
+# Deliberately not here: `cargo fmt --check` and clippy. This tree is not
+# rustfmt-clean and has never had a linter, so either one would be a red X on
+# every pull request for reasons unrelated to the change in it. Formatting the
+# tree is a decision to make on purpose, in its own commit, not a thing to
+# smuggle in under a test runner.
+
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  # So the whole set can be exercised on a branch without opening a pull
+  # request for it.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A pull request that is pushed to twice in a minute does not need the first
+# run's answer, and the Rust job is the long pole in this file.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The test suite. ~930 tests, and they run in under a second — the whole cost
+  # of this job is compiling the crate to get to them.
+  rust:
+    # macOS rather than a cheaper Linux runner, for two reasons that are really
+    # one: this crate binds to an audio backend and a webview through the
+    # platform, and on Linux that means apt-installing ALSA and webkit2gtk
+    # before anything compiles. That is a second thing to keep working, and
+    # when it breaks it fails a pull request for a reason that has nothing to
+    # do with the pull request. macOS is also what the app is developed on and
+    # half of what it ships to. The repository is public, so the runner is free
+    # either way.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # A cold build of this crate is twenty minutes of fundsp, chumsky and
+      # symphonia that never change between pull requests.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: swync-app/src-tauri -> target
+
+      # `--locked` is the point of running this on a pull request at all: it
+      # fails if the build would have to edit `Cargo.lock`, which is how the
+      # `windows-core` pin described in `Cargo.toml` gets to stay pinned. A
+      # `cargo update` that quietly floats it breaks only the Windows build,
+      # and only at release time, which is the worst possible moment to find
+      # out.
+      #
+      # The three skips are the three tests that fail on any clone of this
+      # repository, which `swync-app/CLAUDE.md` has said for as long as they
+      # have. `the_example_project_compiles` and
+      # `every_example_compiles_and_realizes` read fixtures from
+      # `swync-app/examples/`, which is not checked in;
+      # `a_program_without_imports_needs_no_folder` reads the checked-in
+      # `src-tauri/patterns.swync` as a module and gets back a program it did
+      # not write.
+      #
+      # They are skipped rather than tolerated, because a suite that is
+      # expected to be three-red is a suite nobody reads. Fixing the two causes
+      # — commit the examples, move that patterns.swync — is a real change and
+      # a separate one; when it happens, delete the skips.
+      - name: Run the Rust test suite
+        working-directory: swync-app/src-tauri
+        run: |
+          cargo test --locked -- \
+            --skip the_example_project_compiles \
+            --skip every_example_compiles_and_realizes \
+            --skip a_program_without_imports_needs_no_folder \
+            | tee "$RUNNER_TEMP/test.log"
+
+          # `--skip` matches a substring of the test's path, so a new test
+          # named near one of those three would be silently skipped by a filter
+          # that was never meant to reach it. Three is the number that is
+          # supposed to disappear; anything else means this list needs looking
+          # at rather than trusting.
+          skipped=$(grep -oE '[0-9]+ filtered out' "$RUNNER_TEMP/test.log" | awk '{ n += $1 } END { print n + 0 }')
+          echo "filtered out: $skipped"
+          [ "$skipped" = 3 ] || {
+            echo "expected the 3 known-failing tests to be filtered out, got $skipped"
+            echo "a test name has moved under the --skip list above"
+            exit 1
+          }
+
+      # `website/src/data/metadata.json` is generated from `lang.rs` by
+      # `npm run reference`, and it is what the docs site renders every
+      # builtin's signature and doc string from. Adding a UGen without
+      # regenerating it means the site is wrong and nothing says so — the app
+      # reads the same table over IPC and looks perfectly fine.
+      #
+      # Here rather than in the website job because this is where the Rust
+      # toolchain and its cache already are.
+      - name: Check the website's language reference is up to date
+        working-directory: swync-app/src-tauri
+        run: |
+          cargo run --locked --quiet --example dump-metadata > "$RUNNER_TEMP/metadata.json"
+          diff -u ../../website/src/data/metadata.json "$RUNNER_TEMP/metadata.json" || {
+            echo
+            echo "lang.rs and the website's reference have diverged."
+            echo "Regenerate it with: cd website && npm run reference"
+            exit 1
+          }
+
+  # `tsc && vite build`. There is no frontend test runner and no linter, so
+  # this is the entire frontend gate — which makes it worth having, since a
+  # type error here otherwise surfaces as a failed release build.
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: swync-app/package-lock.json
+
+      # `npm ci`, not `npm install`: it fails on a lockfile that disagrees with
+      # `package.json` instead of rewriting it, which is the same claim
+      # `--locked` makes on the Rust side.
+      - name: Install dependencies
+        working-directory: swync-app
+        run: npm ci
+
+      - name: Typecheck and build
+        working-directory: swync-app
+        run: npm run build
+
+  # `astro check && astro build`, which is `npm run build` here. `astro check`
+  # is the typecheck, and it covers the `.astro` and `.mdx` files that `tsc`
+  # alone would never look at.
+  website:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Typecheck and build
+        working-directory: website
+        run: npm run build
+
+  # Five manifests carry the version — six places, since `package-lock.json`
+  # records it twice — and a release is wrong the moment they disagree. The
+  # release workflows stamp the tag into all of them before they build, so this
+  # cannot break a release on its own. What it catches is the hand-edited
+  # `package.json` that makes `npm ci` refuse to install, twenty minutes into
+  # somebody else's pull request.
+  versions:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check every manifest agrees on the version
+        run: bash swync-app/scripts/check-version.sh
