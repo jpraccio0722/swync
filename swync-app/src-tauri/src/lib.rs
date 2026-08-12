@@ -944,12 +944,22 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let new_item = MenuItem::with_id(app, MENU_NEW, "New", true, Some("CmdOrCtrl+N"))?;
     let open_item = MenuItem::with_id(app, MENU_OPEN, "Open…", true, Some("CmdOrCtrl+O"))?;
     let save_item = MenuItem::with_id(app, MENU_SAVE, "Save", true, Some("CmdOrCtrl+S"))?;
-    // No accelerators: picking a project is a once-a-session act, and the
-    // obvious shortcuts are all spoken for by the file items above.
-    let new_project_item =
-        MenuItem::with_id(app, MENU_NEW_PROJECT, "New Project…", true, None::<&str>)?;
-    let open_project_item =
-        MenuItem::with_id(app, MENU_OPEN_PROJECT, "Open Project…", true, None::<&str>)?;
+    // The file items above hold the unshifted N and O, so the project pair
+    // takes the shifted ones — the same relationship the two acts have.
+    let new_project_item = MenuItem::with_id(
+        app,
+        MENU_NEW_PROJECT,
+        "New Project…",
+        true,
+        Some("CmdOrCtrl+Shift+N"),
+    )?;
+    let open_project_item = MenuItem::with_id(
+        app,
+        MENU_OPEN_PROJECT,
+        "Open Project…",
+        true,
+        Some("CmdOrCtrl+Shift+O"),
+    )?;
     // Libraries are a rarer act still: installed once and then forgotten about,
     // which is the point of them.
     let install_library_item =
