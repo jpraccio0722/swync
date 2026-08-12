@@ -4,7 +4,8 @@
 # made — by then a mistake is a version people can download. This runs on the
 # pull request instead, and holds the three claims worth making at that point:
 # the Rust suite passes, both TypeScript projects typecheck and build, and the
-# manifests still agree about what version this is.
+# manifests still agree about what version this is. It runs on main too, for a
+# reason about caching that is explained where the trigger is.
 #
 # Deliberately not here: `cargo fmt --check` and clippy. This tree is not
 # rustfmt-clean and has never had a linter, so either one would be a red X on
@@ -17,6 +18,23 @@ name: Tests
 on:
   pull_request:
     branches: [main]
+
+  # On main as well, and the reason is the cache rather than the second
+  # opinion. A run may only restore caches written by its own ref, by the base
+  # branch of its pull request, or by the default branch — and a pull request's
+  # ref is `refs/pull/<n>/merge`, which no other pull request can read. With
+  # this workflow on `pull_request` alone nothing ever wrote a cache into
+  # main's scope, so the second run of any one branch was warm and the first
+  # run of every new branch paid the cold twenty minutes again. It cost pull
+  # request #41 eight minutes to demonstrate.
+  #
+  # A push to main is the one event whose cache every later pull request can
+  # see. That it also answers for the merge commit — which no pull request
+  # check covers, since two branches can each pass alone and fail together — is
+  # worth having, but it is not why this is here.
+  push:
+    branches: [main]
+
   # So the whole set can be exercised on a branch without opening a pull
   # request for it.
   workflow_dispatch:
@@ -28,7 +46,10 @@ permissions:
 # run's answer, and the Rust job is the long pole in this file.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never on main, though. A cancelled job runs no post step, so it saves no
+  # cache — and cancelling main's run is cancelling the thing every pull
+  # request after it was going to restore from.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The test suite. ~930 tests, and they run in under a second — the whole cost
