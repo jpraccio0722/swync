@@ -12,7 +12,7 @@ If we have our time set to 4/4 this represents three quarter notes and two eight
 play([d2, f, g, [e2, bf1]], synth)
 ```
 
-We may feel more comfortable thinking more musically and less mathemtically. There's an option for that:
+We may feel more comfortable thinking more musically and less mathamatically. There's an option for that:
 
 ```swync
 play([d2;q, f, g, e2;e, bf1], synth)
@@ -30,7 +30,7 @@ Here we are using it to indicate a rhythmic value. Below is the current set of u
 | `e` | Eighth | 1/2 | 1/8 | 
 | `s` | Sixteenth | 1/4 | 1/16 |
 
-There is currently no thirthy second notes. 
+There is currently no thirty second notes. 
 
 Like before, the rhythm carries forward.
 
@@ -40,7 +40,7 @@ play([d2;q, f, g, e2;e, bf1], synth)
 So d2, f and g are all quarter notes and bf1 is an eighth note.
 
 
-We can modify rhythms in to ways:
+We can modify rhythms in two ways:
 
 | Marker | Meaning |
 |--------|---------|
@@ -48,7 +48,7 @@ We can modify rhythms in to ways:
 | `;t` | Tuplet. Plays a bracketed group in the next lower power of two — three quarters in the time of two, five eighths in the time of four.
 
 
-Going back to out proportional example, the nested group of three is an eighth note triplet.
+Going back to our proportional example, the nested group of three is an eighth note triplet.
 
 ```swync
 play([d2, f, g, [e2, bf1, g2]], synth)

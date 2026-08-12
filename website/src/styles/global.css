@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 a {
-    @apply text-blue-700 hover:underline dark:text-blue-400;
+    @apply text-sky-500 hover:underline dark:text-blue-400;
 }
 
 /* Prose written as markdown leaves no place to put a class, so the typography
@@ -20,7 +20,7 @@ a {
 }
 
 .chapter :not(pre) > code {
-    @apply text-[0.9em];
+    @apply text-[1em];
 }
 
 /* An entry is a paragraph or three under a signature rather than a page of its
@@ -34,7 +34,7 @@ a {
 .entry h2,
 .entry h3,
 .entry h4 {
-    @apply mt-4 text-[0.95em] font-semibold text-neutral-900 dark:text-neutral-100;
+    @apply mt-4 text-[1em] font-semibold text-neutral-900 dark:text-neutral-100;
 }
 
 .entry ul {
@@ -48,11 +48,11 @@ a {
 /* A shade smaller than a chapter's, because an entry's prose is already set a
    step down and a code span at 0.9em of it starts to crowd the line. */
 .entry :not(pre) > code {
-    @apply text-[0.85em];
+    @apply text-[0.9em];
 }
 
 .prose-swync pre {
-    @apply my-4 overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed dark:border-neutral-800 dark:bg-neutral-900;
+    @apply my-4 overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 leading-relaxed dark:border-neutral-800 dark:bg-neutral-900;
 }
 
 .prose-swync pre code {

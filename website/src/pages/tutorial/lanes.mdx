@@ -15,7 +15,7 @@ play([d2;h, a2], synth)
 ```
 
 What if we wanted to modulate the cutoff. We can modulate it inside the synth easy, but that's only one note. 
-What if we wanted to give each note a different cuttoff value. 
+What if we wanted to give each note a different cutoff value. 
 
 For that we can use lanes. Any parameter can be a lane. In this case we change cutoff by passing it a pattern.
 ```swync
@@ -44,7 +44,7 @@ play([a4;e], synth, fundVol: for i in 1..=16 { 1 * i/16 })
 
 ## Syncing to the beat
 Due to the nature of the language, signals themselves are not part of the lanes. 
-Built are some convinence methods that allow you to sync up to the beat.
+Built are some convenience methods that allow you to sync up to the beat.
 
 Let's give this bass some wobble.
 ```swync

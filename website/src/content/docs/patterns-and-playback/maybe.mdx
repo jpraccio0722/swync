@@ -7,4 +7,7 @@ receives: play
 returns: play
 ---
 
-Play a section with probability `chance` (0 to 1), decided afresh each time round: `playn(groove, drums, 4).maybe(0.25, fill)`. A `wthen` whose other arm is silence — it repeats and rerolls for the same reason, since a coin flipped once is just an `if`. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once.
+Play a section with probability `chance` (0 to 1).
+Maybe decides each iteration:
+
+`playn(groove, drums, 4).maybe(0.25, fill)`.

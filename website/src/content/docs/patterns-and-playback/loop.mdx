@@ -7,4 +7,5 @@ receives: play
 returns: play
 ---
 
-Everything chained so far, `times` times through: `playn(groove, kit, 3).then_fill(roll).loop(4)` is four bars of groove-and-fill. The counterpart to `then_n` — that one names a `fn` and runs it *after* this section, this one takes no section at all because the section it repeats is the chain it is written on. The whole chain has to finish, so bound an endless part with `.take(n)` or `.stop()` first. The passes are copies, so a `rand` inside the chain was already spent and every pass is the same music; `then_n` is the one that draws afresh.
+Loops the entire chain prior to its call n `times`.
+`playn(groove, kit, 3).then_fill(roll).loop(4)` is four bars of groove-and-fill.

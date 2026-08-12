@@ -26,7 +26,7 @@ fn synth(freq) {
 synth(120)
 ```
 
-If you typed this code or hover over a function while holding <kbd>⌘</kbd> or <kbd>Ctrl</kbd> you will notice the tooltip for a lowpass has 3 arguments: audio, cuttoff and q. Yet we only typed two.
+If you typed this code or hover over a function while holding <kbd>⌘</kbd> or <kbd>Ctrl</kbd> you will notice the tooltip for a lowpass has 3 arguments: audio, cutoff and q. Yet we only typed two.
 Using the chaining operator `>>` will route audio from left to right. We could rewrite this like this:
 
 
@@ -83,7 +83,7 @@ synth(80, 10, 0.8)
 ```
 
 Here I added a function parameter for partials, the fundamental's volume, and the filter cutoff; plus an adsr envelope that will shape the sound. 
-Each paramater can give me more control over the sound and make it a more flexble instrument. Play around with the settings and try different [signals](/docs/signals). 
+Each parameter can give me more control over the sound and make it a more flexble instrument. Play around with the settings and try different [signals](/docs/signals). 
 
 You will notice, with the envelope, the sound will stop playing after one second. We will get into patterns next. 
 For now you can hit play again or <kbd>⌘ ,</kbd> to retrigger the sound. There is no need to hit stop. The sound will simply replace the existing one which is silent.

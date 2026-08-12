@@ -167,8 +167,12 @@ We cut off the last beat of the original snare creating a 7 eighth note pattern.
 We then wrap it in a `play_once` and use `.then`. 
 
 `Then` allows us to play a pattern and then follow it with another pattern or patterns. 
-We can chain `.then` infinitely and there are a number of varieties to check out.
+We can chain `.then` infinitely and there are a number of varieties to check out. 
 
+Inside the `then` is another `play_once`. In order to get this to fit in the last eighth and sound nice and machine-gunny, 
+we need to speed this up. The 4 after snare is a the play's rate, an optional value that allows us to speed up a play.
+
+Our `durMod` makes the rapid snare notes sound crisp and not bleed into each other.
 
 ```swync
 fn machineGunSnare() = 
@@ -178,4 +182,21 @@ fn machineGunSnare() =
           durMod: 0.35
       )
   )
+```
+
+We combine this all into its own function
+```swync
+fn fillA() {
+  play_all(
+    kickNoLast(),
+    machineGunSnare(),
+    hatStraightEight(1)
+  )
+}
+```
+
+Then we make a loop using `then` and `loop(n)`.
+
+```swync
+mainGroove(3).then(fillA).loop(4)
 ```

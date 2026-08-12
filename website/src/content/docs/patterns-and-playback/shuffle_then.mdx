@@ -7,4 +7,5 @@ receives: play
 returns: play
 ---
 
-Every section once each, in an order drawn now: `play_once(intro, lead).shuffle_then([verse, chorus, bridge])`. The counterpart to `rthen` rather than a variant of it — a weighted choice may pass a section over for a long time, and this cannot. It settles at eval time like `scramble`, so it has a length and a `.then` may follow it. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once.
+Plays every section in a randomized order: `play_once(intro, lead).shuffle_then([verse, chorus, bridge])`.
+It is evaluated like `scramble`.

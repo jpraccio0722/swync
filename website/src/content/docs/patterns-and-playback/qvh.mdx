@@ -7,4 +7,6 @@ receives: nothing
 returns: number
 ---
 
-The quarter note in hertz — `1 / qvs`, which is 2 at the default 120 bpm. What an oscillator wants: `sin(qvh * 2)` sweeps on the eighth, `sin(qvh / 2)` on the half. Multiplying is what makes it faster here, because this is a rate and not a length. Rate and tempo reach it exactly as they reach `qvs`.
+The quarter note in hertz — `1 / qvs`.
+Use in oscilators: `sin(qvh * 2)`
+

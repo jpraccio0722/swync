@@ -7,4 +7,5 @@ receives: play
 returns: play
 ---
 
-`wthen` with every section equally likely: `playn(intro, lead, 2).rthen([verse, chorus, bridge])`. Rerolls each time round and never finishes, exactly as `wthen` does. Unlike `then`, the sections here must be `fn`s named rather than plays written out: this runs one afresh rather than placing it once.
+Random choice without weighting: `playn(intro, lead, 2).rthen([verse, chorus, bridge])`.
+Rerolls each iteration.

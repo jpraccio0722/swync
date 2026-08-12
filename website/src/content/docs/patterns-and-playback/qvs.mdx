@@ -7,4 +7,5 @@ receives: nothing
 returns: number
 ---
 
-The quarter note in seconds: 0.5 at the default 120 bpm. Anything that takes a length of time can be written in beats with it — `perc(0, qvs / 2)` decays over an eighth, `delay(qvs * 0.75)` is a dotted-eighth delay. Inside a voice it is the beat of the clock that note is played on, so a `play` at rate 2 gives its instrument a beat half as long; in the persistent graph it is the transport's own, fixed at the eval that wrote it.
+The quarter note in seconds.
+Use with lengths: `perc(0, qvs / 2)` or `delay(qvs * 0.75)`
