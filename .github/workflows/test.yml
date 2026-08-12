@@ -78,6 +78,14 @@ jobs:
       - name: Run the Rust test suite
         working-directory: swync-app/src-tauri
         run: |
+          # Without this the step passes while the suite fails, which is the
+          # entire gate quietly doing nothing. A `run:` block with no `shell:`
+          # key gets `bash -e {0}`, and `-e` looks at the last command in a
+          # pipeline — so `cargo test | tee` exits with tee's 0 no matter what
+          # cargo thought. Only `shell: bash` spelled out gets pipefail for
+          # free; taking it here says so where the pipe is.
+          set -o pipefail
+
           cargo test --locked -- \
             --skip the_example_project_compiles \
             --skip every_example_compiles_and_realizes \
@@ -89,7 +97,13 @@ jobs:
           # that was never meant to reach it. Three is the number that is
           # supposed to disappear; anything else means this list needs looking
           # at rather than trusting.
-          skipped=$(grep -oE '[0-9]+ filtered out' "$RUNNER_TEMP/test.log" | awk '{ n += $1 } END { print n + 0 }')
+          #
+          # `|| true` because pipefail is now on and a grep that matches
+          # nothing exits 1, which would fail this step with no output at all
+          # — the one outcome less useful than the wrong count. Nothing matched
+          # means nothing was filtered, so it falls through and says so.
+          skipped=$( { grep -oE '[0-9]+ filtered out' "$RUNNER_TEMP/test.log" || true; } \
+            | awk '{ n += $1 } END { print n + 0 }')
           echo "filtered out: $skipped"
           [ "$skipped" = 3 ] || {
             echo "expected the 3 known-failing tests to be filtered out, got $skipped"
