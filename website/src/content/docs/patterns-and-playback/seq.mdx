@@ -1,0 +1,11 @@
+---
+name: seq
+params: [section]
+arities: [1]
+variadic: true
+receives: section
+returns: play
+---
+
+Plays plays one after another without the nesting: `seq(intro, verse, chorus, verse)`.
+Only plays the next when the previous pattern completes.

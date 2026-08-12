@@ -1,0 +1,12 @@
+---
+name: seed
+params: [seed]
+arities: [1]
+variadic: false
+receives: number
+returns: number
+---
+
+Use a fixed seed for all random values after it is set.
+A voice is lowered per note and does not see a top-level seed,
+so a `seed` inside an instrument pins that instrument identically on every note.

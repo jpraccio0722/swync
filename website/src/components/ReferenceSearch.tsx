@@ -1,28 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-	CATEGORIES,
-	signature,
-	type Builtin,
-	type BuiltinCategory,
-} from "../lib/reference";
+import type { SearchEntry } from "../lib/reference";
 
 interface Props {
-	builtins: Builtin[];
-}
-
-/** The label and URL for a category, by key — the results say which group a
- *  name came out of, since a search reaches across all of them. */
-const LABELS = new Map(CATEGORIES.map((c) => [c.key, c] as const));
-
-/**
- * Everything a search can match: the name, the doc, and the parameter names —
- * `cutoff` should find the filters even though none of them is called that.
- *
- * The same haystack the app's docs panel builds, so a query that works beside
- * the editor works here.
- */
-function haystack(b: Builtin): string {
-	return `${b.name} ${b.params.join(" ")} ${b.doc}`.toLowerCase();
+	/** The whole reference, flattened for matching by `searchEntries` — the
+	 *  signature, the anchor and the haystack are all decided during the build,
+	 *  so nothing that reads a content collection reaches the browser. */
+	entries: SearchEntry[];
 }
 
 /**
@@ -32,35 +15,29 @@ function haystack(b: Builtin): string {
  * someone typing `saw` wants the oscillator first, not the six entries whose
  * descriptions mention a sawtooth.
  */
-function rank(b: Builtin, q: string): number {
-	const name = b.name.toLowerCase();
+function rank(e: SearchEntry, q: string): number {
+	const name = e.name.toLowerCase();
 	if (name === q) return 0;
 	if (name.startsWith(q)) return 1;
 	if (name.includes(q)) return 2;
-	if (b.params.some((p) => p.toLowerCase().includes(q))) return 3;
+	if (e.params.some((p) => p.toLowerCase().includes(q))) return 3;
 	return 4;
 }
 
-export default function ReferenceSearch({ builtins }: Props) {
+export default function ReferenceSearch({ entries }: Props) {
 	const [query, setQuery] = useState("");
 	const [active, setActive] = useState(0);
 	const input = useRef<HTMLInputElement>(null);
 	const listbox = useRef<HTMLUListElement>(null);
 
-	const searchable = useMemo(
-		() => builtins.map((b) => ({ builtin: b, text: haystack(b) })),
-		[builtins],
-	);
-
 	const results = useMemo(() => {
 		const q = query.trim().toLowerCase();
 		if (q === "") return [];
-		return searchable
-			.filter((s) => s.text.includes(q))
-			.map((s) => s.builtin)
+		return entries
+			.filter((e) => e.text.includes(q))
 			.sort((a, b) => rank(a, q) - rank(b, q) || a.name.localeCompare(b.name))
 			.slice(0, 40);
-	}, [searchable, query]);
+	}, [entries, query]);
 
 	// A new query is a new list, and the selection belongs to the list rather
 	// than to the box — leaving it where it was points at an unrelated row.
@@ -92,9 +69,8 @@ export default function ReferenceSearch({ builtins }: Props) {
 			?.scrollIntoView({ block: "nearest" });
 	}, [active]);
 
-	function go(b: Builtin) {
-		const category = LABELS.get(b.category);
-		window.location.href = `/docs/${category?.slug ?? b.category}/#${b.name}`;
+	function go(e: SearchEntry) {
+		window.location.href = e.href;
 	}
 
 	function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -164,31 +140,26 @@ export default function ReferenceSearch({ builtins }: Props) {
 							role="listbox"
 							className="max-h-80 overflow-y-auto py-1"
 						>
-							{results.map((b, i) => {
-								const category = LABELS.get(b.category as BuiltinCategory);
-								return (
-									<li key={b.name} role="option" aria-selected={i === active}>
-										<a
-											href={`/docs/${category?.slug ?? b.category}/#${b.name}`}
-											data-active={i === active}
-											onMouseEnter={() => setActive(i)}
-											className={
-												"flex items-baseline gap-3 px-3 py-1.5 " +
-												(i === active
-													? "bg-neutral-100 dark:bg-neutral-800"
-													: "")
-											}
-										>
-											<span className="font-mono text-sm text-blue-700 dark:text-blue-400">
-												{signature(b)}
-											</span>
-											<span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-neutral-500">
-												{category?.label}
-											</span>
-										</a>
-									</li>
-								);
-							})}
+							{results.map((e, i) => (
+								<li key={e.name} role="option" aria-selected={i === active}>
+									<a
+										href={e.href}
+										data-active={i === active}
+										onMouseEnter={() => setActive(i)}
+										className={
+											"flex items-baseline gap-3 px-3 py-1.5 " +
+											(i === active ? "bg-neutral-100 dark:bg-neutral-800" : "")
+										}
+									>
+										<span className="font-mono text-sm text-blue-700 dark:text-blue-400">
+											{e.signature}
+										</span>
+										<span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-neutral-500">
+											{e.category}
+										</span>
+									</a>
+								</li>
+							))}
 						</ul>
 					)}
 				</div>

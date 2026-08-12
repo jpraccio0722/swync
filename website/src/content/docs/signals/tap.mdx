@@ -1,0 +1,14 @@
+---
+name: tap
+params: [signal, delay, min_delay, max_delay]
+arities: [4]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Tapped delay line with cubic interpolation.
+Unlike `delay`,
+the delay time is a signal,
+so it can be modulated. It must stay within the constant `min_delay`..=`max_delay` bounds,
+in seconds.

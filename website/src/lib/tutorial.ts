@@ -39,7 +39,7 @@ export const TUTORIAL: TutorialPage[] = [
 	{
 		slug: "rhythm-basics",
 		title: "Rhythm Basics",
-		blurb: "I got rhythm, I got propotional representation, who can ask for anything more?",
+		blurb: "I got rhythm, I got proportional representation, who can ask for anything more?",
 	},
 	{
 		slug: "rhythm-notation",
@@ -55,6 +55,21 @@ export const TUTORIAL: TutorialPage[] = [
 		slug: "lanes",
 		title: "Lanes",
 		blurb: "Making sounds that live more interesting lives",
+	},
+	{
+		slug: "play-arrange",
+		title: "Simple arrangment",
+		blurb: "Arranging our work into a song",
+	},
+	{
+		slug: "chords",
+		title: "Chords and polyphony",
+		blurb: "Simultaneity and polyphony within voices",
+	},
+	{
+		slug: "samples",
+		title: "Sampling",
+		blurb: "Amen",
 	},
 ];
 

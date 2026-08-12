@@ -33,7 +33,7 @@ At it's most basic we only need to pass play a pattern and function that generat
 play([80, 80, 80, 80], synth)
 ```
 
-Ok, that was meh. The releases are fixed times and the decay is one second long, so the audio simply builds up and we don't hear individual notes.
+Ok, that was meh. The releases are fixed times, so the audio simply builds up and we don't hear individual notes.
 
 To change this, we need to change the synth and use one of the builtin variables that a function has access to: [dur](/docs/patterns-and-playback/#dur)
 This function allows an instrument to know the duration of its call in context of the pattern. 

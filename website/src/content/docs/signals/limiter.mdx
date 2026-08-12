@@ -1,0 +1,13 @@
+---
+name: limiter
+params: [signal, attack, release]
+arities: [3]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Look-ahead limiter holding the signal to -1..=1.
+Look-ahead equals the attack time.
+Times are constants,
+in seconds.

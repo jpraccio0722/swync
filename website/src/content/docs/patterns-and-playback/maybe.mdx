@@ -1,0 +1,13 @@
+---
+name: maybe
+params: [play, chance, section]
+arities: [3]
+variadic: false
+receives: play
+returns: play
+---
+
+Play a section with probability `chance` (0 to 1).
+Maybe decides each iteration:
+
+`playn(groove, drums, 4).maybe(0.25, fill)`.

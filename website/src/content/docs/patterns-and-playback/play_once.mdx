@@ -1,0 +1,11 @@
+---
+name: play_once
+params: [pattern, instrument, rate]
+arities: [2, 3]
+variadic: false
+receives: pattern
+returns: play
+---
+
+`play`,
+stopping after one pass of the pattern: `[60, 64, 67] >> play_once(stab)`.

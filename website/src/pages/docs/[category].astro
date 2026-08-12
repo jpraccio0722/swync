@@ -1,24 +1,33 @@
 ---
 import type { GetStaticPaths } from "astro";
+import { render } from "astro:content";
 import DocsLayout from "../../layouts/DocsLayout.astro";
 import Entry from "../../components/Entry.astro";
-import { CATEGORIES, membersOf } from "../../lib/reference";
+import { categories, membersOf } from "../../lib/reference";
 
-/** One page per category, straight off the table — a category added in Rust
+/** One page per category file — a category added under `src/content/docs/`
  *  becomes a page here with nothing to remember. */
-export const getStaticPaths = (() =>
-	CATEGORIES.map((category) => ({
-		params: { category: category.slug },
-		props: { category, members: membersOf(category.key) },
-	}))) satisfies GetStaticPaths;
+export const getStaticPaths = (async () => {
+	const all = await categories();
+	return Promise.all(
+		all.map(async (category) => ({
+			params: { category: category.id },
+			props: { category, members: await membersOf(category.id) },
+		})),
+	);
+}) satisfies GetStaticPaths;
 
 const { category, members } = Astro.props;
+
+/** The category file's body: an optional introduction, above the names. Most
+ *  are empty, and an empty one renders nothing. */
+const { Content } = await render(category);
 ---
 
 <DocsLayout
-	title={category.label}
-	description={category.blurb}
-	current={category.slug}
+	title={category.data.label}
+	description={category.data.blurb}
+	current={category.id}
 >
 	<header class="mb-6">
 		{/* The way back, in the place the eyebrow label was already occupying.
@@ -27,30 +36,33 @@ const { category, members } = Astro.props;
 		    than something the layout only shows on wide screens. */}
 		<a
 			href="/docs/"
-			class="group inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-500 transition-colors hover:text-neutral-900 dark:hover:text-neutral-100"
+			class="group inline-flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-neutral-500 transition-colors hover:text-neutral-900 dark:hover:text-neutral-100"
 		>
 			<span aria-hidden="true" class="transition-transform group-hover:-translate-x-0.5">←</span>
 			Function Reference
 		</a>
-		<h1 class="mt-1 text-3xl font-semibold tracking-tight">{category.label}</h1>
+		<h1 class="mt-1 text-3xl font-semibold tracking-tight">{category.data.label}</h1>
 		<p class="mt-2 max-w-2xl text-neutral-600 dark:text-neutral-400">
-			{category.blurb}
+			{category.data.blurb}
 		</p>
+		<div class="entry prose-swync mt-4 max-w-2xl text-neutral-600 dark:text-neutral-400">
+			<Content />
+		</div>
 	</header>
 
 	{/* Alphabetical, like the panel: over a hundred names across the reference,
 	    and a reader who arrives knowing the name should not have to read prose
 	    to find it. */}
-	<nav aria-label={`${category.label} names`} class="mb-8">
+	<nav aria-label={`${category.data.label} names`} class="mb-8">
 		<ul class="flex flex-wrap gap-x-3 gap-y-1">
 			{
 				members.map((b) => (
 					<li>
 						<a
-							href={`#${b.name}`}
-							class="font-mono text-xs text-neutral-600 hover:text-blue-700 dark:text-neutral-400 dark:hover:text-blue-400"
+							href={`#${b.data.name}`}
+							class="font-mono text-sm text-neutral-600 hover:text-blue-700 dark:text-neutral-400 dark:hover:text-blue-400"
 						>
-							{b.name}
+							{b.data.name}
 						</a>
 					</li>
 				))
@@ -64,7 +76,7 @@ const { category, members } = Astro.props;
 
 	<p class="mt-10 text-sm text-neutral-500">
 		{members.length}
-		{members.length === 1 ? "name" : "names"} in {category.label}. <a
+		{members.length === 1 ? "name" : "names"} in {category.data.label}. <a
 			href="/docs/"
 			class="text-blue-700 hover:underline dark:text-blue-400">All categories</a
 		>.

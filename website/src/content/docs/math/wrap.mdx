@@ -1,0 +1,12 @@
+---
+name: wrap
+params: [x, lo, hi]
+arities: [3]
+variadic: false
+receives: number
+returns: number
+---
+
+Fold a number back into `lo..hi`,
+wrapping around rather than clamping.
+Useful for modular pitch.

@@ -1,0 +1,12 @@
+---
+name: afollow
+params: [signal, attack, release]
+arities: [3]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Asymmetric parameter follower.
+Smooths rising segments over `attack` and falling ones over `release` (halfway response times,
+in seconds).

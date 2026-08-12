@@ -1,0 +1,32 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: chords
+---
+
+Up until now we can play simultaneous sounds by stacking plays. We can make chords happen in a single play using `stack`.
+
+How about a nice minor organ chord?
+
+```swync
+fn myOrgan(n) {
+  organ(n.m2h) * env(0.01, 0.2, 0.7, 0.2, dur*0.9)
+}
+
+play([stack([a2;w], [e2;w], [c3;w])], myOrgan)
+```
+
+In a stack, each indivdual pattern is stacked together. This also means using a single play, you can have multiple independent voices (polyphony).
+
+```swync
+ play([stack([a2;w], [e2;w], [d3;h, c3])], myOrgan)
+```
+
+You can also stack stacks
+
+```swync
+play([
+  stack([a2;w], [e2;w], 
+  stack([d3;h, c3], [fs3;h, e3]))], 
+  myOrgan
+)
+```

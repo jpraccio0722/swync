@@ -1,0 +1,16 @@
+---
+name: accel
+params: [from, to, bars]
+arities: [3]
+variadic: false
+receives: number
+returns: rate
+---
+
+Accelerates a play's rate `from` to `to` over `bars` bars.
+Holds at `to` upon completion.
+
+Use in the rate parameter of `play` — `play(riff, lead, accel(1, 2, 4))`.
+
+A `to` less than from `from` slows down — `play(riff, lead, accel(2, 1, 4))`
+Both rates must be above zero: at zero the pattern would stop rather than slow.

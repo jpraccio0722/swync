@@ -1,0 +1,16 @@
+---
+name: quantize
+params: [play, grid]
+arities: [1, 2]
+variadic: false
+receives: play
+returns: play
+---
+
+Round where a chain of plays has reached up to a multiple of `grid` bars,
+without touching what is already playing: `playn(pat, inst, 3, 2).quantize().then(chorus)`.
+
+`grid` defaults to 1.
+
+Useful when a section's length is not a whole number of bars.
+

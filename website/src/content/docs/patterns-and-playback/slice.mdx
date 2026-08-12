@@ -1,0 +1,16 @@
+---
+name: slice
+params: [buffer, start, end, rate, channel]
+arities: [3, 4, 5]
+variadic: false
+receives: buffer
+returns: signal
+---
+
+Read a portion of a buffer, once: `slice(amen, 0, 0.25)`.
+
+`start` and `end` are between 0 and 1.
+
+`start` past `end` plays that portion backwards.
+
+`rate` defaults to 1.

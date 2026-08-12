@@ -1,11 +1,16 @@
 @import "tailwindcss";
 
 a {
-    @apply text-blue-700 hover:underline dark:text-blue-400;
+    @apply text-sky-500 hover:underline dark:text-blue-400;
 }
 
-/* A tutorial chapter is MDX: prose written as markdown, which leaves no place
-   to put a class. These are the classes the chapters used to carry inline. */
+/* Prose written as markdown leaves no place to put a class, so the typography
+   is here instead. `.prose-swync` is what a tutorial chapter and a reference
+   entry have in common — code, fences, colours, tables — and `.chapter` and
+   `.entry` below are what each of them wants on top of it. Both carry both
+   classes; an example written in an entry is therefore coloured exactly as one
+   written in the tutorial, which is the point of splitting them. */
+
 .chapter {
     @apply max-w-2xl space-y-4 leading-relaxed text-neutral-700 dark:text-neutral-300;
 }
@@ -14,11 +19,43 @@ a {
     @apply pt-2 text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-100;
 }
 
-.chapter pre {
-    @apply my-4 overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed dark:border-neutral-800 dark:bg-neutral-900;
+.chapter :not(pre) > code {
+    @apply text-[1em];
 }
 
-.chapter pre code {
+/* An entry is a paragraph or three under a signature rather than a page of its
+   own, so it sets no colour and no measure — it inherits the ones the entry's
+   markup already chose — and only spaces what it holds. A heading inside one
+   sits below the `h3` the signature is. */
+.entry > * + * {
+    @apply mt-3;
+}
+
+.entry h2,
+.entry h3,
+.entry h4 {
+    @apply mt-4 text-[1em] font-semibold text-neutral-900 dark:text-neutral-100;
+}
+
+.entry ul {
+    @apply list-disc space-y-1 pl-5;
+}
+
+.entry ol {
+    @apply list-decimal space-y-1 pl-5;
+}
+
+/* A shade smaller than a chapter's, because an entry's prose is already set a
+   step down and a code span at 0.9em of it starts to crowd the line. */
+.entry :not(pre) > code {
+    @apply text-[0.9em];
+}
+
+.prose-swync pre {
+    @apply my-4 overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 leading-relaxed dark:border-neutral-800 dark:bg-neutral-900;
+}
+
+.prose-swync pre code {
     @apply font-mono text-neutral-800 dark:text-neutral-200;
 }
 
@@ -42,49 +79,49 @@ a {
 /* Grey, but a step up from the editor's in the dark: #6b7280 on this
    background is 3.7:1, and a chapter's comments are the prose of the example
    rather than something to skim past. */
-.chapter .tok-comment {
+.prose-swync .tok-comment {
     @apply italic text-gray-500 dark:text-gray-400;
 }
 
-.chapter .tok-number {
+.prose-swync .tok-number {
     @apply text-fuchsia-700 dark:text-fuchsia-300;
 }
 
-.chapter .tok-string {
+.prose-swync .tok-string {
     @apply text-green-700 dark:text-green-300;
 }
 
-.chapter .tok-keyword {
+.prose-swync .tok-keyword {
     @apply text-purple-700 dark:text-purple-400;
 }
 
-.chapter .tok-builtin {
+.prose-swync .tok-builtin {
     @apply text-teal-700 dark:text-teal-300;
 }
 
-.chapter .tok-note {
+.prose-swync .tok-note {
     @apply text-rose-700 dark:text-rose-300;
 }
 
-.chapter .tok-duration {
+.prose-swync .tok-duration {
     @apply text-amber-700 dark:text-amber-400;
 }
 
-.chapter .tok-fn {
+.prose-swync .tok-fn {
     @apply text-blue-700 dark:text-blue-300;
 }
 
-.chapter .tok-def {
+.prose-swync .tok-def {
     @apply text-yellow-700 dark:text-amber-300;
 }
 
-.chapter .tok-variable {
+.prose-swync .tok-variable {
     @apply text-gray-800 dark:text-gray-200;
 }
 
 /* Warm for silence, cool-bright for a hit: the pair has to be separable at a
    glance inside a dense pattern like `[\, `, \, [\, \]]`. */
-.chapter .tok-rest {
+.prose-swync .tok-rest {
     @apply font-bold text-orange-700 dark:text-orange-400;
 }
 
@@ -92,32 +129,33 @@ a {
    be: the editor's green-400 lands at 3.5:1 on this background, and a trigger
    is a single character — the one glyph on the page that cannot afford to be
    faint. */
-.chapter .tok-trigger {
+.prose-swync .tok-trigger {
     @apply font-bold text-emerald-700 dark:text-green-400;
 }
 
-.chapter .tok-operator,
-.chapter .tok-punct {
+.prose-swync .tok-operator,
+.prose-swync .tok-punct {
     @apply text-slate-500 dark:text-slate-400;
 }
 
-/* Backticks in the prose, as against a fenced block. */
-.chapter :not(pre) > code {
-    @apply rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.9em] text-neutral-800 dark:bg-neutral-800/70 dark:text-neutral-200;
+/* Backticks in the prose, as against a fenced block. The size is left to
+   `.chapter` and `.entry`, which are set at different sizes themselves. */
+.prose-swync :not(pre) > code {
+    @apply rounded bg-neutral-100 px-1 py-0.5 font-mono text-neutral-800 dark:bg-neutral-800/70 dark:text-neutral-200;
 }
 
-.chapter kbd {
+.prose-swync kbd {
     @apply rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 font-mono text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300;
 }
 
-.chapter table {
+.prose-swync table {
     @apply my-4 w-full border-collapse text-sm;
 }
 
-.chapter th {
+.prose-swync th {
     @apply border-b border-neutral-300 px-3 py-2 text-left font-semibold text-neutral-900 dark:border-neutral-700 dark:text-neutral-100;
 }
 
-.chapter td {
+.prose-swync td {
     @apply border-b border-neutral-200 px-3 py-2 dark:border-neutral-800;
 }

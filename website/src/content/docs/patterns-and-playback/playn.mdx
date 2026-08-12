@@ -1,0 +1,12 @@
+---
+name: playn
+params: [pattern, instrument, times, rate]
+arities: [3, 4]
+variadic: false
+receives: pattern
+returns: play
+---
+
+`play`,
+stopping after `times` passes of the pattern: `playn([220, 330], bass, 4)`.
+Lanes work as they do on `play`.

@@ -1,0 +1,11 @@
+---
+name: then_fill
+params: [play, pattern, rate]
+arities: [2, 3]
+variadic: false
+receives: play
+returns: play
+---
+
+A fill is played by the play it chains from: `playn(groove, drums, 4).then_fill([1, 1, 1, 1])`.
+The instrument and every lane are inherited and only the pattern is new.

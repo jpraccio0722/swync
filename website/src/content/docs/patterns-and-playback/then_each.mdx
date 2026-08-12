@@ -1,0 +1,13 @@
+---
+name: then_each
+params: [play, list, body]
+arities: [3]
+variadic: false
+receives: play
+returns: play
+---
+
+One pass of the section per element of the list, in sequence,
+with the element from the list passed in: `play_once(intro, lead).then_each([1, 2, 4], faster)` calls `faster(1)`,
+then `faster(2)`,
+then `faster(4)`.

@@ -1,0 +1,11 @@
+---
+name: poly_pulse
+params: [frequency, width]
+arities: [2]
+variadic: false
+receives: signal
+returns: signal
+---
+
+PolyBLEP pulse wave.
+Fast and fairly bandlimited; `width` in 0..=1 is the duty cycle.

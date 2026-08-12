@@ -1,0 +1,11 @@
+---
+name: shuffle_then
+params: [play, sections]
+arities: [2]
+variadic: false
+receives: play
+returns: play
+---
+
+Plays every section in a randomized order: `play_once(intro, lead).shuffle_then([verse, chorus, bridge])`.
+It is evaluated like `scramble`.

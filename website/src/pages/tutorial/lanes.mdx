@@ -2,3 +2,79 @@
 layout: ../../layouts/Chapter.astro
 slug: lanes
 ---
+
+Let's go back to our bass.
+```swync
+fn synth(freq, partials=3, fundVol=1, cutoff=120) {
+  let sig = for i in 1..=partials { saw(freq * i) * fundVol/i } * 
+      env(0.01, 0.1, 0.8, 0.1, dur*0.8)
+  sig >> lowpass(cutoff, 0.5)
+}
+
+play([d2;h, a2], synth)
+```
+
+What if we wanted to modulate the cutoff. We can modulate it inside the synth easy, but that's only one note. 
+What if we wanted to give each note a different cutoff value. 
+
+For that we can use lanes. Any parameter can be a lane. In this case we change cutoff by passing it a pattern.
+```swync
+play([d2;h, a2], synth, cutoff: [180, 90])
+```
+
+A lane's pattern can be longer than the main pattern.
+```swync
+play([d2;h, a2], synth, cutoff: [180, 120, 80, 20])
+```
+
+The pattern will play twice and each note will have a different cutoff.
+
+You can make this more interesting with a for loop since they will return a pattern. 
+The following creates a cutoff that goes from 120 to 0.
+
+```swync
+play([d2;h, a2], synth, cutoff: for i in 1..=16 { 120 * (16-i)/16 })
+```
+
+Here's a simple crescendo.
+
+```swync
+play([a4;e], synth, fundVol: for i in 1..=16 { 1 * i/16 })
+```
+
+## Syncing to the beat
+Due to the nature of the language, signals themselves are not part of the lanes. 
+Built are some convenience methods that allow you to sync up to the beat.
+
+Let's give this bass some wobble.
+```swync
+fn synth(freq, partials=3, fundVol=1, cutoff=120) {
+  let sig = for i in 1..=partials { saw(freq * i) * fundVol/i } * 
+      env(0.1, 0.1, 0.8, 0.1, dur*0.8)
+  sig >> lowpass(cutoff * sin(3) + (cutoff + 40), 0.8)
+}
+
+play([e3;h], synth, partials: 5, fundVol: 0.5)
+```
+
+Here's a hardcoded modulation `sin(3)` on the cutoff.
+No matter what tempo we choose, this modulation will always be three hertz (3 cycles per second).
+Let's make it a quarter note triplet in every tempo.
+
+`qvh` is a global value that will give us the hertz value of a quarter note. So we can rewrite `sin(3)` as `sin(qvh*1.5)`
+
+Now if we change the tempo, the rhythm will always be a quarter note triplet in the tempo.
+
+Combine this with lanes and I can mess around with this wobble in some absurd ways
+
+```swync
+fn synth(freq, partials=3, fundVol=1, cutoff=120, wobbleTime=1.5) {
+  let sig = for i in 1..=partials { saw(freq * i) * fundVol/i } * 
+      env(0.1, 0.1, 0.8, 0.1, dur*0.8)
+  sig >> lowpass(cutoff * 
+      sin(qvh*wobbleTime) + (cutoff + 40), 0.8)
+}
+
+play([e3;h], synth, partials: 5, 
+    fundVol: 0.5, wobbleTime: [1.5, 4, 1.25, 6, 3])
+```

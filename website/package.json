@@ -10,7 +10,9 @@
     "build": "astro check && astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "reference": "cd ../swync-app/src-tauri && cargo run --quiet --example dump-metadata > ../../website/src/data/metadata.json",
+    "reference": "npm run reference:dump && npm run reference:sync",
+    "reference:dump": "cd ../swync-app/src-tauri && cargo run --quiet --example dump-metadata > ../../website/src/data/metadata.json",
+    "reference:sync": "node scripts/sync-reference.mjs",
     "astro": "astro"
   },
   "dependencies": {

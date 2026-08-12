@@ -1,0 +1,11 @@
+---
+name: loop
+params: [play, times]
+arities: [2]
+variadic: false
+receives: play
+returns: play
+---
+
+Loops the entire chain prior to its call n `times`.
+`playn(groove, kit, 3).then_fill(roll).loop(4)` is four bars of groove-and-fill.

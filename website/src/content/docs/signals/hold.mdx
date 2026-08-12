@@ -1,0 +1,11 @@
+---
+name: hold
+params: [signal, frequency, variability]
+arities: [3]
+variadic: false
+receives: signal
+returns: signal
+---
+
+Sample-and-hold.
+Samples the signal at `frequency` Hz; `variability` in 0..=1 jitters the sampling interval and is a constant.

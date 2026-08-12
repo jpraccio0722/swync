@@ -1,0 +1,21 @@
+---
+name: play
+params: [pattern, instrument, rate]
+arities: [2, 3]
+variadic: false
+receives: pattern
+returns: play
+---
+
+Schedule a pattern on an instrument: `pat >> play(kick)`.
+The instrument must name a user `fn`.
+
+`rate` defaults to 1.
+
+Any further function parameter is added as a lane — `play(bass, cut: [400, 2000])` 
+lane's values are sampled at each note's onset.
+
+Two names are reserved and reach the note rather than the instrument: `legato:` scales its length,
+and `pan:` places it across the stereo field from -1 (left) through 0 (centre) to 1 (right).
+
+All children of `play` follow the same conventions.

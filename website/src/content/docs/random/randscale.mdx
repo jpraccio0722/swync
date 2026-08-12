@@ -1,0 +1,12 @@
+---
+name: randscale
+params: [count, scale, lo, hi]
+arities: [2, 4]
+variadic: false
+receives: number
+returns: list
+---
+
+`count` notes drawn evenly from the tones of a scale given as semitone offsets within an octave between MIDI `lo` and `hi` (60..72 by default).
+Unlike snapping a uniform draw with `scale`,
+every degree is equally likely and nothing lands outside the range: `randscale(8, [0, 3, 5, 7, 10], 48, 72)` is a pentatonic riff over two octaves.

@@ -1,0 +1,202 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: play-arrange
+---
+
+Remember our kick and hat
+
+```swync
+fn kick() {
+  let sweep = 50 + 150 * perc(0.001, 0.05)
+  let click = noise() * perc(0.001, 0.006)
+  sin(sweep) * perc(0.002, 0.4) * 0.9 + click * 0.1
+}
+
+fn hat() = noise() * perc(0.001, 0.025) * 0.25 >> highpass(7000, 0.7)
+
+
+play([\;q, `, \, `], kick)
+play([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], hat)
+```
+
+This will play our one loop over and over. 
+
+Boring.
+
+Let's actually build up an arrangement.
+
+First, we can add a snare and make some changes to add some volume control over the synths.
+
+```swync
+fn kick(t, vol=0.8) {
+  let sweep = 50 + 150 * perc(0.001, 0.05)
+  let click = noise() * perc(0.001, 0.006)
+  sin(sweep) * perc(0.002, 0.4) * vol + click * 0.1
+}
+
+fn hat(t, vol=0.25) {
+  noise() * perc(0.001, 0.025) * vol >> highpass(7000, 0.7)
+}
+
+fn snare(t, vol=0.6) {
+  let body = sin(190) * perc(0.001, 0.12) * 0.4
+  let crack = noise() * perc(0.001, 0.14) >> highpass(1800, 0.8)
+  (body + crack * 0.7) * vol
+}
+
+play([\;e, `, `, \, `, `, \, `], kick, vol: 0.5)
+play([`;e, `, \, `, `, \, `, `], snare, vol: 0.5)
+play([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], 
+   hat, vol: for i in 1..=16 { rand(0.1, 0.25) })
+```
+
+A bit more interesting with a full kit.
+Notice that we added a first argument that isn't used. 
+This is required since we are actually sending the trigger or note to the function. 
+Our volume needs to be the second argument. 
+
+To make the hats a little more dynamic, we can randomize the volume. 
+The for loop generates a pattern of 16 numbers. This only happens once and isn't reevaluated. 
+This is a limitation of the interpreter at the moment.
+
+We could just write a bunch of plays and trigger them ourselves. But swync includes some powerful arrangement tools.
+
+How you structure any arrangement is up to you. There are lots of ways to do so and not one is the "right" way.
+
+```swync
+fn mainKick(times) = playn([\;e, `, `, \, `, `, \, `], kick, times, vol: 0.5)
+fn mainSnare(times) = playn([`;e, `, \, `, `, \, `, `], snare, times, vol: 0.5)
+fn hatSixEnd(times) = playn([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], hat, times, 
+    vol: for i in 1..=16 { rand(0.1, 0.25) })
+
+fn mainGroove(times) {
+  play_all(
+    mainKick(times),
+    mainSnare(times),
+    hatSixEnd(times)
+  )
+}
+
+mainGroove(4)
+```
+
+Wrapping plays in functions makes it easy for us to change individual elements and reuse elements throughout.
+We create a set of functions for each element and convert the `play` from before into `playn`. 
+This allows us to control how many times something plays.
+
+Then we create a function `mainGroove` that takes an argument of times and passes it to each element's function. 
+As you may have heard, the above will play the patterns 4 times then stop.
+
+Great, now lets add a fill. Below is the complete source code, we will walk through each relevant change.
+
+```swync
+fn kick(t, vol=0.8) = {
+  let sweep = 50 + 150 * perc(0.001, 0.05)
+  let click = noise() * perc(0.001, 0.006)
+  sin(sweep) * perc(0.002, 0.4) * vol + click * 0.1
+}
+
+fn hat(t, vol=0.25) = {
+  noise() * perc(0.001, 0.025) * vol >> highpass(7000, 0.7)
+}
+
+fn snare(t, vol=0.6, durMod=1) = {
+  let body = sin(190) * perc(0.001, 0.12 * durMod) * 0.4
+  let crack = noise() * perc(0.001, 0.14 * durMod) >> highpass(1800, 0.8)
+  (body + crack * 0.7) * vol
+}
+
+fn mainKick(times) = playn([\;e, `, `, \, `, `, \, `], kick, times, vol: 0.5)
+fn kickNoLast() = play_once([\;e, `, `, \, `, `, `, `], kick, vol: 0.5)
+
+fn mainSnare(times) = playn([`;e, `, \, `, `, \, `, `], snare, times, vol: 0.5)
+fn machineGunSnare() = 
+  play_once([`;e, `, \, `, `, `, `], snare, vol: 0.5).then(
+      play_once([[\;s, \, \, \, \, \];t], snare, 4, 
+          vol: for i in 1..=6 { i/6 * 0.5 },
+          durMod: 0.35
+      )
+  )
+
+fn hatSixEnd(times) = playn([\;e, \, \, \, \, \, [\;s,\,\,\,\,\];t], hat, times, 
+    vol: for i in 1..=16 { rand(0.1, 0.25) })
+fn hatStraightEight(times) = playn([\;e, \, \, \, \, \, \, \], hat, times, 
+    vol: for i in 1..=16 { rand(0.1, 0.25) })
+    
+
+fn mainGroove(times) {
+  play_all(
+    mainKick(times),
+    mainSnare(times),
+    hatSixEnd(times)
+  )
+}
+
+fn fillA() {
+  play_all(
+    kickNoLast(),
+    machineGunSnare(),
+    hatStraightEight(1)
+  )
+}
+
+mainGroove(3).then(fillA).loop(4)
+```
+
+First we added a duration mod to the snare so I can create a machine gun like effect
+
+```swync 
+fn snare(t, vol=0.6, durMod=1) = {
+  let body = sin(190) * perc(0.001, 0.12 * durMod) * 0.4
+  let crack = noise() * perc(0.001, 0.14 * durMod) >> highpass(1800, 0.8)
+  (body + crack * 0.7) * vol
+}
+```
+
+Next we have a new kick and hat to make the fill work. 
+Since the kick is really only going to be used for once offs, we can change it to a `play_once`.
+
+```swync
+fn kickNoLast() = play_once([\;e, `, `, \, `, `, `, `], kick, vol: 0.5)
+fn hatStraightEight(times) = playn([\;e, \, \, \, \, \, \, \], hat, times, 
+    vol: for i in 1..=16 { rand(0.1, 0.25) })
+```
+
+Now our new snare for the fill is more complex. 
+We cut off the last beat of the original snare creating a 7 eighth note pattern.
+We then wrap it in a `play_once` and use `.then`. 
+
+`Then` allows us to play a pattern and then follow it with another pattern or patterns. 
+We can chain `.then` infinitely and there are a number of varieties to check out. 
+
+Inside the `then` is another `play_once`. In order to get this to fit in the last eighth and sound nice and machine-gunny, 
+we need to speed this up. The 4 after snare is a the play's rate, an optional value that allows us to speed up a play.
+
+Our `durMod` makes the rapid snare notes sound crisp and not bleed into each other.
+
+```swync
+fn machineGunSnare() = 
+  play_once([`;e, `, \, `, `, `, `], snare, vol: 0.5).then(
+      play_once([[\;s, \, \, \, \, \];t], snare, 4, 
+          vol: for i in 1..=6 { i/6 * 0.5 },
+          durMod: 0.35
+      )
+  )
+```
+
+We combine this all into its own function
+```swync
+fn fillA() {
+  play_all(
+    kickNoLast(),
+    machineGunSnare(),
+    hatStraightEight(1)
+  )
+}
+```
+
+Then we make a loop using `then` and `loop(n)`.
+
+```swync
+mainGroove(3).then(fillA).loop(4)
+```

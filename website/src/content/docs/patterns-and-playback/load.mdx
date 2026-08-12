@@ -1,0 +1,16 @@
+---
+name: load
+params: [path]
+arities: [1]
+variadic: false
+receives: text
+returns: buffer
+---
+
+Read an audio file into a buffer: `let amen = load("breaks/amen.wav")`.
+The path is relative to the file it is written in.
+
+Any format symphonia reads: wav,
+mp3,
+flac,
+ogg.

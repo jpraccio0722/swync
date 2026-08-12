@@ -1,0 +1,13 @@
+---
+name: dot
+params: [value, dots]
+arities: [1, 2]
+variadic: false
+receives: duration
+returns: duration
+---
+
+Dot a written note value: `q.dot` is a dotted quarter,
+a quarter and an eighth.
+`dots` defaults to 1; `q.dot(2)` is the doubly-dotted quarter.
+Can be chained as well `q.dot.dot`.
