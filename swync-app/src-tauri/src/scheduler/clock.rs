@@ -138,11 +138,39 @@ struct Tempo {
 /// The origin exists because the frame counter cannot be zeroed: it is what
 /// stays aligned with the sequencer's own internal clock, and rewinding it
 /// would put every scheduled start time in the past.
+/// How the frame counter is read as seconds.
+///
+/// Not simply a rate, because the rate can change: the output device can be
+/// moved to one that runs at 44.1 kHz when the last ran at 48, and dividing
+/// the whole accumulated count by the new rate would jump audio time by
+/// minutes — every pattern in the piece leaping to a different bar. So the
+/// rate is anchored: seconds are counted from a base, and a rate change fixes
+/// the base at the present so that only the frames *after* it are counted at
+/// the new rate.
+#[derive(Clone, Copy)]
+struct Rate {
+    sample_rate: f64,
+    /// The frame count when this rate came into force.
+    base_frames: u64,
+    /// The audio time at that frame, in the rates that came before it.
+    base_secs: f64,
+}
+
+impl Rate {
+    fn secs_at(&self, frames: u64) -> f64 {
+        self.base_secs + frames.saturating_sub(self.base_frames) as f64 / self.sample_rate
+    }
+}
+
 #[derive(Clone)]
 pub struct Clock {
     frames: Arc<AtomicU64>,
     tempo: Arc<Mutex<Tempo>>,
-    sample_rate: f64,
+    /// Behind a lock for the same reason `tempo` is, and read the same way:
+    /// three numbers that only mean anything together, touched by the command
+    /// and scheduler threads while the audio callback moves nothing but the
+    /// frame counter.
+    rate: Arc<Mutex<Rate>>,
 }
 
 impl Clock {
@@ -166,8 +194,41 @@ impl Clock {
                 meter,
                 epoch: 0,
             })),
-            sample_rate,
+            rate: Arc::new(Mutex::new(Rate {
+                sample_rate,
+                base_frames: 0,
+                base_secs: 0.0,
+            })),
         }
+    }
+
+    fn rate(&self) -> Rate {
+        *self.rate.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The output device has moved to another rate.
+    ///
+    /// Audio time does not move with it: the frames already counted keep the
+    /// rate they were rendered at, and only the ones after this are divided by
+    /// the new one. A jump here would be a jump in bar time, which is every
+    /// pattern currently playing landing somewhere else in the piece.
+    ///
+    /// The callback may count a buffer between the read and the store, and
+    /// those frames are then counted at the new rate rather than the old. That
+    /// is a few microseconds of error against a device switch that has already
+    /// interrupted the audio, and correcting it would need the callback to
+    /// take this lock.
+    pub fn set_sample_rate(&self, sample_rate: f64) {
+        if !sample_rate.is_finite() || sample_rate <= 0.0 {
+            return;
+        }
+        let frames = self.frames.load(Ordering::Relaxed);
+        let mut rate = self.rate.lock().unwrap_or_else(|e| e.into_inner());
+        *rate = Rate {
+            sample_rate,
+            base_frames: frames,
+            base_secs: rate.secs_at(frames),
+        };
     }
 
     /// A consistent view of tempo and phase.
@@ -188,7 +249,7 @@ impl Clock {
 
     /// Seconds of audio rendered so far — the scheduler's "now".
     pub fn now_secs(&self) -> f64 {
-        self.frames.load(Ordering::Relaxed) as f64 / self.sample_rate
+        self.rate().secs_at(self.frames.load(Ordering::Relaxed))
     }
 
     pub fn now_bars(&self) -> f64 {
@@ -315,7 +376,7 @@ impl Clock {
     }
 
     pub fn sample_rate(&self) -> f64 {
-        self.sample_rate
+        self.rate().sample_rate
     }
 }
 
@@ -333,6 +394,59 @@ mod tests {
 
         clock.advance(22050);
         assert!((clock.now_secs() - 1.5).abs() < 1e-9);
+    }
+
+    /// Moving the output device to a device that runs at another rate must not
+    /// move the music. The frame counter cannot be rewound — it is what stays
+    /// aligned with the sequencer's own clock — so dividing all of it by the
+    /// new rate would jump audio time by however long the app had been open,
+    /// and every pattern playing would land somewhere else in the piece.
+    #[test]
+    fn a_device_switch_changes_the_rate_without_moving_the_time() {
+        let clock = Clock::new(48000.0);
+        clock.advance(48000 * 60); // an hour of an evening, near enough
+
+        let before = clock.now_secs();
+        assert!((before - 60.0).abs() < 1e-9);
+
+        clock.set_sample_rate(44100.0);
+        assert!(
+            (clock.now_secs() - before).abs() < 1e-9,
+            "audio time jumped from {before} to {}",
+            clock.now_secs()
+        );
+        assert_eq!(clock.sample_rate(), 44100.0);
+
+        // And what comes after is counted at the new rate.
+        clock.advance(44100);
+        assert!((clock.now_secs() - (before + 1.0)).abs() < 1e-9);
+    }
+
+    /// The bar the music is on is derived from audio time, so the point of the
+    /// rebase above is really this: a switch mid-performance leaves the beat
+    /// exactly where it was.
+    #[test]
+    fn a_device_switch_leaves_the_beat_where_it_was() {
+        let clock = Clock::new(48000.0);
+        clock.advance(48000 * 7);
+        let bars = clock.now_bars();
+
+        clock.set_sample_rate(96000.0);
+        assert!((clock.now_bars() - bars).abs() < 1e-9, "the beat moved");
+    }
+
+    /// A rate nothing could be rendered at is ignored rather than stored: it
+    /// would poison every time the scheduler computes from here on, exactly as
+    /// a nonsense tempo would.
+    #[test]
+    fn a_rate_that_is_not_a_rate_is_ignored() {
+        let clock = Clock::new(48000.0);
+        clock.advance(4800);
+        for bad in [0.0, -48000.0, f64::NAN, f64::INFINITY] {
+            clock.set_sample_rate(bad);
+            assert_eq!(clock.sample_rate(), 48000.0, "{bad} should not have been taken");
+            assert!((clock.now_secs() - 0.1).abs() < 1e-9);
+        }
     }
 
     /// A clone shares the counter — this is what lets the scheduler thread

@@ -4,7 +4,7 @@
 //! replaces the patterns and instruments it reads on the next pass. That
 //! inversion is what keeps the clock running across re-evals.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -44,6 +44,14 @@ pub struct SchedulerState {
     /// construction because the thing it reports to — the Tauri handle — does
     /// not exist until after this state has been made.
     report: Arc<OnceLock<Reporter>>,
+    /// The rate the sequencer should stamp voices with, as `f64::to_bits`, and
+    /// zero while nobody has asked for one.
+    ///
+    /// It is here rather than passed in because the sequencer belongs to the
+    /// scheduler thread outright and no other thread may touch it — which is
+    /// what keeps it out of a mutex — while the thing that moves the rate is a
+    /// device switch on the command thread. See `set_sample_rate`.
+    sample_rate: Arc<AtomicU64>,
 }
 
 impl SchedulerState {
@@ -53,7 +61,27 @@ impl SchedulerState {
             instruments: Arc::new(Mutex::new(Instruments::default())),
             stop: Arc::new(AtomicBool::new(false)),
             report: Arc::new(OnceLock::new()),
+            sample_rate: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The output device has moved to another rate, so voices pushed from now
+    /// on must be stamped with it.
+    ///
+    /// This is the half of a rate change that `AudioEngine::set_sample_rate`
+    /// cannot reach. Without it every pattern voice keeps the old rate while
+    /// the graph renders at the new one, and the two come out in different
+    /// keys — the same failure `a_pushed_voice_runs_at_the_device_rate` pins
+    /// for the startup case.
+    ///
+    /// Taken up on the scheduler's next pass rather than here: 25 ms later,
+    /// and by the one thread allowed to touch the sequencer.
+    pub fn set_sample_rate(&self, sample_rate: f64) {
+        self.sample_rate.store(sample_rate.to_bits(), Ordering::Release);
+    }
+
+    fn wanted_sample_rate(&self) -> f64 {
+        f64::from_bits(self.sample_rate.load(Ordering::Acquire))
     }
 
     /// Say where a playback failure should go. Call once, at startup; a second
@@ -138,9 +166,20 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
     // does not look like a huge backlog to catch up on.
     let mut scheduled_through: Option<Mark> = None;
     let mut live: Vec<Live> = Vec::new();
+    // What `wire` stamped the sequencer with is right until a device switch
+    // says otherwise, and zero here means nothing has.
+    let mut rate = 0.0;
 
     loop {
         std::thread::sleep(TICK);
+
+        // Before anything is pushed, so no voice is ever built against a rate
+        // the graph has already stopped rendering at.
+        let wanted = state.wanted_sample_rate();
+        if wanted > 0.0 && wanted != rate {
+            seq.set_sample_rate(wanted);
+            rate = wanted;
+        }
 
         if state.take_stop() {
             silence(&mut seq, &mut live);

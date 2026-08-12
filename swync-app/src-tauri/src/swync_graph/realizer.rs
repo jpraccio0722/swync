@@ -1,5 +1,6 @@
 use fundsp::prelude64::*;
 
+use crate::audio_in::InputNode;
 use crate::swync_graph::{
     graph::SwyncGraph,
     sample_reader::SampleReader,
@@ -316,6 +317,29 @@ pub fn realize(graph: &SwyncGraph) -> Result<Net, String> {
             NodeKind::Highshelf => (Box::new(highshelf()), 4),
             NodeKind::Hold => (Box::new(hold(const_param(n, 2, "hold variability")?)), 2),
             NodeKind::Impulse => (Box::new(impulse::<U1>()), 0),
+
+            // The live input. Which channels actually exist is a fact about
+            // what is plugged in this evening, so it is deliberately *not*
+            // checked here: a program written against a two-in interface must
+            // still compile on the laptop it is edited on, and reads silence
+            // there. What is checked is what a program can get wrong on its
+            // own — a channel that is negative, fractional, or past anything
+            // the bus could ever carry.
+            NodeKind::Input => {
+                let channel = const_param(n, 0, "input channel")?;
+                if channel < 0.0 || channel.fract() != 0.0 {
+                    return Err(format!(
+                        "input: channel must be a whole number from 0, got {channel}"
+                    ));
+                }
+                if channel as usize >= crate::audio_in::MAX_CHANNELS {
+                    return Err(format!(
+                        "input: channel {channel} is past the {} this reads",
+                        crate::audio_in::MAX_CHANNELS
+                    ));
+                }
+                (Box::new(An(InputNode::new(channel as usize))), 0)
+            }
             NodeKind::Limiter => (
                 Box::new(limiter(
                     const_param(n, 1, "limiter attack")?,
@@ -519,6 +543,115 @@ mod tests {
         let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.5, "expected audible signal, peak was {peak}");
         assert!(peak <= 2.0, "two unit sines can't exceed 2.0, got {peak}");
+    }
+
+    /// `input` realizes on a machine with nothing plugged in, and is silent
+    /// there. That is the whole of what a program can rely on: a piece written
+    /// against an interface has to open, compile and run on the laptop it is
+    /// edited on, where the channels it names do not exist.
+    #[test]
+    fn the_live_input_realizes_and_is_silent_with_no_device_open() {
+        let _bus = crate::audio_in::exclusive();
+        for source in ["input(0)\n", "input(3) * 0.5\n", "input(0) + input(1)\n"] {
+            let items = parse(source.to_string()).unwrap();
+            let graph = lower(&items).unwrap().graph;
+            let mut net = realize(&graph).unwrap_or_else(|e| panic!("{source} refused: {e}"));
+
+            net.check();
+            net.set_sample_rate(44100.0);
+
+            let samples: Vec<f32> = (0..1000).map(|_| net.get_mono()).collect();
+            assert!(samples.iter().all(|s| *s == 0.0), "{source} was not silent");
+        }
+    }
+
+    /// The claim the whole feature rests on: what arrives at the device comes
+    /// out of a program that named it.
+    ///
+    /// Everything either side of this is tested apart — the ring in
+    /// `audio_in::tests`, the node's own reading there too — and all of it
+    /// could pass with the graph still silent, because what joins them is a
+    /// `OnceLock` the realizer reaches for and a block the callback fills. So
+    /// this one goes the whole way: frames into the bus the input thread
+    /// writes to, a program lowered and realized as an eval would, and the
+    /// samples out the other end.
+    #[test]
+    fn a_realized_graph_carries_what_arrived_at_the_device() {
+        let _lock = crate::audio_in::exclusive();
+        let bus = crate::audio_in::bus();
+
+        // Two channels of a constant each, so a sample says which channel it
+        // came from — and `input(1)` naming the second is half the point.
+        bus.opened(2);
+        let frame: Vec<f32> = (0..MAX_BUFFER_SIZE).flat_map(|_| [0.25f32, 0.5]).collect();
+        for _ in 0..8 {
+            bus.push(&frame, 2);
+        }
+
+        let items = parse("input(0) + input(1)\n".to_string()).unwrap();
+        let lowered = lower(&items).unwrap();
+        let mut net = realize(&lowered.graph).unwrap();
+        net.set_sample_rate(48000.0);
+
+        // Rendered the way the engine renders: the ring is drained once per
+        // block, before the graph runs.
+        let mut out = BufferVec::new(2);
+        let mut heard = 0.0f32;
+        for _ in 0..4 {
+            bus.take(MAX_BUFFER_SIZE);
+            net.process(MAX_BUFFER_SIZE, &BufferRef::empty(), &mut out.buffer_mut());
+            heard = f32::max(heard, out.buffer_ref().at_f32(0, MAX_BUFFER_SIZE - 1).abs());
+        }
+
+        bus.closed();
+        assert!(
+            (heard - 0.75).abs() < 1e-4,
+            "the two channels should sum to 0.75, heard {heard}"
+        );
+    }
+
+    /// Every way of writing `input` that the README offers, compiled. It is a
+    /// signal like any other and that is the whole claim, so what would break
+    /// it is something subtle about how it chains — and the manual is where
+    /// anybody would find out, which makes it worth pinning from here.
+    #[test]
+    fn the_documented_ways_of_naming_the_input_all_compile() {
+        for source in [
+            "input(0)\n",
+            "input(0).lowpass(800, 1)\n",
+            "input(0) + input(0).reverb(10, 3, 0.5) * 0.3\n",
+            "fn stab() {\n    input(0) * perc(0.001, 0.15)\n}\n\nplay([\\, \\, `, \\], stab)\n",
+        ] {
+            let items = parse(source.to_string())
+                .unwrap_or_else(|e| panic!("{source} did not parse: {e:?}"));
+            let lowered = lower(&items).unwrap_or_else(|e| panic!("{source} did not lower: {e}"));
+            realize(&lowered.graph).unwrap_or_else(|e| panic!("{source} did not realize: {e}"));
+        }
+    }
+
+    /// What a program *can* get wrong on its own, as against what is merely
+    /// not plugged in tonight. A channel that is negative or fractional is a
+    /// typo in the program and says so; one past what the bus carries is a
+    /// number that could never mean anything on any machine.
+    #[test]
+    fn a_channel_no_input_could_ever_have_is_refused() {
+        for (source, expected) in [
+            ("input(-1)\n", "whole number"),
+            ("input(0.5)\n", "whole number"),
+            ("input(64)\n", "past the"),
+        ] {
+            let items = parse(source.to_string()).unwrap();
+            let graph = lower(&items).unwrap().graph;
+            // `Net` is not `Debug`, so the refusal is taken out by hand rather
+            // than with `expect_err`.
+            let Err(error) = realize(&graph) else {
+                panic!("{source} should have been refused");
+            };
+            assert!(
+                error.contains(expected) && error.contains("input"),
+                "{source} was refused with {error:?}"
+            );
+        }
     }
 
     /// A `for` loop unrolls to an ordinary graph, so it realizes and renders

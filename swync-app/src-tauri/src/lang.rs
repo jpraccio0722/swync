@@ -330,6 +330,14 @@ pub static UGENS: &[Ugen] = &[
         doc: "A single one followed by silence. Useful for exciting `pluck` or measuring an impulse response.",
     },
     Ugen {
+        name: "input",
+        kind: NodeKind::Input,
+        params: &["channel"],
+        receives: ValueKind::Number,
+        returns: ValueKind::Signal,
+        doc: "One channel of the live audio input, counted from 0. Silence until an input device is chosen in the settings panel, and on any channel the chosen device does not have — so a piece written against an interface still runs on the laptop it is edited on.",
+    },
+    Ugen {
         name: "limiter",
         kind: NodeKind::Limiter,
         params: &["signal", "attack", "release"],
@@ -1962,7 +1970,7 @@ mod tests {
             ("clip_to", 3), ("dcblock", 1), ("declick", 1), ("delay", 2),
             ("dsf_saw", 2), ("env", 5), ("dsf_square", 2), ("fir3", 2),
             ("follow", 2), ("hammond", 1), ("highpass", 3), ("highpole", 2),
-            ("highshelf", 4), ("hold", 3), ("impulse", 0), ("limiter", 3),
+            ("highshelf", 4), ("hold", 3), ("impulse", 0), ("input", 1), ("limiter", 3),
             ("line", 3), ("lorenz", 1), ("lowpass", 3), ("lowpole", 2), ("lowrez", 3),
             ("lowshelf", 4), ("mls", 0), ("mls_bits", 1), ("moog", 3),
             ("morph", 4), ("noise", 0), ("notch", 3), ("organ", 1),

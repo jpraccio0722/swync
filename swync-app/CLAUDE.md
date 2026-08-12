@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Swync: a live-coding language and its editor, shipped as a Tauri 2 desktop app. The frontend (`src/`) is React 19 + TypeScript + Vite, with CodeMirror 6 as the editor. The backend (`src-tauri/src/`) is Rust and holds the whole language — lexer, parser, lowerer, audio-graph realizer, pattern scheduler — plus the audio engine (`fundsp` for DSP, `cpal` for the output stream).
+Swync: a live-coding language and its editor, shipped as a Tauri 2 desktop app. The frontend (`src/`) is React 19 + TypeScript + Vite, with CodeMirror 6 as the editor. The backend (`src-tauri/src/`) is Rust and holds the whole language — lexer, parser, lowerer, audio-graph realizer, pattern scheduler — plus the audio engine (`fundsp` for DSP, `cpal` for the output and input streams).
 
 The repo directory is `brap`; the product, npm package and Rust crate are all `swync`.
 
@@ -85,12 +85,102 @@ out over 0.2s, and a file closed before that landed ends mid-waveform on a
 click.
 
 `settings.rs` is the app's own settings file, in the config dir beside the
-remembered session, and holds the output folder and the format. It is separate
+remembered session, and holds the output folder, the format, and the two audio
+devices (see Audio in below — an interface is on a desk, not in a piece). It is separate
 from `project.rs` on purpose: a project's file travels with the piece, and an
 absolute output path would be meaningless on anybody else's machine. The
 formats come from `recorder::formats()` rather than a TypeScript list, for the
 same reason `lang.rs` serves the builtins — a dropdown offering something the
 recorder cannot write is a promise broken after the take.
+
+## Audio in, and changing devices
+
+`src-tauri/src/audio_in/` is the recorder run backwards, and reading
+`recorder/` first explains most of it: the same fixed ring of `AtomicU32`
+allocated at startup, the same single-producer/single-consumer ordering, the
+same refusal to let either side wait for the other. What is different is that
+the two ends are two *devices*, whose clocks drift even when they agree on a
+rate. So the reader keeps a **lead** derived from both sides' buffer sizes,
+renders silence until the ring reaches it, silences and re-primes when it falls
+behind, and throws away what it gets ahead by. Both are counted and reach the
+settings panel, because a machine doing either constantly is one whose buffer
+sizes want looking at and nothing else would say so.
+
+Two things there are load-bearing:
+
+- **The ring is drained once per rendered block, into a block read by index.**
+  `input(0)` may be written twice in a program and both must hear the same
+  thing; a node pulling from the ring would consume a frame the other could not
+  then have. It is also why a sequencer voice hears the same input as the
+  persistent graph.
+- **`bus()` is a `OnceLock` singleton.** `realize` is a pure function of the IR
+  called from three threads and a dozen tests, and what it would otherwise have
+  to be handed is the same value every time. `audio_in::exclusive()` serialises
+  the tests that touch it; tests with a bus of their own do not need it.
+
+`input(channel)` refuses only what a program can get wrong on its own — a
+negative, fractional, or impossibly large channel. A channel the device merely
+*does not have tonight* is silence, so a piece written against an interface
+still compiles on the laptop it is edited on.
+
+`meter.rs` is both meters' half of this: peaks published from the audio
+callback, one atomic per channel per block rather than per sample, reset by
+whoever reads them. That reset is why **`audio_levels` must have exactly one
+caller** — two would each see half the transients. The caller is the poll in
+`App.tsx` that feeds `component/Meters.tsx` in the title bar, and it runs only
+while something is playing or an input is open. The `out` peak is taken beside
+the recorder's tap, on the block the device is about to be filled from, so a
+meter and a take agree with each other and with the room.
+
+**Changing the output device is mostly a sample-rate problem.** The device is
+easy; what is hard is that everything counting frames was built for the last
+one. `set_output_device` in `lib.rs` is the list, and it is the place to add to
+if anything else ever starts counting frames: the graph (re-rated through the
+*frontend* net, since fundsp sends re-rated units over on `commit` precisely
+because re-rating may allocate and the audio thread may not), the clock (which
+rebases rather than re-divides, or bar time jumps by however long the app has
+been open), the sequencer (via `SchedulerState::set_sample_rate`, since the
+scheduler thread owns the `Sequencer` outright), the recorder's tap, and the
+input, which is a second device feeding the same graph. It is refused outright
+mid-take: a WAV names one rate for the whole file.
+
+The audio thread no longer parks forever — it holds the stream and waits on a
+channel, because a `cpal::Stream` is not `Send` and the thread that built it is
+the only one that may drop it. The backend is behind a `Mutex` for the same
+reason: it outlives the streams that render it, and only one backend can be
+taken from a `Net`.
+
+**A device that will not start takes about nine minutes to say so.** Measured,
+twice: an output another application was holding, and an input whose microphone
+permission was never granted. `cpal`'s own start timeout is documented as one
+not every backend honours and CoreAudio does not honour it, so the two
+constants in `devices.rs` are what actually bind — and they bound *the wait for
+an answer*, not the open. Three things follow, and each is why some piece of
+this is shaped the way it is:
+
+- **A switch to a different device builds the new stream before dropping the
+  old one.** Letting go first would make those nine minutes silence in a room.
+  Reopening the device we are already on — which is what putting one back
+  is — still lets go first, since some hosts refuse a second stream on an open
+  device.
+- **A switch that times out is taken back rather than given up on**, by queuing
+  a request for the device we were on. Nothing was re-rated, because the caller
+  never got a rate, so a device that started a minute late would be rendering
+  against a clock counting in the old one.
+- **Startup asks for the remembered input without waiting** (`Input::request`),
+  and the input thread owns what `status` reports rather than the caller — so a
+  caller that stops waiting has given up on the answer, not on the device.
+
+While a device is wedged the thread is stuck in the OS and further switches
+queue behind it, each timing out in turn. What matters is that the device that
+was already playing keeps playing throughout.
+
+Devices are identified by `cpal::DeviceId`, not by name (`devices.rs`). Both
+are kept: the id is what a remembered choice is matched on, so two identical
+interfaces on one desk stay two devices, and the name is what a sentence about
+a missing one has to use. `src-tauri/Info.plist` carries
+`NSMicrophoneUsageDescription` and is not optional — macOS *terminates* a
+process that opens an input stream without one.
 
 ## Bars, passes, and the one place "cycle" survives
 

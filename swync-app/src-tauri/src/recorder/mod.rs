@@ -46,6 +46,12 @@ const CHANNELS: u16 = 2;
 /// stall rather than the average — a filesystem that pauses for a second under
 /// load costs the recording nothing, where a buffer sized to the mean would
 /// lose a second of the take.
+///
+/// Four seconds at the *fastest* rate a device opens at, so it is four at
+/// worst and sixteen on the 48 kHz most machines run. The ring is allocated
+/// once and shared with the audio callback, so it cannot be grown when the
+/// output device is changed for one that runs faster — and a guarantee that
+/// quietly became one second on a device switch would be no guarantee.
 const RING_SECONDS: f64 = 4.0;
 
 /// How often the writer thread wakes to drain the tap. The scheduler's own
@@ -89,24 +95,40 @@ pub struct Tap {
     dropped: AtomicU64,
     /// The rate the device opened at, which is the rate the file is written
     /// at: a recording is what was rendered, not a resampling of it.
-    sample_rate: f64,
+    ///
+    /// Atomic because the output device can be changed, and a device that
+    /// opens at another rate makes every later take a take at that rate. The
+    /// ring itself cannot follow — it is shared with a callback that may not
+    /// allocate — which is why it is sized for the fastest rate anything
+    /// opens at rather than for this one.
+    sample_rate: AtomicU64,
 }
 
 impl Tap {
     pub fn new(sample_rate: f64) -> Tap {
-        let frames = (sample_rate * RING_SECONDS).round() as usize;
+        let frames = (crate::engine::MAX_SAMPLE_RATE * RING_SECONDS).round() as usize;
         Tap {
             slots: (0..frames * CHANNELS as usize).map(|_| AtomicU32::new(0)).collect(),
             written: AtomicU64::new(0),
             taken: AtomicU64::new(0),
             recording: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
-            sample_rate,
+            sample_rate: AtomicU64::new(sample_rate.to_bits()),
         }
     }
 
     pub fn sample_rate(&self) -> f64 {
-        self.sample_rate
+        f64::from_bits(self.sample_rate.load(Ordering::Relaxed))
+    }
+
+    /// The output device has moved to another rate.
+    ///
+    /// Only ever called with no take running — `set_output_device` refuses
+    /// while one is, because a WAV header names one rate for the whole file
+    /// and a take that changed rate halfway through would be a lie in either
+    /// half of it.
+    pub fn set_sample_rate(&self, sample_rate: f64) {
+        self.sample_rate.store(sample_rate.to_bits(), Ordering::Relaxed);
     }
 
     /// Take one rendered block, from the audio callback.
@@ -253,6 +275,19 @@ pub struct Recorder {
 impl Recorder {
     pub fn new(tap: Arc<Tap>) -> Recorder {
         Recorder { tap, active: Mutex::new(None) }
+    }
+
+    /// Whether a take is running. Asked by anything that must not happen
+    /// during one — changing the output device, which would change the rate a
+    /// file already has a header for.
+    pub fn is_recording(&self) -> bool {
+        self.tap.is_recording()
+    }
+
+    /// The output device has moved to another rate, and takes made from now on
+    /// are made at it. Refused by the caller while a take is running.
+    pub fn set_sample_rate(&self, sample_rate: f64) {
+        self.tap.set_sample_rate(sample_rate);
     }
 
     /// Begin recording to `path`, which must not exist — see [`unique_path`],

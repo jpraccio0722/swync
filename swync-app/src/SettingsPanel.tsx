@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import type { AudioLevels } from "./component/Meters";
 
 /** What a recording may be written as, as `recording_formats` reports it. */
 export interface RecordingFormat {
@@ -17,6 +18,39 @@ export interface Settings {
    *  default and is what most takes want. */
   recordingDir: string | null;
   recordingFormat: string;
+  /** What `input` listens to. Null is off, which is where it starts — see
+   *  `settings.rs` for why an app does not open a microphone unasked. */
+  inputDevice: DeviceInfo | null;
+  /** What the graph plays through. Null is the system's own choice. */
+  outputDevice: DeviceInfo | null;
+}
+
+/**
+ * An audio device, as `devices.rs` names it.
+ *
+ * Two names, for two jobs. `id` is what the device *is* — stable across
+ * unplugging and rebooting where the platform can manage it, and what a
+ * remembered choice is matched on, so two identical interfaces on one desk are
+ * still two devices. `name` is what it is *called*, which is what a person
+ * picks from a list and what a sentence about a missing device has to use.
+ */
+export interface DeviceInfo {
+  id: string;
+  name: string;
+}
+
+/** Every audio device on this machine, and which are open, as
+ *  `audio_devices` answers. */
+export interface AudioDevices {
+  inputs: DeviceInfo[];
+  outputs: DeviceInfo[];
+  /** The output actually playing — the system default when nothing has been
+   *  chosen. */
+  output: DeviceInfo;
+  /** The input actually open. Null when input is off, which includes a
+   *  remembered device that is not plugged in tonight. */
+  input: DeviceInfo | null;
+  sampleRate: number;
 }
 
 /**
@@ -49,6 +83,19 @@ interface SettingsPanelProps {
   onChange: (settings: Settings) => void;
   /** Every format the recorder can actually write, from the backend's table. */
   formats: RecordingFormat[];
+  /** What can be opened, and what is. Null until the backend has answered. */
+  devices: AudioDevices | null;
+  /** The same poll the title bar's meters are drawn from. Nothing here draws
+   *  a level — the meters are in the header, where you are looking while you
+   *  play — but the counts that come with them belong beside the devices they
+   *  are about. */
+  levels: AudioLevels;
+  /** Null turns input off. Rejections come back through `onError`, since a
+   *  device that refused to open is the one thing here a person must be told
+   *  about rather than left to infer from a meter that never moves. */
+  onInputDevice: (device: string | null) => void;
+  /** Null returns the output to the system's own choice. */
+  onOutputDevice: (device: string | null) => void;
   /** The open project, whose folder is where recordings go by default. */
   projectRoot: string | null;
   /** The take that is running, if one is. */
@@ -71,13 +118,19 @@ function basename(path: string): string {
 }
 
 /**
- * Where recordings go, and what they are written as.
+ * Which devices the audio comes from and goes to, where recordings go, and
+ * what they are written as.
  *
  * The record button is in the title bar with play and stop, because it is a
  * thing you reach for while the music is running. What is left for a panel is
  * everything you decide *before* a take and then forget about — and that is
  * why this is a panel rather than a dialog on the button: a question asked at
  * the moment you press record is a question asked several seconds too late.
+ * The devices are here for the same reason. The *meters* are not: they went to
+ * the title bar, beside the transport, because what a level is for is the
+ * moment you are playing — see `component/Meters.tsx`. What is left of them
+ * here is the one sentence a meter cannot say, which is that the two devices
+ * are not keeping step with each other.
  *
  * The formats are the backend's own list rather than one written out again
  * here. A dropdown offering something the recorder cannot write would be a
@@ -91,6 +144,10 @@ export function SettingsPanel({
   settings,
   onChange,
   formats,
+  devices,
+  levels,
+  onInputDevice,
+  onOutputDevice,
   projectRoot,
   recording,
   last,
@@ -115,8 +172,142 @@ export function SettingsPanel({
 
   const format = formats.find((f) => f.id === settings.recordingFormat);
 
+  // A device that was chosen and is not open is the one state worth saying out
+  // loud: the interface has been unplugged, or something else on the machine
+  // has taken it, and a meter that never moves is not an explanation.
+  const inputMissing =
+    settings.inputDevice !== null && devices !== null && devices.input === null;
+  const outputMissing =
+    settings.outputDevice !== null &&
+    devices !== null &&
+    devices.output.id !== settings.outputDevice.id;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-3">
+      <section>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+          Audio
+        </h3>
+
+        <div className="mt-2">
+          <label htmlFor="audio-input" className="text-xs text-neutral-400">
+            Input
+          </label>
+          <select
+            id="audio-input"
+            value={settings.inputDevice?.id ?? ""}
+            onChange={(e) => onInputDevice(e.target.value || null)}
+            className="mt-1 w-full rounded-md bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+          >
+            <option value="">Off</option>
+            {devices?.inputs.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.name}
+              </option>
+            ))}
+            {/* A remembered device that is not on the machine tonight still
+                belongs in the list, or the dropdown would silently show
+                something else as the current choice. */}
+            {settings.inputDevice !== null &&
+              !devices?.inputs.some((d) => d.id === settings.inputDevice!.id) && (
+                <option value={settings.inputDevice.id}>
+                  {settings.inputDevice.name} (not connected)
+                </option>
+              )}
+          </select>
+
+          {inputMissing ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-amber-500/80">
+              {settings.inputDevice?.name} is not available, so{" "}
+              <code className="text-amber-500/70">input</code> is silent. Plug
+              it back in and choose it again.
+            </p>
+          ) : settings.inputDevice ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+              Listening. The <span className="text-neutral-400">in</span> meter
+              beside the transport shows each channel —{" "}
+              <code className="text-neutral-400">input(0)</code> is the first,{" "}
+              <code className="text-neutral-400">input(1)</code> the second.
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+              Nothing is being listened to. Choose a device and{" "}
+              <code className="text-neutral-400">input(0)</code> becomes its
+              first channel, <code className="text-neutral-400">input(1)</code>{" "}
+              its second — a signal like any other, so it filters, delays and
+              plays into a pattern the same way.
+            </p>
+          )}
+
+          {/* Only ever seen when the two devices cannot keep in step — which
+              is a buffer size worth looking at, and is invisible otherwise
+              because neither one is anybody's command to fail. It stays here
+              rather than going to the header with the meters: it is a sentence
+              about how the devices are configured, and this is where they are
+              configured. */}
+          {(levels.late > 0 || levels.dropped > 0) && (
+            <p className="mt-1.5 text-[11px] leading-snug text-amber-500/80">
+              The input and output devices are not keeping step: {levels.late}{" "}
+              frames arrived too late and {levels.dropped} were dropped. A
+              larger buffer size on either device usually settles it.
+            </p>
+          )}
+        </div>
+
+        <div className="mt-4">
+          <label htmlFor="audio-output" className="text-xs text-neutral-400">
+            Output
+          </label>
+          <select
+            id="audio-output"
+            value={settings.outputDevice?.id ?? ""}
+            onChange={(e) => onOutputDevice(e.target.value || null)}
+            // Changing device mid-take would change the rate the file is being
+            // written at, which a WAV header cannot say twice. The backend
+            // refuses it; this is the same refusal made visible.
+            disabled={recording !== null}
+            className="mt-1 w-full rounded-md bg-neutral-800 px-2 py-1 text-xs text-neutral-200 disabled:text-neutral-500"
+          >
+            <option value="">
+              {devices
+                ? `System default (${devices.output.name})`
+                : "System default"}
+            </option>
+            {devices?.outputs.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.name}
+              </option>
+            ))}
+            {settings.outputDevice !== null &&
+              !devices?.outputs.some((d) => d.id === settings.outputDevice!.id) && (
+                <option value={settings.outputDevice.id}>
+                  {settings.outputDevice.name} (not connected)
+                </option>
+              )}
+          </select>
+
+          {recording !== null ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+              Not while a take is running — a recording is written at the rate
+              the device gave it.
+            </p>
+          ) : outputMissing ? (
+            <p className="mt-1.5 text-[11px] leading-snug text-amber-500/80">
+              {settings.outputDevice?.name} is not available, so this is
+              playing through {devices?.output.name} instead.
+            </p>
+          ) : (
+            devices && (
+              <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+                Playing through {devices.output.name} at{" "}
+                {Math.round(devices.sampleRate)} Hz. An input has to run at that
+                rate too — both feed one graph.
+              </p>
+            )
+          )}
+        </div>
+      </section>
+
       <section>
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
           Recording

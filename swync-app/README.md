@@ -302,6 +302,74 @@ let pos = ramp(1 / stereo.secs)
 ```
 
 
+## Audio in and out
+
+Which devices the sound comes from and goes to are in the **Settings** tab of
+the right-hand panel, and both are remembered for this machine rather than for
+the piece — an interface is on a desk, not in a project somebody hands you.
+
+**Output** is the system's own choice unless you pick a device. Picking one
+takes effect immediately: the graph is moved onto it, and if it opens at a
+different sample rate everything that counts in frames — the beat, the pattern
+voices, the recorder — is moved with it, so the music keeps its place and its
+pitch. It cannot be changed while a take is running, because a WAV names one
+rate in its header for the whole file.
+
+**Input** is off until you choose a device, and off is a real default rather
+than an oversight: an app that opened a microphone the first time it ran would
+ask for a permission nobody asked it to want, and put an open mic in a room
+with speakers in it. Choose one and its channels become signals:
+
+```rust
+input(0)                        // the first channel, as it arrives
+input(0).lowpass(800, 1)        // through a filter
+input(0) + input(0).reverb(10, 3, 0.5) * 0.3
+```
+
+`input(0)` is the first channel, `input(1)` the second, and so on up the
+device's count. It is a signal like any other, so it filters, delays and sums
+exactly as an oscillator does — and it works inside an instrument, so a pattern
+can play the room:
+
+```rust
+fn stab() {
+    input(0) * perc(0.001, 0.15)
+}
+
+play([\, \, `, \], stab)
+```
+
+Nothing about it is special-cased, which also means nothing protects you from
+the obvious: `input(0)` played through speakers that the microphone can hear is
+a feedback loop, and it will find the room's resonance faster than you can
+reach the fader. Headphones, or a `* 0.1` while you find out what you have.
+
+Two things are worth knowing:
+
+- **Both devices have to run at the same sample rate.** They feed one graph and
+  a graph is rendered at one rate, so an input that cannot run at whatever the
+  output opened at is refused, by name, rather than opened and quietly
+  resampled — which would be a pitch error with nothing to point at its cause.
+  On a Mac, Audio MIDI Setup is where the two are matched.
+- **A channel the device does not have is silence**, not an error. A piece
+  written against an eight-in interface still opens, compiles and runs on the
+  laptop it is edited on.
+
+Two meters sit beside the transport in the title bar. **`out`** is always
+there: two bars, taken from the same block the device is filled from, so what
+it shows is what the room hears — the master fader included, and turning red
+when it clips. **`in`** appears once an input device is chosen, one bar per
+channel, so you can see which `input(n)` is which before writing anything.
+
+Both are peak meters over the last tenth of a second rather than levels at the
+instant they are drawn: most samples of most signals are nowhere near the peak,
+and a meter you are setting a gain by has to catch the transient rather than
+average it away.
+
+If the settings panel ever reports frames arriving late or being dropped, the
+two devices are not keeping step with each other, and a larger buffer size on
+either one usually settles it.
+
 ## Recording
 
 The **record** button sits beside play and stop. Pressing it **plays the file
@@ -1008,6 +1076,7 @@ fn snare(n) = noise() * perc(0.001, 0.1) * rand(0.7, 1)   // a new draw per note
 | `dsf_saw` | `(frequency, roughness)` | Saw-like discrete summation formula oscillator. `roughness` in 0..=1 sets how much successive partials are attenuated. |
 | `dsf_square` | `(frequency, roughness)` | Square-like discrete summation formula oscillator. `roughness` in 0..=1 sets how much successive partials are attenuated. |
 | `impulse` | `()` | A single one followed by silence. Useful for exciting `pluck` or measuring an impulse response. |
+| `input` | `(→ channel)` | One channel of the live audio input, counted from 0. Silence until an input device is chosen in the settings panel, and on any channel the chosen device does not have — so a piece written against an interface still runs on the laptop it is edited on. |
 
 ### Noise and Chaos
 | Name | Arguments | Notes |

@@ -15,6 +15,7 @@
 //! same reason: none of this is worth refusing to start over, and every field
 //! has a default the app would have used anyway.
 
+use crate::devices::DeviceInfo;
 use crate::recorder::Format;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +39,30 @@ pub struct Settings {
     /// What a recording is written as.
     #[serde(default)]
     pub recording_format: Format,
+    /// Which device `input` listens to, by the name the machine calls it.
+    ///
+    /// `None` is off, and off is where it starts. An app that opened the
+    /// default microphone the first time it ran would ask for permission
+    /// nobody had asked it to want, and would put an open mic into a room with
+    /// speakers in it — which is a feedback loop that arrives before any of
+    /// this has been read.
+    ///
+    /// Both halves of [`DeviceInfo`] are kept: the id is what the device is
+    /// found again by, and the name is what a panel says about one that cannot
+    /// be found — "the Scarlett is not connected" is a sentence about a device
+    /// there is nothing left to ask.
+    ///
+    /// A device that is not plugged in tonight is kept rather than forgotten,
+    /// for the same reason a recording folder on an unmounted drive is: it is
+    /// still the answer, and dropping it would lose it for good the next time
+    /// anything else was saved.
+    #[serde(default)]
+    pub input_device: Option<DeviceInfo>,
+    /// Which device the graph plays through. `None` is the system's own
+    /// choice, which is what the app did before this could be chosen and is
+    /// what it falls back to when a remembered device is gone.
+    #[serde(default)]
+    pub output_device: Option<DeviceInfo>,
 }
 
 impl Settings {
@@ -113,6 +138,14 @@ mod tests {
         let settings = Settings {
             recording_dir: Some(root.display().to_string()),
             recording_format: Format::Wav32,
+            input_device: Some(DeviceInfo {
+                id: "coreaudio:AppleUSBAudioEngine:2i2".to_string(),
+                name: "Scarlett 2i2 USB".to_string(),
+            }),
+            output_device: Some(DeviceInfo {
+                id: "coreaudio:BuiltInHeadphoneOutputDevice".to_string(),
+                name: "External Headphones".to_string(),
+            }),
         };
         write(&path, &settings).expect("should write");
         assert_eq!(read(&path), settings);
@@ -146,6 +179,7 @@ mod tests {
         write(&path, &Settings {
             recording_dir: Some(gone.clone()),
             recording_format: Format::Wav16,
+            ..Settings::default()
         })
         .expect("should write");
         assert_eq!(read(&path).recording_dir, Some(gone));
@@ -172,6 +206,7 @@ mod tests {
         let settings = Settings {
             recording_dir: Some("/tmp/takes".to_string()),
             recording_format: Format::Wav16,
+            ..Settings::default()
         };
         assert_eq!(
             settings.recording_dir_for(Some("/tmp/piece")).expect("should answer"),

@@ -22,6 +22,7 @@ import { PatternComposer } from "./PatternComposer";
 import { RightPanel, type RightTab } from "./RightPanel";
 import {
   SettingsPanel,
+  type AudioDevices,
   type FinishedRecording,
   type RecordingFormat,
   type RecordingState,
@@ -38,6 +39,7 @@ import {
   type GraphicalPattern,
   type WirePattern,
 } from "./patterns";
+import { Meters, SILENT, type AudioLevels } from "./component/Meters";
 import { Transport, type Meter, type TransportState } from "./component/Transport";
 
 
@@ -333,6 +335,15 @@ function App() {
   // Every format the recorder can write, from its own table. Fetched rather
   // than listed here so the dropdown can never offer one it cannot produce.
   const [formats, setFormats] = useState<RecordingFormat[]>([]);
+  // What audio devices this machine has, and which are open. Re-read whenever
+  // the settings panel is opened rather than once: an interface plugged in
+  // after launch is the ordinary case, and a list fetched at startup would
+  // still be showing what was on the desk an hour ago.
+  const [devices, setDevices] = useState<AudioDevices | null>(null);
+  // What the two meters in the title bar draw, and what the settings panel
+  // says about the devices keeping step. Polled while there is anything to
+  // meter; see the effect below.
+  const [levels, setLevels] = useState<AudioLevels>(SILENT);
   // The take that is running, and how long it has been. Null is not recording,
   // which is almost always.
   const [recording, setRecording] = useState<{ path: string; seconds: number } | null>(
@@ -479,6 +490,58 @@ function App() {
       );
     },
     [report],
+  );
+
+  /**
+   * Read back what audio is actually doing.
+   *
+   * Called after every device change, and whether it worked or not. The
+   * settings for the devices are written by the backend rather than sent to
+   * it — a device that could not be reopened turns its own setting off — so
+   * this is what keeps the panel showing the truth rather than the request.
+   */
+  const resyncAudio = useCallback(async () => {
+    try {
+      const [next, open] = await Promise.all([
+        invoke<Settings>("settings"),
+        invoke<AudioDevices>("audio_devices"),
+      ]);
+      setSettings(next);
+      setDevices(open);
+    } catch (e) {
+      console.error("could not read the audio devices:", e);
+    }
+  }, []);
+
+  /**
+   * Listen to a device, or to none.
+   *
+   * A refusal is shown rather than logged: choosing an input and hearing
+   * nothing is the one failure here that looks exactly like success, and the
+   * reasons — a rate the device cannot run at, a microphone permission that
+   * was declined, an interface another application has taken — are all things
+   * a person can act on once they have been told.
+   */
+  const changeInputDevice = useCallback(
+    (device: string | null) => {
+      invoke("set_input_device", { device })
+        .catch((e) =>
+          report(toDiagnostic(e, "could not open the audio input"), null),
+        )
+        .finally(() => void resyncAudio());
+    },
+    [report, resyncAudio],
+  );
+
+  const changeOutputDevice = useCallback(
+    (device: string | null) => {
+      invoke("set_output_device", { device })
+        .catch((e) =>
+          report(toDiagnostic(e, "could not change the audio output"), null),
+        )
+        .finally(() => void resyncAudio());
+    },
+    [report, resyncAudio],
   );
 
   // What was open last time, fetched once. Restoring a file tab is reading the
@@ -1334,6 +1397,61 @@ function App() {
   }, [isRecording, report]);
 
   /**
+   * The devices, re-read every time the settings panel is opened.
+   *
+   * Not once at launch: an interface is plugged in halfway through an evening,
+   * and a list from an hour ago would not have it. Opening the panel is the
+   * moment somebody is about to look at that list, which makes it the only
+   * moment it has to be right — and is why there is no refresh button.
+   */
+  const settingsShowing = panelTab === "settings";
+  useEffect(() => {
+    if (!settingsShowing) return;
+    void resyncAudio();
+  }, [settingsShowing, resyncAudio]);
+
+  /**
+   * The two meters in the title bar.
+   *
+   * Ten times a second, which is also what the meters measure: levels are
+   * peaks *since the last ask*, so the interval is the window. Slower would
+   * miss transients entirely, and on a meter you are setting a gain by that is
+   * the one thing it must not do.
+   *
+   * Only while there is something to meter, though — an idle editor with
+   * nothing playing and no input open has two bars at zero, and asking about
+   * them ten times a second for as long as the app is open is work for no
+   * drawing at all. Both meters go to silence when the poll stops, rather than
+   * freezing on whatever was last seen: a bar still lit next to a stopped
+   * transport is a claim that something is still coming out.
+   */
+  const metering = playing || settings?.inputDevice != null;
+  useEffect(() => {
+    if (!metering) {
+      setLevels(SILENT);
+      return;
+    }
+    let live = true;
+
+    const tick = async () => {
+      try {
+        const next = await invoke<AudioLevels>("audio_levels");
+        if (live) setLevels(next);
+      } catch {
+        // Logged by nobody: what it costs is one undrawn frame of a meter,
+        // and the next ask is a tenth of a second away.
+      }
+    };
+
+    void tick();
+    const timer = window.setInterval(() => void tick(), 100);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [metering]);
+
+  /**
    * A note that would not build, raised by the scheduler thread mid-pattern.
    *
    * It has already dropped the bindings and cut what it had pushed — a voice it
@@ -1560,6 +1678,12 @@ function App() {
               onToggleRecording={() => void toggleRecording()}
             />
           </div>
+          {/* Beside the transport, because they answer the question the
+              transport raises: it says something is running, and these say
+              whether anything is coming of it. */}
+          <div className="ml-3">
+            <Meters levels={levels} hasInput={settings?.inputDevice != null} />
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {/* One hamburger, both ways: it is where a reader looks for the
@@ -1777,6 +1901,10 @@ function App() {
               settings={settings}
               onChange={changeSettings}
               formats={formats}
+              devices={devices}
+              levels={levels}
+              onInputDevice={changeInputDevice}
+              onOutputDevice={changeOutputDevice}
               projectRoot={projectRoot}
               recording={recording}
               last={lastRecording}

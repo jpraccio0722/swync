@@ -12,7 +12,7 @@ pub enum NodeKind {
     Dcblock, Declick, Delay, Div, DsfSaw, DsfSquare,
     Env,
     Fir3, Follow,
-    Hammond, Highpass, Highpole, Highshelf, Hold, Impulse,
+    Hammond, Highpass, Highpole, Highshelf, Hold, Impulse, Input,
     Limiter, Line, Lorenz, Lowpass, Lowpole, Lowrez, Lowshelf,
     Mls, MlsBits, Moog, Morph, Mul, Neg,
     Noise, Notch,

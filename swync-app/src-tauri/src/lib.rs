@@ -20,6 +20,9 @@ use std::sync::Mutex;
 use tauri::menu::{IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
+mod audio_in;
+mod devices;
+mod meter;
 mod pattern;
 mod scheduler;
 mod diagnostic;
@@ -457,6 +460,202 @@ fn settings(app: tauri::AppHandle) -> Result<settings::Settings, String> {
 #[tauri::command]
 fn set_settings(app: tauri::AppHandle, settings: settings::Settings) -> Result<(), String> {
     settings::write(&config_file(&app, settings::FILE)?, &settings)
+}
+
+/// Every audio device on this machine, and which of them are open.
+///
+/// Names, because a name is all an audio host offers and so is what the
+/// settings file remembers. The open ones are reported beside the lists rather
+/// than left to be inferred from the settings: a remembered device that was
+/// not plugged in tonight is not the device that is playing, and the panel
+/// should say what is true rather than what was chosen.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioDevices {
+    inputs: Vec<devices::DeviceInfo>,
+    outputs: Vec<devices::DeviceInfo>,
+    /// The output actually playing — the system default when nothing has been
+    /// chosen.
+    output: devices::DeviceInfo,
+    /// The input actually open, and `None` when input is off.
+    input: Option<devices::DeviceInfo>,
+    /// The rate the output opened at, which is the rate an input has to be
+    /// able to run at to be chosen.
+    sample_rate: f64,
+}
+
+#[tauri::command]
+fn audio_devices(
+    output: tauri::State<engine::Output>,
+    input: tauri::State<audio_in::Input>,
+) -> AudioDevices {
+    AudioDevices {
+        inputs: devices::inputs(),
+        outputs: devices::outputs(),
+        output: output.device(),
+        input: input.device(),
+        sample_rate: output.sample_rate(),
+    }
+}
+
+/// Both meters in the title bar, and how the two devices are getting on.
+///
+/// One command rather than two because it is polled ten times a second and the
+/// meters are drawn side by side: two asks would be twice the traffic for one
+/// drawing, and could answer about different tenths of a second.
+///
+/// Levels are peaks *since the last ask*, and asking is what resets them —
+/// so this must have exactly one caller. It does: the poll in `App.tsx` that
+/// feeds the header. A second one would halve what either of them saw.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioLevels {
+    /// Peak per input channel, and empty when input is off. Its length is how
+    /// many channels the open device has.
+    input: Vec<f32>,
+    /// Peak per output channel — two, always.
+    output: Vec<f32>,
+    /// Frames the input arrived too late, and frames thrown away to stop the
+    /// delay growing. The settings panel says so when either climbs; there is
+    /// nowhere else either could be noticed, since neither is anybody's
+    /// command to fail.
+    late: u64,
+    dropped: u64,
+}
+
+#[tauri::command]
+fn audio_levels(
+    output: tauri::State<engine::Output>,
+    input: tauri::State<audio_in::Input>,
+) -> AudioLevels {
+    let heard = input.levels();
+    AudioLevels {
+        input: heard.levels,
+        output: output.levels.take(),
+        late: heard.late,
+        dropped: heard.dropped,
+    }
+}
+
+/// Listen to an audio input, or to none.
+///
+/// The rate is not asked for and not offered: both streams feed one graph, and
+/// a graph is rendered at one rate. So the input is opened at whatever the
+/// output is running at, and a device that cannot do that is refused by name —
+/// see `audio_in::input_config`, which writes the refusal.
+///
+/// Remembered only once it has actually opened. A device that refused is not a
+/// device to try again on every launch.
+#[tauri::command]
+fn set_input_device(
+    app: tauri::AppHandle,
+    device: Option<String>,
+    output: tauri::State<engine::Output>,
+    input: tauri::State<audio_in::Input>,
+) -> Result<(), String> {
+    // Remembered before it is opened, and kept even if opening fails.
+    //
+    // The setting is what you asked for; whether it is listening right now is
+    // a different fact, and `audio_devices` reports that one separately so the
+    // panel can say "not available" about a device it still shows as chosen.
+    // Forgetting instead would be wrong far more often than not: a device that
+    // will not open tonight is usually one whose permission has not been
+    // granted yet, or that somebody will plug back in — the same reasoning
+    // that keeps a recording folder on a drive that is not mounted today.
+    let chosen = match &device {
+        Some(id) => Some(
+            devices::inputs()
+                .into_iter()
+                .find(|found| found.id == *id)
+                .ok_or("that audio input is not on this machine")?,
+        ),
+        None => None,
+    };
+    remember(&app, |settings| settings.input_device = chosen)?;
+
+    match &device {
+        Some(id) => input.open(id, output.sample_rate()),
+        None => input.close(),
+    }
+}
+
+/// Play through another audio output, or through the system's own choice.
+///
+/// The device is the easy half. The hard half is that a device opens at a rate
+/// of its own, and everything that counts frames was built for the last one:
+///
+/// - the **graph**, which is re-rated through the frontend net so the change
+///   reaches the audio thread the one way it is allowed to,
+/// - the **clock**, so bar time carries across the switch instead of jumping,
+/// - the **sequencer**, which stamps every voice it pushes with a rate and
+///   would otherwise put the patterns and the graph in different keys,
+/// - the **recorder**, whose files are written at whatever the device gave it,
+/// - and the **input**, which is a second device feeding the same graph and so
+///   has to be reopened at the new rate or not at all.
+///
+/// It is refused outright while a take is running. A WAV names one rate in its
+/// header for the whole file, and there is no honest way to write a take whose
+/// second half arrived at a different one.
+#[tauri::command]
+fn set_output_device(
+    app: tauri::AppHandle,
+    device: Option<String>,
+    output: tauri::State<engine::Output>,
+    engine: tauri::State<Mutex<AudioEngine>>,
+    sched: tauri::State<SchedulerState>,
+    recorder: tauri::State<recorder::Recorder>,
+    input: tauri::State<audio_in::Input>,
+) -> Result<(), String> {
+    if recorder.is_recording() {
+        return Err(
+            "the output device cannot be changed while a take is running — a recording is \
+             written at the rate the device gave it, and there is no honest way to change \
+             that halfway through a file. Stop the recording first."
+                .to_string(),
+        );
+    }
+
+    let opened = output.open(device.as_deref())?;
+    let sample_rate = opened.sample_rate;
+    // The system's own choice is remembered as `None` rather than as whatever
+    // it happens to be today: "follow the machine" is the setting, and pinning
+    // it to a name would stop it following.
+    let chosen = device.is_some().then_some(opened.device);
+    remember(&app, |settings| settings.output_device = chosen)?;
+
+    engine
+        .lock()
+        .map_err(|_| "audio engine poisoned".to_string())?
+        .set_sample_rate(sample_rate);
+    sched.set_sample_rate(sample_rate);
+    recorder.set_sample_rate(sample_rate);
+
+    // Last, because it is the one that can fail without the switch having
+    // failed. An input left running at a rate the graph is no longer rendering
+    // at would be transposed by the ratio between them, so it is closed rather
+    // than kept — and the setting goes with it, since a device that cannot
+    // follow this output should not be reopened on the next launch.
+    if let Err(e) = input.follow_rate(sample_rate) {
+        remember(&app, |settings| settings.input_device = None)?;
+        return Err(format!(
+            "the output moved to {sample_rate} Hz, and the audio input could not follow, so \
+             it has been turned off: {e}"
+        ));
+    }
+    Ok(())
+}
+
+/// Change one thing in the app's settings, leaving the rest as it was.
+///
+/// Read and written here rather than sent from the editor, because the editor
+/// is not the only thing that changes these: a device that could not be
+/// reopened turns its own setting off, and it must not undo whatever else was
+/// saved between.
+fn remember(app: &tauri::AppHandle, change: impl FnOnce(&mut settings::Settings)) -> Result<(), String> {
+    let path = config_file(app, settings::FILE)?;
+    let mut settings = settings::read(&path);
+    change(&mut settings);
+    settings::write(&path, &settings)
 }
 
 /// What a recording may be written as, for the settings panel's dropdown.
@@ -1167,10 +1366,22 @@ pub fn run() {
             start_recording,
             stop_recording,
             recording_state,
+            audio_devices,
+            audio_levels,
+            set_input_device,
+            set_output_device,
             watch_project
         ])
         .setup(|app| {
-            let (engine, seq, tap) = engine::start()?;
+            // What was chosen last time. Read before the engine starts because
+            // which device it opens — and so what rate everything downstream
+            // is built for — is the first thing decided here.
+            let remembered = config_file(app.handle(), settings::FILE)
+                .map(|path| settings::read(&path))
+                .unwrap_or_default();
+
+            let (engine, seq, tap, output) =
+                engine::start(remembered.output_device.as_ref().map(|d| d.id.as_str()))?;
             let clock = engine.clock.clone();
             let sched = SchedulerState::new();
 
@@ -1183,6 +1394,24 @@ pub fn run() {
 
             // Free-runs for the life of the app; evals only swap what it reads.
             scheduler::scheduler::start(seq, clock, sched.clone());
+
+            // The input thread, and the device it was listening to last time
+            // if it is still there.
+            //
+            // Asked for rather than waited on, and that is the whole of why
+            // `request` exists: a device can take minutes to refuse — a
+            // microphone permission that is never answered does — and waiting
+            // here would put all of it in front of the window appearing. The
+            // app is perfectly usable with no input, so nothing about this is
+            // worth delaying a launch for, let alone refusing one.
+            let input = audio_in::Input::start();
+            if let Some(device) = &remembered.input_device {
+                if let Err(e) = input.request(&device.id, output.sample_rate(), None) {
+                    eprintln!("the remembered audio input could not be asked for: {e}");
+                }
+            }
+            app.manage(input);
+            app.manage(output);
 
             app.manage(Mutex::new(engine));
             app.manage(sched);
