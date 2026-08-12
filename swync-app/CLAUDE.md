@@ -120,7 +120,9 @@ That the tree now re-reads unprompted is what makes two things load-bearing. `us
 
 `use` paths are routes, not names, and only ever go downward. Renaming or moving a file therefore rewrites the `use` lines that pointed at it (`files/reroute.rs`); a move that no rewrite can honestly follow still happens, and the broken imports are named in the problems panel. Imports read what is *saved*, so a module must be written to disk before a file that uses it is played.
 
-Two rules hold across `files/`: nothing is overwritten (a collision is refused, never merged), and nothing is destroyed (deletes go to the platform trash).
+Two rules hold across `files/`: nothing is overwritten (a collision is refused, never merged — except in `copy_path`, which takes the next free name beside it, since pasting a file back into the folder it came from is the ordinary case for a copy), and nothing is destroyed (deletes go to the platform trash).
+
+The tree's Cut is `move_path` and its Copy is `copy_path`, which is the same act twice over: both land something somewhere and both then correct `use` paths. They correct opposite sides. A move rewrites every *importer* in the project, because the file they named has gone. A copy rewrites *the copy's own* imports and nothing else — the file everything imported is still where it was, and what changed is where the new file is reading routes from. That is why `copy_path` surveys only what it is about to copy.
 
 ## Libraries
 

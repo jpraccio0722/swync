@@ -187,6 +187,155 @@ fn a_move_outside_a_project_corrects_nothing() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The plainest paste: somewhere the name is free, and the copy gets it.
+#[test]
+fn a_copy_lands_under_the_name_it_asked_for() {
+    let root = temp("copy");
+    std::fs::write(root.join("drums.swync"), "let kick = 1\n").expect("should write");
+    std::fs::create_dir(root.join("lib")).expect("should create");
+
+    let copied = copy_path(s(&root.join("drums.swync")), s(&root.join("lib/drums.swync")))
+        .expect("should copy");
+
+    assert_eq!(copied.path, s(&root.join("lib/drums.swync")));
+    assert_eq!(
+        std::fs::read_to_string(root.join("lib/drums.swync")).expect("should read"),
+        "let kick = 1\n"
+    );
+    // And the original is still where it was, which is the whole difference
+    // between this and a move.
+    assert!(root.join("drums.swync").is_file());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Pasting back into the folder it came from is what a copy is usually for,
+/// so it takes a free name rather than being refused.
+#[test]
+fn a_copy_onto_an_occupied_name_takes_the_next_one_along() {
+    let root = temp("copy-collide");
+    std::fs::write(root.join("drums.swync"), "let kick = 1\n").expect("should write");
+
+    let first = copy_path(s(&root.join("drums.swync")), s(&root.join("drums.swync")))
+        .expect("should copy");
+    assert_eq!(first.path, s(&root.join("drums copy.swync")));
+
+    let second = copy_path(s(&root.join("drums.swync")), s(&root.join("drums.swync")))
+        .expect("should copy");
+    assert_eq!(second.path, s(&root.join("drums copy 2.swync")));
+
+    // The extension is kept where the language can still see it, and the file
+    // that was already there is untouched.
+    assert_eq!(
+        std::fs::read_to_string(root.join("drums.swync")).expect("should read"),
+        "let kick = 1\n"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A folder is copied with everything under it.
+#[test]
+fn a_copied_folder_brings_what_is_inside_it() {
+    let root = temp("copy-folder");
+    std::fs::create_dir_all(root.join("lib/deep")).expect("should create");
+    std::fs::write(root.join("lib/drums.swync"), "let kick = 1\n").expect("should write");
+    std::fs::write(root.join("lib/deep/bass.swync"), "let low = 1\n").expect("should write");
+
+    let copied = copy_path(s(&root.join("lib")), s(&root.join("sounds"))).expect("should copy");
+
+    assert_eq!(copied.path, s(&root.join("sounds")));
+    assert_eq!(
+        std::fs::read_to_string(root.join("sounds/deep/bass.swync")).expect("should read"),
+        "let low = 1\n"
+    );
+    assert!(root.join("lib/drums.swync").is_file(), "the original stays");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A copy that walked into its own destination would copy what it had just
+/// written, and go on doing it.
+#[test]
+fn a_folder_cannot_be_copied_inside_itself() {
+    let root = temp("copy-into-self");
+    std::fs::create_dir(root.join("lib")).expect("should create");
+
+    let err = copy_path(s(&root.join("lib")), s(&root.join("lib/lib")))
+        .expect_err("should refuse");
+    assert!(err.contains("inside itself"), "got {err}");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A pasted file resolves its `use` paths against wherever it now sits, so the
+/// copy is rewritten to reach what the original reached.
+#[test]
+fn a_copy_keeps_pointing_at_what_the_original_pointed_at() {
+    let root = temp("copy-imports");
+    std::fs::create_dir(root.join("lib")).expect("should create");
+    std::fs::write(root.join("lib/drums.swync"), "let kick = 1\n").expect("should write");
+    std::fs::write(root.join("lib/song.swync"), "use drums::kick\nplay(kick)\n")
+        .expect("should write");
+
+    let copied = copy_path(s(&root.join("lib/song.swync")), s(&root.join("song.swync")))
+        .expect("should copy");
+
+    assert_eq!(copied.unfollowed, vec![]);
+    assert_eq!(
+        std::fs::read_to_string(&copied.path).expect("should read"),
+        "use lib::drums::kick\nplay(kick)\n"
+    );
+    // The file it was copied from is not a file anything moved, and reads
+    // exactly as it did.
+    assert_eq!(
+        std::fs::read_to_string(root.join("lib/song.swync")).expect("should read"),
+        "use drums::kick\nplay(kick)\n"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Two files copied together keep pointing at each other rather than back at
+/// the pair they were copied from — the route between them did not change.
+#[test]
+fn imports_inside_a_copied_folder_stay_inside_the_copy() {
+    let root = temp("copy-folder-imports");
+    std::fs::create_dir(root.join("lib")).expect("should create");
+    std::fs::write(root.join("lib/drums.swync"), "let kick = 1\n").expect("should write");
+    std::fs::write(root.join("lib/kit.swync"), "use drums::kick\nlet k = kick\n")
+        .expect("should write");
+
+    copy_path(s(&root.join("lib")), s(&root.join("sounds"))).expect("should copy");
+
+    assert_eq!(
+        std::fs::read_to_string(root.join("sounds/kit.swync")).expect("should read"),
+        "use drums::kick\nlet k = kick\n"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A path only goes downward, so a copy placed where it cannot reach what it
+/// imported is reported rather than guessed at — the same answer a move gives.
+#[test]
+fn a_copy_that_cannot_reach_its_imports_says_so() {
+    let root = temp("copy-unreachable");
+    std::fs::create_dir(root.join("lib")).expect("should create");
+    std::fs::create_dir(root.join("other")).expect("should create");
+    std::fs::write(root.join("lib/drums.swync"), "let kick = 1\n").expect("should write");
+    std::fs::write(root.join("lib/song.swync"), "use drums::kick\n").expect("should write");
+
+    // Into a folder beside the one it came from, where nothing written
+    // downward can name the module it imported.
+    let copied = copy_path(s(&root.join("lib/song.swync")), s(&root.join("other/song.swync")))
+        .expect("should copy");
+
+    assert_eq!(copied.unfollowed.len(), 1, "got {:?}", copied.unfollowed);
+    assert!(copied.unfollowed[0].file.ends_with("song.swync"));
+    // Left as written, so the copy is what the author wrote rather than a
+    // rewrite that means something else.
+    assert_eq!(
+        std::fs::read_to_string(&copied.path).expect("should read"),
+        "use drums::kick\n"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A walk is what search and the import survey are both built on, so what it
 /// leaves out is worth stating.
 #[test]
