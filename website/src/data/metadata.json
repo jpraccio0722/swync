@@ -420,6 +420,20 @@
       "doc": "A single one followed by silence. Useful for exciting `pluck` or measuring an impulse response."
     },
     {
+      "name": "input",
+      "params": [
+        "channel"
+      ],
+      "arities": [
+        1
+      ],
+      "variadic": false,
+      "category": "ugen",
+      "receives": "number",
+      "returns": "signal",
+      "doc": "One channel of the live audio input, counted from 0. Silence until an input device is chosen in the settings panel, and on any channel the chosen device does not have — so a piece written against an interface still runs on the laptop it is edited on."
+    },
+    {
       "name": "limiter",
       "params": [
         "signal",

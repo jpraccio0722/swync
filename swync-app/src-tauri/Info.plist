@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundle's own Info.plist by tauri-bundler on macOS.
+
+  This file exists for one key, and the key is not optional: macOS terminates a
+  process that opens an input stream without a usage description for it. Not a
+  refusal that can be caught and reported — the app is killed — so choosing an
+  input device without this is the app disappearing mid-performance.
+
+  The string is what the permission dialog says, and it is the only thing a
+  person has to go on when deciding. So it says what the microphone is for
+  rather than that one is wanted.
+
+  Nothing here covers `tauri dev`, which runs a bare binary with no bundle: on
+  a development machine the permission is the terminal's, granted once and
+  attributed there.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Swync uses the audio input you choose in its settings panel so that a live signal — a microphone, an instrument, an interface — can be played and processed by your programs.</string>
+</dict>
+</plist>
