@@ -28,7 +28,7 @@ export default defineConfig({
   // chapter is then a page of its own, named by the same slug the contents in
   // `src/lib/tutorial.ts` uses.
   redirects: {
-    '/tutorial': '/tutorial/getting-started/',
+    '/tutorial': '/tutorial/installing/',
   },
 
   vite: {

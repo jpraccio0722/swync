@@ -1,0 +1,78 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: looking-around
+---
+
+Nothing here needs to be learned before the next chapter. Here's an overview of the UI. 
+
+## Projects
+
+A **project** is a folder with a `swync-project.json` in it.
+
+Projects store the tempo, the signature and the volume of your session. 
+
+
+## The transport
+
+* **play** <kbd>⌘ ,</kbd> is the same button and <kbd>⌘ .</kbd> is stop.
+
+* **Tempo** runs from 40 to 240, and it is a quarter note per minute in any
+signature. 
+
+* **Time signature** Global time signature setting. Currently only: 4/4, 3/4, 2/4, 5/4, 6/8, 7/8, 12/8. 
+
+**Volume** is the master fader, after everything. Affects recording as well.
+
+
+## Tabs
+
+Below the title bar, one per open file. A dot means unsaved. The **+** opens a
+new one, <kbd>⌘ N</kbd>.
+
+Worth knowing early: imports read what is *saved*, not what is on screen. A
+module with a dot on its tab is a module the file that `use`s it cannot see
+yet.
+
+## The right panel
+
+**Patterns** draws patterns on a grid instead of typing them. New pattern adds
+a row; the row's name is what you play. Create a named pattern and use it in your project:
+
+```swync
+play(hats, hat)
+```
+
+Click a row to open it in a composer tab. It has two modes — a **piano roll**
+and a **drums** row — and two tools:
+
+| | |
+|---|---|
+| **Draw** | `B` | 
+| **Move** | `V` |
+
+Holding <kbd>⌘</kbd> while in draw mode will activate Move mode. The opposite is true: move will activate draw.
+
+**Grid** is how many cells divide the bar, any number up to 64.
+
+The rows are a file stored with the project in `patterns.swync`. 
+It is folded into every program the project runs giving you access to these patterns throughout your code.
+
+## The editor itself
+
+The editor has autocomplete for anything in scope, including imports with `use`.
+
+Hold <kbd>⌘</kbd> to bring up context help. <kbd>⌘</kbd> click it and the Reference opens at that name.
+
+<kbd>⌘ /</kbd> comments the selection out.
+
+## Menu Shortcuts
+
+| | |
+|---|---|
+| New, Open… | <kbd>⌘ N</kbd>, <kbd>⌘ O</kbd> |
+| New Project…, Open Project… | <kbd>⌘ ⇧ N</kbd>, <kbd>⌘ ⇧ O</kbd> |
+| Install Library…, Export as Library… | |
+| Save | <kbd>⌘ S</kbd> |
+
+
+Now back to the sound.

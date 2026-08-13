@@ -19,6 +19,25 @@ a {
     @apply pt-2 text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-100;
 }
 
+/* A step below the `h2`, and the step is weight and colour rather than size: a
+   chapter's sections are already short, and a third size in a page this narrow
+   reads as a fourth level rather than a third. */
+.chapter h3 {
+    @apply pt-1 font-semibold tracking-tight text-neutral-900 dark:text-neutral-100;
+}
+
+/* Tailwind's preflight strips the marker and the indent from every `ul` and
+   `ol`, so a list written in markdown arrives looking exactly like the
+   paragraphs around it. `.entry` puts them back; a chapter needs the same, in
+   its own measure. */
+.chapter ul {
+    @apply list-disc space-y-1 pl-5;
+}
+
+.chapter ol {
+    @apply list-decimal space-y-1 pl-5;
+}
+
 .chapter :not(pre) > code {
     @apply text-[1em];
 }
