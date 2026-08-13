@@ -120,9 +120,38 @@ catching there.
 
 ## Drawn patterns
 
-The right-hand panel draws patterns on a grid: click a cell to walk it through
-rest → trigger → pitch. Each row has a name, and that name is what the editor
-plays:
+The right-hand panel draws patterns on a grid. There are two tools, and how
+many cells a note covers is its rhythm:
+
+| | | |
+|---|---|---|
+| **Draw** | `B` | Drag across the cells a note should cover. Click a note to erase it. |
+| **Move** | `V` | Drag a note to move it — sideways in time, and up or down in pitch on the roll. Drag either end to change its length. `Delete` erases the selected note, `Esc` deselects. |
+
+Holding <kbd>Cmd</kbd> (<kbd>Ctrl</kbd> on Windows) gives you the other tool for
+as long as you hold it, so reaching for one note in the middle of drawing does
+not cost a mode. Right-click erases under either tool.
+
+A row holds one note at a time, so putting a note where one already is has to
+give way somehow — and the rule is the same whether the note is new or one you
+moved there. A note you land on is shortened to end where yours begins; only a
+note you cover completely — head and all — is replaced, since there is nothing
+left of it to keep. The grid shows the outcome while you drag, so what you see
+before releasing is what you get.
+
+**Grid** is how many cells the bar is divided into — any number up to 64, so
+the threes and fives a triplet or a quintuplet wants are as reachable as the
+powers of two. The cells are shares of a bar and not note values, so sixteen
+of them are sixteenth notes in 4/4 and sixteen to a three-beat bar in 3/4;
+the beat lines fall where the beats actually are either way.
+
+Narrowing the grid does not throw away what no longer fits. Those cells are
+shown greyed past the end of the bar, out of the pattern and silent but not
+gone, and widening the grid takes them back exactly as they were. It lasts as
+long as the app is open: the greyed cells are deliberately not in the pattern,
+and `patterns.swync` records the pattern.
+
+Each row has a name, and that name is what the editor plays:
 
 ```rust
 play(hats, hat)
