@@ -1,0 +1,71 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: installing
+---
+
+
+## Download
+
+Builds for MacOS and Windows live on the [releases
+page](https://github.com/jpraccio0722/swync/releases).
+
+There is no build for **Linux** yet.
+
+## Build from source
+
+### Prerequisites
+
+* Rust [rustup](https://rustup.rs) — stable, no particular version. 
+* Node 22 or newer
+
+### MacOS
+You will need Xcode's command line tools.
+
+```bash
+xcode-select --install
+```
+### Windows
+You will need the Microsoft C++ build tools.
+Install the [Visual Studio Build
+Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and tick
+
+### Linux 
+
+#### Ubuntu:
+
+```bash
+sudo apt install build-essential curl wget file \
+  libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev \
+  libayatana-appindicator3-dev libssl-dev \
+  libasound2-dev
+```
+
+Other distributions carry the same libraries under other names, and that same
+page lists them: the two worth knowing by sight are the webview and ALSA, so
+`webkit2gtk4.1-devel` and `alsa-lib-devel` on Fedora, `webkit2gtk-4.1` and
+`alsa-lib` on Arch.
+
+## Building it
+
+### Dev build 
+
+```bash
+git clone https://github.com/jpraccio0722/swync.git
+cd swync/swync-app
+npm install
+npm run tauri dev
+```
+
+### Distro build
+
+```bash
+npm run tauri build
+```
+
+What comes out lands in `src-tauri/target/release/bundle/` — a `.dmg` on
+macOS, an `.exe` and an `.msi` on Windows, a `.deb`, an `.rpm` and an AppImage
+on Linux.
+
+## Before the first sound
+
+Set your volume somewhere modest before you press anything.

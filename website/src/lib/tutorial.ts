@@ -17,9 +17,19 @@ export interface TutorialPage {
 
 export const TUTORIAL: TutorialPage[] = [
 	{
+		slug: "installing",
+		title: "Installing",
+		blurb: "Getting swync onto your machine, downloaded or built from source",
+	},
+	{
 		slug: "getting-started",
 		title: "Getting started",
 		blurb: "Make a sound, quiet it down, and wrap it in a function you can play",
+	},
+	{
+		slug: "looking-around",
+		title: "A look around",
+		blurb: "The transport, the panels and the meters — where everything lives",
 	},
 	{
 		slug: "making-noise",
