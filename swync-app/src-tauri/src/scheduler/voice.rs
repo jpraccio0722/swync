@@ -5,8 +5,8 @@ use fundsp::net::Net;
 
 use crate::swync_graph::realizer::{realize, tail_secs};
 use crate::lowerer::lower::lower_voice;
-use crate::parser::parser::{Arg, SwyncItem, Expr, Ident};
-use crate::pattern::patterns::PAN;
+use crate::parser::parser::{Arg, ListItem, SwyncItem, Expr, Ident};
+use crate::pattern::patterns::{LaneArg, PAN};
 use crate::samples::Samples;
 use crate::scheduler::clock::Meter;
 
@@ -106,7 +106,7 @@ pub fn build_voice(
     instruments: &Instruments,
     instrument: &str,
     value: f64,
-    lanes: &[(String, f64)],
+    lanes: &[(String, LaneArg)],
     dur_secs: f64,
     beat_secs: f64,
     meter: Meter,
@@ -121,7 +121,15 @@ pub fn build_voice(
     args.extend(
         lanes.iter()
             .filter(|(name, _)| name != PAN)
-            .map(|(name, v)| Arg::named(name, Expr::Num(*v))),
+            // A quoted list arrives as the plain list it was written as: the
+            // quote settled which of the two readings the lane took, and by
+            // here that question is answered. So an instrument iterates its
+            // parameter with an ordinary `for` and never sees the mark.
+            .map(|(name, v)| Arg::named(name, match v {
+                LaneArg::Num(n) => Expr::Num(*n),
+                LaneArg::List(nums) => Expr::List(
+                    nums.iter().map(|n| ListItem::plain(Expr::Num(*n))).collect()),
+            })),
     );
 
     let mut items = instruments.defs.clone();
@@ -133,8 +141,11 @@ pub fn build_voice(
     let lowered = lower_voice(&items, dur_secs, beat_secs, meter, instruments.samples.clone())?;
     let net = realize(&lowered.graph)?;
 
-    // `play` refuses a lane given twice, so at most one of these exists.
-    let pan = lanes.iter().find(|(name, _)| name == PAN).map(|(_, v)| *v);
+    // `play` refuses a lane given twice, so at most one of these exists — and
+    // refuses a quoted list on a reserved lane, so it is a number.
+    let pan = lanes.iter()
+        .find(|(name, _)| name == PAN)
+        .and_then(|(_, v)| v.as_num());
     Ok(Voice {
         net: place(net, pan.unwrap_or(0.0)),
         tail_secs: tail_secs(&lowered.graph, dur_secs),
@@ -179,7 +190,7 @@ fn build_voice_at_default_tempo(
     instruments: &Instruments,
     instrument: &str,
     value: f64,
-    lanes: &[(String, f64)],
+    lanes: &[(String, LaneArg)],
     dur_secs: f64,
 ) -> Result<Voice, String> {
     build_voice(
@@ -327,8 +338,14 @@ mod tests {
 
     // ---- lanes ----
 
+    /// A lane of numbers, which is every lane written before `'` existed
+    /// and every one these tests build unless they say otherwise.
+    fn nums(lanes: &[(String, f64)]) -> Vec<(String, LaneArg)> {
+        lanes.iter().map(|(n, v)| (n.clone(), LaneArg::Num(*v))).collect()
+    }
+
     fn rising_crossings(ins: &Instruments, lanes: &[(String, f64)]) -> usize {
-        let mut net = build_voice(ins, "tone", 110.0, lanes, 1.0).expect("should build").net;
+        let mut net = build_voice(ins, "tone", 110.0, &nums(lanes), 1.0).expect("should build").net;
         net.set_sample_rate(44100.0);
         let s: Vec<f32> = (0..44100).map(|_| net.get_mono()).collect();
         s.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
@@ -345,6 +362,58 @@ mod tests {
 
         assert!((plain as i64 - 110).abs() <= 1, "expected ~110, got {plain}");
         assert!((doubled as i64 - 220).abs() <= 1, "expected ~220, got {doubled}");
+    }
+
+    /// The other half of a quoted lane: the list arrives as a list, and the
+    /// instrument walks it with an ordinary `for`. Counted rather than
+    /// inspected, because what matters is that both divisions sound — a `[2]`
+    /// reaching here as two separate notes' worth of value would be one.
+    #[test]
+    fn a_quoted_lane_reaches_the_instrument_as_a_list() {
+        let ins = instruments("fn tone(n, divs = [1]) = for d in divs { sin(n * d) / 3 }\n");
+
+        let one = build_lists(&ins, &[("divs", vec![2.0])]);
+        let two = build_lists(&ins, &[("divs", vec![2.0, 3.0])]);
+
+        // One oscillator at 220 crosses zero 220 times; adding a 330 on top
+        // shifts the sum's crossings, and the two must not be the same count.
+        assert!((one as i64 - 220).abs() <= 1, "expected ~220, got {one}");
+        assert_ne!(one, two, "the second division was not heard");
+    }
+
+    /// An instrument that declares no default at all still has to be given
+    /// one — the same rule every lane follows, and nothing about a list
+    /// changes it.
+    #[test]
+    fn a_list_lane_fills_a_parameter_that_has_no_default() {
+        let ins = instruments("fn tone(n, divs) = for d in divs { sin(n * d) / 3 }\n");
+        assert!(build_voice(&ins, "tone", 110.0, &lists(&[("divs", vec![1.0])]), 1.0).is_ok());
+        assert!(build_voice(&ins, "tone", 110.0, &[], 1.0).is_err());
+    }
+
+    /// Inside an instrument a list is already one value, so a quote there has
+    /// nothing left to distinguish. The error names the lane, since that is
+    /// where somebody writing one here has come from.
+    #[test]
+    fn a_quote_inside_an_instrument_says_to_drop_it() {
+        let ins = instruments("fn tone(n, divs = '[2, 3]) = for d in divs { sin(n * d) }\n");
+        let err = match build_voice(&ins, "tone", 110.0, &[], 1.0) {
+            Err(e) => e,
+            Ok(_) => panic!("a quoted default should not have built"),
+        };
+        assert!(err.contains("without the quote"), "got: {err}");
+    }
+
+    fn lists(lanes: &[(&str, Vec<f64>)]) -> Vec<(String, LaneArg)> {
+        lanes.iter().map(|(n, v)| (n.to_string(), LaneArg::List(v.clone()))).collect()
+    }
+
+    fn build_lists(ins: &Instruments, lanes: &[(&str, Vec<f64>)]) -> usize {
+        let mut net = build_voice(ins, "tone", 110.0, &lists(lanes), 1.0)
+            .expect("should build").net;
+        net.set_sample_rate(44100.0);
+        let s: Vec<f32> = (0..44100).map(|_| net.get_mono()).collect();
+        s.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
     }
 
     /// Lanes bind by name, so the order the scheduler happens to collect them
@@ -390,7 +459,7 @@ mod tests {
     /// hide the whole feature.
     fn peaks(lanes: &[(String, f64)]) -> (f32, f32) {
         let ins = instruments("fn tone(n) = sin(n)\n");
-        let mut net = build_voice(&ins, "tone", 110.0, lanes, 1.0).expect("should build").net;
+        let mut net = build_voice(&ins, "tone", 110.0, &nums(lanes), 1.0).expect("should build").net;
         net.set_sample_rate(44100.0);
 
         let mut frame = [0.0f32; 2];
@@ -480,7 +549,7 @@ mod tests {
     #[test]
     fn pan_does_not_reach_the_instrument() {
         let ins = instruments("fn tone(n) = sin(n)\n");
-        assert!(build_voice(&ins, "tone", 110.0, &pan_lane(-1.0), 1.0).is_ok());
+        assert!(build_voice(&ins, "tone", 110.0, &nums(&pan_lane(-1.0)), 1.0).is_ok());
     }
 
     /// And taking it off the lanes must not disturb the ones that remain.
@@ -568,7 +637,7 @@ mod tests {
 
         let render = |at: f64| {
             let lanes = vec![("at".to_string(), at)];
-            let mut net = build_voice(&ins, "chop", 1.0, &lanes, 1.0).expect("should build").net;
+            let mut net = build_voice(&ins, "chop", 1.0, &nums(&lanes), 1.0).expect("should build").net;
             net.set_sample_rate(44100.0);
             // A tenth of a second in, well inside the quarter being read.
             (0..4410).map(|_| net.get_mono()).last().expect("a sample")
@@ -628,7 +697,7 @@ mod tests {
     #[test]
     fn an_unknown_lane_is_an_error_not_a_panic() {
         let ins = instruments("fn tone(n) = sin(n)\n");
-        let err = match build_voice(&ins, "tone", 110.0, &[("nope".to_string(), 1.0)], 1.0) {
+        let err = match build_voice(&ins, "tone", 110.0, &nums(&[("nope".to_string(), 1.0)]), 1.0) {
             Err(e) => e,
             Ok(_) => panic!("expected an error for an unknown lane"),
         };

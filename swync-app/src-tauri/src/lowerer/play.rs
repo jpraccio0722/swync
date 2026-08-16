@@ -20,7 +20,7 @@ use crate::swync_graph::environment::{Item, Length, Value};
 use crate::lowerer::lower::Lowerer;
 use crate::parser::parser::{Arg, Expr, Ident};
 use crate::pattern::pattern::{Pattern, Slot, Step, UNIT};
-use crate::pattern::patterns::{Binding, Lane, RESERVED};
+use crate::pattern::patterns::{Binding, Lane, LaneValues, RESERVED};
 use crate::pattern::rate::Rate;
 use crate::scheduler::clock::Meter;
 
@@ -197,6 +197,22 @@ impl Lowerer {
             }
 
             let value = self.expr(&arg.value)?;
+
+            // A lane of lists is read exactly as a lane of numbers is — the
+            // nth note takes the nth value, wrapping — and differs only in
+            // what the note is handed. Settled before the pattern conversion
+            // below, which would read the same brackets as steps.
+            if let Some(lists) = lane_lists(&value) {
+                if let Some((_, effect)) = RESERVED.iter().find(|(r, _)| *r == lane) {
+                    return Err(format!(
+                        "{name}: '{lane}' {effect}, which is one number — a quoted \
+                         list has nothing to say there"));
+                }
+                let lists = lists.map_err(|e| format!("{name}: lane '{lane}': {e}"))?;
+                lanes.push(Lane { name: lane, values: LaneValues::Lists(lists) });
+                continue;
+            }
+
             no_durations(&value).map_err(|b| format!(
                 "{name}: lane '{lane}' is written in note values, and `{b}` is a \
                  length of time. A lane is read by note — the nth note takes the \
@@ -207,7 +223,7 @@ impl Lowerer {
                 "{name}: lane '{lane}' has a length of {len}. A lane is read by note, \
                  not by time — a `;` there is how many notes the value covers, so it \
                  has to be a whole number"))?;
-            lanes.push(Lane { name: lane, pattern });
+            lanes.push(Lane { name: lane, values: LaneValues::Steps(pattern) });
         }
 
         // Every parameter the pattern and lanes leave unfilled has to have a
@@ -547,6 +563,12 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
              says what)".to_string()),
         Value::Function(_) => Err("a pattern cannot contain a function".to_string()),
         Value::Play { .. } => Err("a pattern cannot contain a play".to_string()),
+        // A note sounds at one value, so there is nowhere in a pattern for a
+        // list to go — which is exactly why the quote is only read in a lane.
+        Value::Quoted(_) => Err(
+            "a pattern cannot contain a quoted list — `'` marks a list as one value \
+             for a `play` lane, and a note carries a single value. For several notes \
+             at once, write a `stack`".to_string()),
         Value::Rate(_) => Err(
             "a pattern cannot contain a rate — `accel` says how fast a pattern runs, \
              so it belongs in `play`'s rate rather than among its steps".to_string()),
@@ -557,6 +579,58 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
 /// matter — a lane, a fill's shape, or a check that something is a pattern at all.
 pub fn to_pattern(v: &Value, meter: Meter) -> Result<Pattern, String> {
     to_pattern_timed(v, meter).map(|(pattern, _)| pattern)
+}
+
+/// A lane's values, if this one carries quoted lists rather than numbers.
+///
+/// `None` means "not that kind of lane", and the caller goes on to read the
+/// value as a pattern of numbers exactly as it always has. A single `'[2, 3]`
+/// is the one-element case: a lane wraps, so one value is every note's.
+///
+/// A lane that holds both is refused rather than resolved. The instrument walks
+/// what it is given, so a lane that were sometimes a list and sometimes a
+/// number would build for one note and fail on the next — and a voice that
+/// fails to build halts its whole pattern, one note into a bar, which is the
+/// worst place to learn about it.
+fn lane_lists(v: &Value) -> Option<Result<Vec<Option<Vec<f64>>>, String>> {
+    match v {
+        Value::Quoted(nums) => Some(Ok(vec![Some(nums.to_vec())])),
+        Value::List(items) => {
+            if !items.iter().any(|i| matches!(i.value, Value::Quoted(_))) {
+                return None;
+            }
+            Some(items.iter().try_fold(Vec::new(), |mut out, item| {
+                // A `;` here means what it means in any lane — how many notes
+                // this value covers — so it is counted out into the sequence
+                // rather than kept as a length there would be no reader for.
+                let held = match item.length {
+                    None => 1,
+                    Some(Length::Ratio(n)) if n.fract() == 0.0 && n >= 1.0 => n as usize,
+                    Some(Length::Ratio(n)) => return Err(format!(
+                        "a `;` is how many notes a value covers, so it has to be a \
+                         whole number of them, and this one is {n}")),
+                    Some(_) => return Err(
+                        "a `;` is how many notes a value covers, and a written note \
+                         value is a length of time — which is not a count of \
+                         notes".to_string()),
+                };
+                let value = match &item.value {
+                    Value::Quoted(nums) => Some(nums.to_vec()),
+                    // Exactly what a resting number does: the parameter is not
+                    // passed, so the instrument's own default stands.
+                    Value::Rest => None,
+                    _ => return Err(
+                        "every value in a lane of quoted lists has to be one — a lane \
+                         hands the whole of its value to the instrument, and a number \
+                         among the lists would be a different shape on those \
+                         notes".to_string()),
+                };
+                out.extend(std::iter::repeat(value).take(held));
+                Ok(out)
+            }))
+        }
+        _ => None,
+    }
 }
 
 /// Refuse a written note value anywhere in a pattern being used as a lane.
@@ -657,6 +731,12 @@ fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
              says what)".to_string()),
         Value::Function(_) => Err("a pattern cannot contain a function".to_string()),
         Value::Play { .. } => Err("a pattern cannot contain a play".to_string()),
+        // A note sounds at one value, so there is nowhere in a pattern for a
+        // list to go — which is exactly why the quote is only read in a lane.
+        Value::Quoted(_) => Err(
+            "a pattern cannot contain a quoted list — `'` marks a list as one value \
+             for a `play` lane, and a note carries a single value. For several notes \
+             at once, write a `stack`".to_string()),
         Value::Rate(_) => Err(
             "a pattern cannot contain a rate — `accel` says how fast a pattern runs, \
              so it belongs in `play`'s rate rather than among its steps".to_string()),

@@ -67,6 +67,11 @@ export const TUTORIAL: TutorialPage[] = [
 		blurb: "Making sounds that live more interesting lives",
 	},
 	{
+		slug: "lanes-lists",
+		title: "Lanes and Lists",
+		blurb: "How a lane is counted, and how to hand a parameter a whole list at once",
+	},
+	{
 		slug: "play-arrange",
 		title: "Simple arrangment",
 		blurb: "Arranging our work into a song",

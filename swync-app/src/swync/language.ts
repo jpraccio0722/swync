@@ -27,6 +27,11 @@ export const restTag = Tag.define();
  *  Tagged separately from `rest` so a pattern's rhythm is readable at a
  *  glance: hits and silences should never be the same colour. */
 export const triggerTag = Tag.define();
+/** The quote: `'` before a list in a lane, marking it as one value rather than
+ *  a sequence of them. Its own tag because it is one character that changes
+ *  what the brackets after it mean — the same argument the rest token makes,
+ *  and a stronger one, since the two readings are otherwise written alike. */
+export const quoteTag = Tag.define();
 /** A name resolved from the backend's builtin table. */
 export const builtinTag = Tag.define();
 /** A note name: letter, optional `s`/`f`, octave. Tagged apart from ordinary
@@ -68,6 +73,7 @@ function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<Token
       swyncDuration: durationTag,
       swyncRest: restTag,
       swyncTrigger: triggerTag,
+      swyncQuote: quoteTag,
       fnName: t.function(t.variableName),
     },
   };
@@ -100,6 +106,10 @@ export const swyncHighlightStyle = HighlightStyle.define([
   // a glance inside a dense pattern like `[\, `, \, [\, \]]`.
   { tag: restTag, color: "#fb923c", fontWeight: "bold" },
   { tag: triggerTag, color: "#4ade80", fontWeight: "bold" },
+  // Cyan, which nothing else here takes: the quote sits inside a lane, next to
+  // the brackets and numbers it changes the meaning of, and a rest may sit in
+  // the same brackets — so it must not be the orange that rest already is.
+  { tag: quoteTag, color: "#22d3ee", fontWeight: "bold" },
   { tag: t.operator, color: "#94a3b8" },
   { tag: t.bracket, color: "#94a3b8" },
   { tag: t.punctuation, color: "#94a3b8" },

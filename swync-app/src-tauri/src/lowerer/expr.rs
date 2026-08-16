@@ -66,6 +66,13 @@ impl Lowerer {
             Expr::For { var, iter, body, length } => {
                 let items = match self.expr(iter)? {
                     Value::List(items) => items,
+                    // A lane hands an instrument the plain list, so a `'` here
+                    // is somebody carrying the lane's spelling inside — where
+                    // there are no steps for it to be distinguished from.
+                    Value::Quoted(_) => return Err(format!(
+                        "for {}: `'` marks a list as one value for a `play` lane. \
+                         Inside a `fn` the list is already one value, so write it \
+                         without the quote", var.0)),
                     _ => return Err(format!(
                         "for {}: expected a list or range to iterate over", var.0)),
                 };
@@ -169,6 +176,11 @@ impl Lowerer {
                         None => Ok(Value::Number(0.0)),
                     }
                 }
+            }
+
+            Expr::Quote { expr } => {
+                let v = self.expr(expr)?;
+                quoted(&v).map(Value::Quoted)
             }
 
             Expr::Index { base, index } => {
@@ -468,6 +480,47 @@ impl Lowerer {
             Value::Rate(_) => Err(
                 "cannot use a rate as a signal — `accel` says how fast a pattern runs, \
                  and is only meaningful as `play`'s rate".into()),
+            Value::Quoted(_) => Err(
+                "cannot use a quoted list as a signal — `'` marks a list as one value \
+                 for a `play` lane, and means nothing anywhere else. Write the list \
+                 without the quote".into()),
         }
     }
+}
+
+/// The numbers behind a `'`, or why this value cannot be one.
+///
+/// Checked here, where the quote is written, rather than left for the lane to
+/// discover: a lane holding lists is read one note at a time on the scheduler
+/// thread, which has no way to report a bad element except by halting the
+/// pattern. A `;` is refused for the same reason it is refused on a plain
+/// argument — inside a value there is no sequence for a length to divide, so
+/// one written there would silently do nothing.
+pub(crate) fn quoted(v: &Value) -> Result<Rc<Vec<f64>>, String> {
+    let items = match v {
+        Value::List(items) => items,
+        Value::Quoted(_) => return Err(
+            "`'` on a list that is already quoted: one quote is what marks it as a \
+             value, and a second says nothing more".into()),
+        _ => return Err(
+            "`'` marks a *list* as one value, so it needs a list after it: \
+             `'[2, 3]`".into()),
+    };
+    items
+        .iter()
+        .map(|item| {
+            if item.length.is_some() {
+                return Err("`'` makes a list one value, and a `;` divides a sequence \
+                            — inside a quoted list there is no sequence for it to \
+                            divide".to_string());
+            }
+            match item.value {
+                Value::Number(n) => Ok(n),
+                _ => Err("a quoted list holds numbers: `'[2, 3]`. Whatever else it \
+                          held would have to reach an instrument one note at a \
+                          time, which only numbers can do".to_string()),
+            }
+        })
+        .collect::<Result<Vec<f64>, String>>()
+        .map(Rc::new)
 }

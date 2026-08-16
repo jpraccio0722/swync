@@ -172,6 +172,14 @@ export function swyncTokenizer(
       return "swyncTrigger";
     }
 
+    // Before the operator table, which does not hold it: the quote is a prefix
+    // and nothing else, so there is no `'=`-style pair for a longest match to
+    // settle.
+    if (stream.match("'")) {
+      state.afterFn = false;
+      return "swyncQuote";
+    }
+
     // `match` is typed as `RegExpMatchArray | true | null`; a regex argument
     // always yields the array form.
     const ident = stream.match(IDENT) as RegExpMatchArray | null;

@@ -1,0 +1,117 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: lanes-lists
+---
+
+We've been using lanes. Now let's look at what a lane actually does with the
+pattern you hand it.
+
+Here's our synth again.
+
+```swync
+fn synth(freq, partials=3, fundVol=1, cutoff=120) {
+  let sig = for i in 1..=partials { saw(freq * i) * fundVol/i } *
+      env(0.01, 0.1, 0.8, 0.1, dur*0.8)
+  sig >> lowpass(cutoff, 0.5)
+}
+
+play([d2;q, a2, f2, c3], synth)
+```
+
+## A lane is counted in notes
+
+The main pattern divides time. A lane doesn't. The first note takes the first
+value, the second takes the second, and when the lane runs out it starts over.
+
+That sounds like the same thing right up until the two lengths disagree.
+
+```swync
+play([d2;q, a2, f2, c3], synth, cutoff: [180, 90, 40])
+```
+
+Four notes, three cutoffs. The lane doesn't stretch to cover the bar — it just
+keeps handing out values in order. So the second time round `d2` gets 90 rather
+than 180, and the whole thing doesn't come back to where it started for three
+bars. 
+
+## Holding a value for a few notes
+
+In a pattern, `;` is a length of time. In a lane there's no time to divide, so
+it means the next thing along: how many notes this value covers.
+
+```swync
+play([d2;q, a2, f2, c3], synth, cutoff: [180;3, 40])
+```
+
+Three notes at 180, one at 40. It has to be a whole number of them — half a note
+position isn't anywhere.
+
+## Skipping a note
+
+A rest in a lane isn't silence. It means *don't tell this note anything*, so the parameter falls back to the default it
+was declared with.
+
+```swync
+play([d2;q, a2, f2, c3], synth, cutoff: [180, `, 40, `])
+```
+
+The second and fourth notes get 120, because that's the `cutoff=120` in the
+definition up there.
+
+## Two names that never arrive
+
+Almost every lane names one of your instrument's parameters. Two don't.
+
+| Lane | What it does instead |
+|------|----------------------|
+| `legato` | Scales how long the note lasts. `0.2` is staccato, `1.5` overlaps the next one. |
+| `pan` | Places the voice across the stereo field, from -1 (left) through 0 to 1 (right). |
+
+These are spent on the note and the voice rather than handed to the instrument,
+so your `fn` can't have a parameter of either name.
+
+```swync
+play([d2;q, a2, f2, c3], synth, legato: [0.3, 1.4], pan: [-0.8, 0.8])
+```
+
+## When one number per note isn't enough
+
+Everything so far hands a parameter one number per note. Usually that's exactly
+what you want. Sometimes it isn't.
+
+```swync
+play([d2;h, a2], chop, div: '[2, 3])
+```
+
+One character. The quote says *this bracket pair is a value, not a sequence*, so
+every note gets both divisions and you hear the 3-against-2 inside each one.
+
+If you'd rather write it out, `list` is the same value by another name.
+
+```swync
+play([d2;h, a2], chop, div: list(2, 3))
+```
+
+## Lists are just values
+
+The quote doesn't change how a lane is read. It only changes what counts as one
+value in it. So everything from the top of this chapter still holds.
+
+```swync
+play([d2;q, a2, f2, c3], chop, div: ['[2, 3], '[4], '[3, 4, 6];2])
+```
+
+Note by note: both divisions, then one, then the third value held across two
+notes. And a rest still means *skip this one*, leaving `div` at the `[4]` it was
+declared with.
+
+```swync
+play([d2;q, a2, f2, c3], chop, div: ['[2, 3], `])
+```
+
+They wrap like anything else, so a short lane of lists under a long pattern is
+another way to get a phrase that takes a few bars to come round.
+
+```swync
+play([d2;e, a2, f2, c3, d3, c3, a2, f2], chop, div: ['[2, 3], '[4], '[3, 5]])
+```

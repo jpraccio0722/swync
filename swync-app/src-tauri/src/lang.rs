@@ -72,6 +72,10 @@ pub enum ValueKind {
     /// one, and it accepts a plain number there too — so this is what a name
     /// *answers* with rather than something anything receives.
     Rate,
+    /// A list marked to be passed whole, from `'` or `list`. Only a `play` lane
+    /// takes one, and it takes plain numbers there too — so like `Rate`, this
+    /// is what a name answers with rather than something anything receives.
+    Lane,
 }
 
 /// A UGen builtin: a name that lowers to a graph node.
@@ -639,6 +643,15 @@ pub static UGENS: &[Ugen] = &[
 ];
 
 pub static LIST_BUILTINS: &[ListBuiltin] = &[
+    ListBuiltin {
+        name: "list",
+        params: &["number"],
+        arities: &[1],
+        variadic: true,
+        receives: ValueKind::Number,
+        returns: ValueKind::Lane,
+        doc: "Marks numbers as one value rather than a sequence: `play(riff, bzzz, div: list(2, 3))` gives every note both, where `div: [2, 3]` would give the first note 2 and the second 3. `'[2, 3]` is the same thing written short. Only a lane reads one.",
+    },
     ListBuiltin {
         name: "len",
         params: &["list"],
@@ -2206,6 +2219,9 @@ mod receives_tests {
             // in a position that is not the receiver, so nothing is ever
             // *called on* a rate.
             ValueKind::Rate => false,
+            // The same, for the same reason: a lane value is written into a
+            // `play` and read nowhere else, so nothing chains off one.
+            ValueKind::Lane => false,
             ValueKind::Nothing => false,
         }
     }
@@ -2417,15 +2433,16 @@ mod receives_tests {
                     Ok(l) => crate::swync_graph::realizer::realize(&l.graph).is_ok(),
                 }
             });
-            // A rate is where a chain stops. `play` takes one as an argument
-            // rather than as a receiver, so no probe could name it — and that
-            // is the property worth pinning: nothing at all may follow it, so
-            // the editor offering anything after the dot would be wrong.
-            if returns == ValueKind::Rate {
+            // A rate is where a chain stops, and so is a lane value. `play`
+            // takes both as arguments rather than as receivers, so no probe
+            // could name either — and that is the property worth pinning:
+            // nothing at all may follow one, so the editor offering anything
+            // after the dot would be wrong.
+            if matches!(returns, ValueKind::Rate | ValueKind::Lane) {
                 assert!(
                     found.is_none(),
-                    "{name} answers with a rate, so nothing should chain off `{call}` — \
-                     but {:?} did",
+                    "{name} answers with a {returns:?}, so nothing should chain off \
+                     `{call}` — but {:?} did",
                     found.map(|(k, _)| *k)
                 );
                 continue;

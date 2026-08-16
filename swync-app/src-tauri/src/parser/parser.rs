@@ -97,6 +97,11 @@ pub enum Expr {
     Mul   { lhs: Box<Expr>, rhs: Box<Expr> },
     Neg { expr: Box<Expr> },
     Num(f64),
+    /// `'[2, 3]` — a list marked to be passed whole rather than read step by
+    /// step. The same thing `list(2, 3)` builds, and it exists for the one
+    /// position where a list is otherwise ambiguous: a `play` lane, where
+    /// brackets are the sequence of values the notes read through.
+    Quote { expr: Box<Expr> },
     Range { lo: Box<Expr>, hi: Box<Expr> },
     Rem { lhs: Box<Expr>, rhs: Box<Expr> },
     /// A double-quoted string. Only ever the path in `load("break.wav")` —
@@ -608,9 +613,17 @@ where I: ValueInput<'a, Token = Token, Span = SimpleSpan> {
             },
         );
 
+        // Above the arithmetic layers, so `'` reaches only the value written
+        // after it: `'[2, 3]` is one quoted list, never the start of a quoted
+        // sum. It sits over `postfix` rather than over the atom so a name and
+        // an index can be quoted too — `'divs`, `'sets[0]`.
+        let quoted = just(Token::Quote)
+            .repeated()
+            .foldr(postfix, |_, rhs| Expr::Quote { expr: Box::new(rhs) });
+
         let unary = just(Token::Sub)
             .repeated()
-            .foldr(postfix, |_, rhs| Expr::Neg { expr: Box::new(rhs) });
+            .foldr(quoted, |_, rhs| Expr::Neg { expr: Box::new(rhs) });
 
         let product = unary.clone().foldl(
             choice((
@@ -866,6 +879,37 @@ mod tests {
         })];
 
         assert_eq!(ast, expected);
+    }
+
+    /// The quote wraps the value written after it and stops there.
+    #[test]
+    fn a_quote_marks_the_list_it_precedes() {
+        let ast = parse("play(bass, div: '[2, 3])\n".to_string()).expect("should parse");
+
+        let Some(SwyncItem::Expr(Expr::Call { args, .. })) = ast.first() else {
+            panic!("expected a call, got {ast:?}");
+        };
+        assert_eq!(
+            args[1].value,
+            Expr::Quote { expr: Box::new(Expr::List(vec![
+                ListItem::plain(Expr::Num(2.0)),
+                ListItem::plain(Expr::Num(3.0)),
+            ]))},
+        );
+    }
+
+    /// It binds tighter than the arithmetic around it: `'[1] * 2` is a quoted
+    /// list multiplied, not a quote over the whole product. Nothing sensible
+    /// can be done with either, but which one the parser built decides which
+    /// error the writer is shown.
+    #[test]
+    fn a_quote_binds_tighter_than_arithmetic() {
+        let ast = parse("'[1] * 2\n".to_string()).expect("should parse");
+
+        let Some(SwyncItem::Expr(Expr::Mul { lhs, .. })) = ast.first() else {
+            panic!("expected a product, got {ast:?}");
+        };
+        assert!(matches!(**lhs, Expr::Quote { .. }), "got {lhs:?}");
     }
 
     /// A named argument's value is a whole expression, not just a literal —

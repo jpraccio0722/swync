@@ -152,6 +152,14 @@ a {
     @apply font-bold text-emerald-700 dark:text-green-400;
 }
 
+/* Cyan, which nothing else here takes: the quote sits inside a lane, next to
+   the brackets and numbers it changes the meaning of, and a rest may sit in the
+   same brackets — so it must not be the orange that rest already is. Deeper in
+   light, for the same contrast reason the trigger is. */
+.prose-swync .tok-quote {
+    @apply font-bold text-cyan-700 dark:text-cyan-400;
+}
+
 .prose-swync .tok-operator,
 .prose-swync .tok-punct {
     @apply text-slate-500 dark:text-slate-400;

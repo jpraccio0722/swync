@@ -1,0 +1,27 @@
+---
+name: list
+params: [number]
+arities: [1]
+variadic: true
+receives: number
+returns: lane
+---
+
+Differentiates between a list and lane pattern. 
+
+A lane is read by note — the nth note takes the nth value, wrapping — so
+`div: [2, 3]` gives the first note 2 and the second 3. `div: list(2, 3)` gives
+every note both:
+
+```swync
+fn poly(n, div = [4]) = for d in div { saw(n * d) * 0.3 }
+
+play([110, 165], poly, div: list(2, 3))
+```
+
+`'[2, 3]` is the same value written short, and the spelling to reach for inside
+a lane that is already bracket-heavy:
+
+```swync
+play([110, 165], poly, div: ['[2, 3], '[4], `])
+```

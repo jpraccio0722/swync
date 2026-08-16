@@ -32,7 +32,67 @@ pub const RESERVED: [(&str, &str); 2] = [
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lane {
     pub name: String,
-    pub pattern: Pattern,
+    pub values: LaneValues,
+}
+
+/// What a lane's steps carry.
+///
+/// Both are read the same way — the nth note takes the nth value, wrapping —
+/// and they differ only in what a note is given. The split exists because a
+/// `Pattern` carries `f64`s all the way to the scheduler, and widening that to
+/// hold lists would widen every note pattern too, where a step holding several
+/// numbers has no meaning: a note sounds at one pitch.
+///
+/// So a lane of lists is a flat sequence rather than a `Pattern`. It gives up
+/// nothing a lane could use — a lane never divides time, and `;` and rests are
+/// counted out into this sequence where a pattern would hold them as structure.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LaneValues {
+    /// Numbers, as every lane was before `'` existed.
+    Steps(Pattern),
+    /// Lists, from `'[2, 3]` or `list(2, 3)`. `None` is a rest, which leaves
+    /// the parameter to its own default exactly as a resting number does.
+    Lists(Vec<Option<Vec<f64>>>),
+}
+
+/// One lane's value at one note, on its way to the instrument.
+///
+/// Plain data, because this is what crosses to the scheduler thread and is
+/// turned back into an argument there.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LaneArg {
+    Num(f64),
+    List(Vec<f64>),
+}
+
+impl Lane {
+    /// The pattern behind a lane of numbers.
+    ///
+    /// Only tests call it, and only ones that built the lane they are asking
+    /// about — which is why a lane of lists panics here rather than answering:
+    /// it would mean the test is pinning something other than what it set up.
+    #[cfg(test)]
+    pub fn steps(&self) -> &Pattern {
+        match &self.values {
+            LaneValues::Steps(p) => p,
+            LaneValues::Lists(_) => panic!("this lane carries quoted lists, not numbers"),
+        }
+    }
+}
+
+impl LaneArg {
+    /// The number, for a lane that carries them.
+    ///
+    /// `None` on a quoted list. The two reserved lanes are the callers that
+    /// need this rather than a match: both are numbers by definition, and
+    /// `play` refuses a quoted list on either — so for them `None` is a case
+    /// that cannot arise rather than one to decide about.
+    pub fn as_num(&self) -> Option<f64> {
+        match self {
+            LaneArg::Num(n) => Some(*n),
+            LaneArg::List(_) => None,
+        }
+    }
 }
 
 /// A pattern paired with the instrument that plays it.
@@ -201,7 +261,7 @@ pub struct BoundEvent {
     /// Lane values sampled at this event's onset, ready to be passed by name.
     /// A lane resting here is absent, so the parameter falls back to its own
     /// default rather than erroring.
-    pub args: Vec<(String, f64)>,
+    pub args: Vec<(String, LaneArg)>,
     /// How fast the binding was running when this note began — its `rate`, and
     /// under an `accel` the speed the curve had reached by here. Sampled per
     /// note for the same reason a lane is: the voice is built once, at the
@@ -224,8 +284,13 @@ impl Patterns {
             }
             // Flattened once per binding rather than per event: a lane is the
             // same line of values whichever note is asking.
-            let lanes: Vec<(&str, Vec<Option<f64>>)> = b.lanes.iter()
-                .map(|l| (l.name.as_str(), l.pattern.values()))
+            let lanes: Vec<(&str, Vec<Option<LaneArg>>)> = b.lanes.iter()
+                .map(|l| (l.name.as_str(), match &l.values {
+                    LaneValues::Steps(p) => p.values().into_iter()
+                        .map(|v| v.map(LaneArg::Num)).collect(),
+                    LaneValues::Lists(vs) => vs.iter()
+                        .map(|v| v.clone().map(LaneArg::List)).collect(),
+                }))
                 .collect();
 
             windows.into_iter().flat_map(|Window { span, anchor, grid }| {
@@ -248,12 +313,14 @@ impl Patterns {
                 let mut args = Vec::with_capacity(lanes.len());
                 for (name, values) in &lanes {
                     if values.is_empty() { continue }
-                    let Some(v) = values[nth % values.len()] else { continue };
-                    if *name == LEGATO {
+                    let Some(v) = values[nth % values.len()].clone() else { continue };
+                    // `play` refuses a list on either reserved lane, so the
+                    // number is the only shape this can be.
+                    if let (LEGATO, LaneArg::Num(v)) = (*name, &v) {
                         // Applied here so `dur` and the voice's own lifetime
                         // stay the same number: the scheduler derives both from
                         // the event's span.
-                        if v.is_finite() && v > 0.0 {
+                        if v.is_finite() && *v > 0.0 {
                             event.end = event.begin + (event.end - event.begin) * v;
                         }
                     } else {
@@ -439,7 +506,7 @@ mod tests {
     }
 
     fn lane(name: &str, steps: Vec<Option<f64>>) -> Lane {
-        Lane { name: name.into(), pattern: Pattern::steps(steps) }
+        Lane { name: name.into(), values: LaneValues::Steps(Pattern::steps(steps)) }
     }
 
     #[test]
@@ -449,8 +516,27 @@ mod tests {
             vec![lane("cut", vec![Some(400.0), Some(2000.0)])],
         );
 
-        assert_eq!(evs[0].args, vec![("cut".to_string(), 400.0)]);
-        assert_eq!(evs[1].args, vec![("cut".to_string(), 2000.0)]);
+        assert_eq!(evs[0].args, vec![("cut".to_string(), LaneArg::Num(400.0))]);
+        assert_eq!(evs[1].args, vec![("cut".to_string(), LaneArg::Num(2000.0))]);
+    }
+
+    /// A lane of quoted lists is sampled by the same rule, so a shorter one
+    /// wraps under a longer pattern exactly as a lane of numbers does — the
+    /// property that makes one value mean "every note".
+    #[test]
+    fn a_lane_of_lists_is_sampled_by_note_and_wraps() {
+        let evs = bound(
+            Pattern::steps([Some(60.0), Some(62.0), Some(64.0)]),
+            vec![Lane {
+                name: "div".into(),
+                values: LaneValues::Lists(vec![Some(vec![2.0, 3.0]), None]),
+            }],
+        );
+
+        assert_eq!(evs[0].args, vec![("div".to_string(), LaneArg::List(vec![2.0, 3.0]))]);
+        // The rest passes nothing, leaving the parameter its own default.
+        assert_eq!(evs[1].args, vec![]);
+        assert_eq!(evs[2].args, vec![("div".to_string(), LaneArg::List(vec![2.0, 3.0]))]);
     }
 
     /// A shorter lane repeats against a longer pattern, note for note — not
@@ -462,7 +548,7 @@ mod tests {
             vec![lane("cut", vec![Some(10.0), Some(20.0)])],
         );
 
-        let cuts: Vec<f64> = evs.iter().map(|e| e.args[0].1).collect();
+        let cuts: Vec<f64> = evs.iter().map(|e| e.args[0].1.as_num().unwrap()).collect();
         assert_eq!(cuts, vec![10.0, 20.0, 10.0, 20.0]);
     }
 
@@ -484,7 +570,7 @@ mod tests {
 
         let cuts: Vec<f64> = (0..4)
             .flat_map(|c| pats.query(Span::new(c as f64, c as f64 + 1.0)))
-            .map(|e| e.args[0].1)
+            .map(|e| e.args[0].1.as_num().unwrap())
             .collect();
 
         assert_eq!(cuts, vec![
@@ -511,7 +597,7 @@ mod tests {
 
         let bar = |c: i32| -> Vec<f64> {
             pats.query(Span::new(c as f64, c as f64 + 1.0))
-                .iter().map(|e| e.args[0].1).collect()
+                .iter().map(|e| e.args[0].1.as_num().unwrap()).collect()
         };
 
         assert_eq!(bar(0), vec![10.0, 20.0, 30.0, 10.0]);
@@ -536,7 +622,7 @@ mod tests {
 
         // Twice as fast is four notes a bar, still taking the lane in order.
         let cuts: Vec<f64> = pats.query(Span::new(0.0, 1.0))
-            .iter().map(|e| e.args[0].1).collect();
+            .iter().map(|e| e.args[0].1.as_num().unwrap()).collect();
         assert_eq!(cuts, vec![10.0, 20.0, 30.0, 10.0]);
     }
 
@@ -549,7 +635,7 @@ mod tests {
             vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
         );
 
-        let cuts: Vec<f64> = evs.iter().map(|e| e.args[0].1).collect();
+        let cuts: Vec<f64> = evs.iter().map(|e| e.args[0].1.as_num().unwrap()).collect();
         assert_eq!(cuts, vec![10.0, 20.0, 30.0]);
     }
 
@@ -561,14 +647,14 @@ mod tests {
             Pattern::steps([Some(1.0), Some(2.0), Some(3.0)]),
             vec![Lane {
                 name: "cut".into(),
-                pattern: Pattern::seq(vec![
+                values: LaneValues::Steps(Pattern::seq(vec![
                     Step::Value(10.0),
                     Step::Group(Box::new(Pattern::steps([Some(20.0), Some(30.0)]))),
-                ]),
+                ])),
             }],
         );
 
-        let cuts: Vec<f64> = evs.iter().map(|e| e.args[0].1).collect();
+        let cuts: Vec<f64> = evs.iter().map(|e| e.args[0].1.as_num().unwrap()).collect();
         assert_eq!(cuts, vec![10.0, 20.0, 30.0]);
     }
 
@@ -609,7 +695,7 @@ mod tests {
         for bad in [0.0, -1.0, f64::INFINITY, f64::NAN] {
             let evs = bound(
                 Pattern::steps([Some(1.0)]),
-                vec![Lane { name: LEGATO.into(), pattern: Pattern::steps([Some(bad)]) }],
+                vec![Lane { name: LEGATO.into(), values: LaneValues::Steps(Pattern::steps([Some(bad)])) }],
             );
             assert!((evs[0].event.duration() - 1.0).abs() < 1e-9, "legato {bad} changed the note");
         }
@@ -724,7 +810,7 @@ mod tests {
             vec![lane("cut", vec![Some(400.0)]), lane("amp", vec![Some(0.8)])],
         );
 
-        assert_eq!(evs[0].args, vec![("cut".into(), 400.0), ("amp".into(), 0.8)]);
+        assert_eq!(evs[0].args, vec![("cut".into(), LaneArg::Num(400.0)), ("amp".into(), LaneArg::Num(0.8))]);
     }
 
     // ---- sequenced bindings ----
@@ -923,7 +1009,7 @@ mod tests {
             let cuts: Vec<f64> = offset_section(start)
                 .query(Span::new(0.0, 16.0))
                 .iter()
-                .map(|e| e.args[0].1)
+                .map(|e| e.args[0].1.as_num().unwrap())
                 .collect();
             assert_eq!(cuts, vec![10.0, 20.0, 30.0, 40.0, 50.0], "placed at bar {start}");
         }
@@ -967,7 +1053,7 @@ mod tests {
         let mut pats = accelerating(3.0, 0.0, None);
         pats.bindings[0].lanes = vec![lane("cut", vec![Some(10.0), Some(20.0)])];
 
-        let cuts: Vec<f64> = pats.query(Span::new(0.0, 12.0)).iter().map(|e| e.args[0].1).collect();
+        let cuts: Vec<f64> = pats.query(Span::new(0.0, 12.0)).iter().map(|e| e.args[0].1.as_num().unwrap()).collect();
         assert_eq!(cuts.len(), 8);
         assert_eq!(cuts[0], 10.0, "the first note takes the first value");
         assert_eq!(&cuts[..4], &[10.0, 20.0, 10.0, 20.0]);
