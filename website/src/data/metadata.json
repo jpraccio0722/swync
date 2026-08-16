@@ -991,6 +991,20 @@
       "doc": "Bandlimited triangle wavetable oscillator."
     },
     {
+      "name": "list",
+      "params": [
+        "number"
+      ],
+      "arities": [
+        1
+      ],
+      "variadic": true,
+      "category": "list",
+      "receives": "number",
+      "returns": "lane",
+      "doc": "Marks numbers as one value rather than a sequence: `play(riff, bzzz, div: list(2, 3))` gives every note both, where `div: [2, 3]` would give the first note 2 and the second 3. `'[2, 3]` is the same thing written short. Only a lane reads one."
+    },
+    {
       "name": "len",
       "params": [
         "list"

@@ -97,6 +97,23 @@ fn relist(items: Vec<Item>) -> Result<Option<Value>, String> {
 impl Lowerer {
     pub fn list_builtin(&mut self, func: &str, args: &[Value]) -> Result<Option<Value>, String> {
         match func {
+            // The written-out spelling of `'`, and the same value: `list(2, 3)`
+            // is `'[2, 3]`. Two spellings because the two positions read
+            // differently — a quote disappears into a bracket-heavy lane, and a
+            // call reads better as the whole of one.
+            "list" => {
+                let nums = args
+                    .iter()
+                    .map(|v| match v {
+                        Value::Number(n) => Ok(*n),
+                        _ => Err("list takes numbers: `list(2, 3)`. Whatever else it \
+                                  held would have to reach an instrument one note at \
+                                  a time, which only numbers can do".to_string()),
+                    })
+                    .collect::<Result<Vec<f64>, String>>()?;
+                Ok(Some(Value::Quoted(Rc::new(nums))))
+            }
+
             "len" => {
                 arity(func, args)?;
                 Ok(Some(Value::Number(as_list(func, &args[0])?.len() as f64)))

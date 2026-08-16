@@ -42,7 +42,11 @@ export type ValueKind =
   /** How fast a pattern runs, from `accel`. Only `play`'s rate takes one, and
    *  it takes a plain number there too — so this is only ever a result, and a
    *  dot after one has nothing to offer. */
-  | "rate";
+  | "rate"
+  /** A list marked to be passed whole, from `'` or `list`. Only a `play` lane
+   *  takes one, and it takes plain numbers there too — so like `rate`, this is
+   *  only ever a result and a dot after one has nothing to offer. */
+  | "lane";
 
 export interface Builtin {
   name: string;

@@ -158,7 +158,7 @@ fn for_loop_builds_a_list() {
          play([220, 330], bass, cut: cutoffs())\n"));
 
     assert_eq!(
-        bs[0].lanes[0].pattern.values(),
+        bs[0].lanes[0].steps().values(),
         vec![Some(100.0), Some(200.0), Some(300.0), Some(400.0)]);
 }
 
@@ -642,6 +642,7 @@ fn pattern_shaped_list_binding() {
 
 use crate::lowerer::lower::lower as lower_full;
 use crate::pattern::pattern::{Pattern, Step};
+use crate::pattern::patterns::LaneValues;
 use crate::pattern::rate::Rate;
 
 fn bindings_of(src: &str) -> Vec<crate::pattern::patterns::Binding> {
@@ -1008,9 +1009,113 @@ fn a_lane_is_bound_as_a_pattern() {
     assert_eq!(bs[0].lanes.len(), 1);
     assert_eq!(bs[0].lanes[0].name, "cut");
     assert_eq!(
-        bs[0].lanes[0].pattern,
+        *bs[0].lanes[0].steps(),
         Pattern::seq(vec![Step::Value(400.0), Step::Value(2000.0)])
     );
+}
+
+// ---- lanes of quoted lists ----
+
+/// The instrument the quoted-list tests bind against: a parameter it walks
+/// rather than reads, which is the whole reason a lane would carry a list.
+const POLY: &str = "fn poly(n, divs = [4], amp = 1) = for d in divs { saw(n * d) * amp }\n";
+
+/// The values a lane of quoted lists carries, in the order the notes read them.
+fn lane_lists(src: &str) -> Vec<Option<Vec<f64>>> {
+    let bs = bindings_of(src);
+    match &bs[0].lanes[0].values {
+        LaneValues::Lists(vs) => vs.clone(),
+        LaneValues::Steps(_) => panic!("this lane carries numbers, not quoted lists"),
+    }
+}
+
+/// The point of the quote: without it these brackets are two notes' worth of
+/// values, and with it they are one value both notes read.
+#[test]
+fn a_quoted_lane_is_one_value_where_the_same_brackets_would_be_two() {
+    assert_eq!(
+        lane_lists(&format!("{POLY}play([220, 330], poly, divs: '[2, 3])\n")),
+        vec![Some(vec![2.0, 3.0])]
+    );
+
+    let bs = bindings_of(&format!("{POLY}play([220, 330], poly, divs: [2, 3])\n"));
+    assert_eq!(*bs[0].lanes[0].steps(),
+        Pattern::seq(vec![Step::Value(2.0), Step::Value(3.0)]));
+}
+
+/// A lane of lists is read exactly as a lane of numbers is — by note, wrapping
+/// — so a pattern of them is the ordinary thing and one value is the case of a
+/// lane one long.
+#[test]
+fn a_lane_of_quoted_lists_is_read_by_note_like_any_other() {
+    assert_eq!(
+        lane_lists(&format!("{POLY}play([220, 330], poly, divs: ['[2, 3], '[4]])\n")),
+        vec![Some(vec![2.0, 3.0]), Some(vec![4.0])]
+    );
+}
+
+/// `list` is the same value written out, so the two spellings bind alike.
+#[test]
+fn list_is_the_written_out_spelling_of_a_quote() {
+    assert_eq!(
+        lane_lists(&format!("{POLY}play([220], poly, divs: list(2, 3))\n")),
+        lane_lists(&format!("{POLY}play([220], poly, divs: '[2, 3])\n"))
+    );
+}
+
+/// A `;` counts notes here as it does in any lane — the difference is only
+/// that what it repeats is a whole list.
+#[test]
+fn a_semicolon_in_a_lane_of_lists_counts_the_notes_a_value_covers() {
+    assert_eq!(
+        lane_lists(&format!("{POLY}play([220], poly, divs: ['[2, 3];2, '[4]])\n")),
+        vec![Some(vec![2.0, 3.0]), Some(vec![2.0, 3.0]), Some(vec![4.0])]
+    );
+}
+
+/// And a rest means what it means in a lane of numbers: this note is not told,
+/// so the instrument's own default stands.
+#[test]
+fn a_rest_in_a_lane_of_lists_leaves_the_parameter_to_its_default() {
+    assert_eq!(
+        lane_lists(&format!("{POLY}play([220], poly, divs: ['[2, 3], `])\n")),
+        vec![Some(vec![2.0, 3.0]), None]
+    );
+}
+
+/// Refused where it is written rather than where it would be discovered: a
+/// voice that fails to build halts its whole pattern, and a lane that were a
+/// list on one note and a number on the next would do it a note into a bar.
+#[test]
+fn a_lane_cannot_mix_quoted_lists_with_plain_numbers() {
+    let err = play_err(&format!("{POLY}play([220], poly, divs: ['[2, 3], 4])\n"));
+    assert!(err.contains("has to be one"), "got: {err}");
+}
+
+/// The two reserved lanes are single numbers by definition — one scales a
+/// length, the other places a voice — so there is nothing a list could mean.
+#[test]
+fn a_reserved_lane_refuses_a_quoted_list() {
+    for lane in ["legato", "pan"] {
+        let err = play_err(&format!("{POLY}play([220], poly, {lane}: '[1, 2])\n"));
+        assert!(err.contains("quoted list has nothing to say"), "{lane}: {err}");
+    }
+}
+
+/// Checked at the quote, where the mistake is, rather than one note at a time
+/// on the scheduler thread — which has no way to report it but to stop.
+#[test]
+fn a_quoted_list_holds_numbers_and_says_so_when_it_does_not() {
+    let err = play_err(&format!("{POLY}play([220], poly, divs: '[2, [3, 4]])\n"));
+    assert!(err.contains("quoted list holds numbers"), "got: {err}");
+}
+
+/// A note sounds at one value, so the quote means nothing in the pattern
+/// position — and the error says where it does mean something.
+#[test]
+fn a_pattern_cannot_contain_a_quoted_list() {
+    let err = play_err(&format!("{POLY}play(['[2, 3]], poly)\n"));
+    assert!(err.contains("pattern cannot contain a quoted list"), "got: {err}");
 }
 
 /// A scalar lane is just a one-step pattern, so `amp: 0.8` needs no special
@@ -1018,7 +1123,7 @@ fn a_lane_is_bound_as_a_pattern() {
 #[test]
 fn a_scalar_lane_is_a_one_step_pattern() {
     let bs = bindings_of(&format!("{BASS}play([220], bass, amp: 0.8)\n"));
-    assert_eq!(bs[0].lanes[0].pattern, Pattern::seq(vec![Step::Value(0.8)]));
+    assert_eq!(*bs[0].lanes[0].steps(), Pattern::seq(vec![Step::Value(0.8)]));
 }
 
 #[test]
@@ -1037,7 +1142,7 @@ fn rate_speeds_the_pattern_and_not_the_lanes() {
 
     assert_eq!(bs[0].pattern, Pattern::Fast(Rate::Fixed(2.0), Box::new(
         Pattern::seq(vec![Step::Value(220.0), Step::Value(330.0)]))));
-    assert_eq!(bs[0].lanes[0].pattern,
+    assert_eq!(*bs[0].lanes[0].steps(),
         Pattern::seq(vec![Step::Value(400.0), Step::Value(2000.0)]));
 }
 
@@ -1062,7 +1167,7 @@ playn([220], lead, 8).then(ramp)
     let vols: Vec<f64> = (0..14)
         .flat_map(|bar| pats.query(Span::new(bar as f64, bar as f64 + 1.0)))
         .filter(|e| e.instrument == "breath")
-        .map(|e| e.args.iter().find(|(n, _)| n == "vol").expect("vol lane").1)
+        .map(|e| e.args.iter().find(|(n, _)| n == "vol").expect("vol lane").1.as_num().expect("a number lane"))
         .collect();
 
     assert_eq!(vols, (0..=16).map(|i| i as f64).collect::<Vec<_>>());
@@ -1081,7 +1186,7 @@ fn a_long_lane_is_played_through_from_source() {
 
     let cuts: Vec<f64> = (0..10)
         .flat_map(|c| pats.query(Span::new(c as f64, c as f64 + 1.0)))
-        .map(|e| e.args.iter().find(|(n, _)| n == "cut").expect("cut lane").1)
+        .map(|e| e.args.iter().find(|(n, _)| n == "cut").expect("cut lane").1.as_num().expect("a number lane"))
         .collect();
 
     assert_eq!(cuts, (1..=20).map(|i| i as f64).collect::<Vec<_>>());
@@ -1089,7 +1194,7 @@ fn a_long_lane_is_played_through_from_source() {
     // And then around again, in phase with the pattern.
     let next: Vec<f64> = pats.query(Span::new(10.0, 11.0))
         .iter()
-        .map(|e| e.args.iter().find(|(n, _)| n == "cut").expect("cut lane").1)
+        .map(|e| e.args.iter().find(|(n, _)| n == "cut").expect("cut lane").1.as_num().expect("a number lane"))
         .collect();
     assert_eq!(next, vec![1.0, 2.0]);
 }
@@ -1111,7 +1216,7 @@ fn pan_is_accepted_without_being_a_parameter() {
 #[test]
 fn pan_may_be_a_pattern() {
     let bs = bindings_of(&format!("{BASS}play([220, 330], bass, pan: [-1, 1])\n"));
-    assert_eq!(bs[0].lanes[0].pattern.values(), vec![Some(-1.0), Some(1.0)]);
+    assert_eq!(bs[0].lanes[0].steps().values(), vec![Some(-1.0), Some(1.0)]);
 }
 
 /// A lane shorter than the pattern is read by position and wraps, so a
@@ -1121,7 +1226,7 @@ fn pan_may_be_a_pattern() {
 fn a_short_pan_lane_alternates_across_the_pattern() {
     let bs = bindings_of(
         "fn hat() = noise()\nplay([\\, `, \\, `, \\, `, \\, `], hat, pan: [-0.8, 0.8])\n");
-    assert_eq!(bs[0].lanes[0].pattern.values(), vec![Some(-0.8), Some(0.8)]);
+    assert_eq!(bs[0].lanes[0].steps().values(), vec![Some(-0.8), Some(0.8)]);
 }
 
 /// And a zero-parameter instrument takes one, which is most of a drum kit.
@@ -1809,12 +1914,16 @@ fn every_example_compiles_and_realizes() {
         for binding in &lowered.bindings {
             // Lanes go in as the scheduler would send them: the value the first
             // note takes, so an example's named arguments are exercised too.
-            let lanes: Vec<(String, f64)> = binding
+            use crate::pattern::patterns::{LaneArg, LaneValues};
+            let lanes: Vec<(String, LaneArg)> = binding
                 .lanes
                 .iter()
                 .filter(|l| l.name != crate::pattern::patterns::LEGATO)
-                .filter_map(|l| {
-                    l.pattern.values().first().copied().flatten().map(|v| (l.name.clone(), v))
+                .filter_map(|l| match &l.values {
+                    LaneValues::Steps(p) => p.values().first().copied().flatten()
+                        .map(|v| (l.name.clone(), LaneArg::Num(v))),
+                    LaneValues::Lists(vs) => vs.first().cloned().flatten()
+                        .map(|v| (l.name.clone(), LaneArg::List(v))),
                 })
                 .collect();
             let voice = crate::scheduler::voice::build_voice(
@@ -2787,7 +2896,7 @@ fn the_readme_chop_instrument_builds_a_voice() {
     let items = parse(src.to_string()).expect("should parse");
     let ins = crate::scheduler::voice::Instruments::from_program(&items).with_samples(samples);
 
-    let lanes = vec![("at".to_string(), 0.75)];
+    let lanes = vec![("at".to_string(), crate::pattern::patterns::LaneArg::Num(0.75))];
     assert!(crate::scheduler::voice::build_voice(&ins, "chop", 1.0, &lanes, 0.25, DEFAULT_BEAT_SECS, Default::default())
         .is_ok());
 }
@@ -2937,7 +3046,7 @@ mod length_tests {
     fn a_lane_length_holds_a_value_across_notes() {
         let bs = bindings_of(&format!(
             "{TONE}play([220, 330, 440], tone, cut: [400;2, 2000])\n"));
-        assert_eq!(bs[0].lanes[0].pattern.values(),
+        assert_eq!(bs[0].lanes[0].steps().values(),
                    vec![Some(400.0), Some(400.0), Some(2000.0)]);
     }
 
@@ -3082,7 +3191,7 @@ mod stack_tests {
     fn a_lane_reads_a_stack_in_order() {
         let bs = bindings_of(&format!(
             "{TONE}play([220, 330], tone, cut: stack([400], [2000]))\n"));
-        assert_eq!(bs[0].lanes[0].pattern.values(), vec![Some(400.0), Some(2000.0)]);
+        assert_eq!(bs[0].lanes[0].steps().values(), vec![Some(400.0), Some(2000.0)]);
     }
 
     /// An empty stack is a mistake worth naming rather than silence.
@@ -4070,7 +4179,7 @@ mod metrical_tests {
     fn a_lane_drifts_against_an_odd_bar() {
         let bs = bindings_of(&format!(
             "{TONE}play([220;q, 330, 440], tone, cut: [400, 2000])\n"));
-        assert_eq!(bs[0].lanes[0].pattern.values(), vec![Some(400.0), Some(2000.0)]);
+        assert_eq!(bs[0].lanes[0].steps().values(), vec![Some(400.0), Some(2000.0)]);
     }
 
     // ---- the signature ----
@@ -4179,6 +4288,7 @@ mod metrical_tests {
                    "so three passes come back onto the bar line after four bars");
     }
 }
+
 
 
 

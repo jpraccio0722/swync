@@ -22,6 +22,21 @@ pub enum Value {
     /// a nesting. Only patterns read it; everywhere else it is an error, since
     /// there is no sensible `len` or index of two things happening together.
     Stack(Rc<Vec<Value>>),
+    /// A list marked to be passed whole: `'[2, 3]`, or `list(2, 3)`.
+    ///
+    /// A variant of its own for the same reason [`Stack`](Value::Stack) is one.
+    /// Nothing about the shape of a list says whether the brackets are a
+    /// sequence to read through or the value itself, and in a `play` lane both
+    /// are meaningful: `div: [2, 3]` gives the first note 2 and the second 3,
+    /// while `div: '[2, 3]` gives every note both. So the difference has to be
+    /// a mark rather than a nesting.
+    ///
+    /// The numbers are held flat rather than as `Item`s because a lane carries
+    /// them to the scheduler thread, which builds the voice: whatever crosses
+    /// has to be plain data, and `Item` holds a `Value` that may be an `Rc`.
+    /// That is also why the items are checked to be numbers here, at the quote,
+    /// rather than being discovered to be something else one note at a time.
+    Quoted(Rc<Vec<f64>>),
     /// A loaded audio file, as `load` answers with it. Not a signal — nothing
     /// comes out of a buffer until `sample` reads it at a position.
     Buffer(Arc<Wave>),

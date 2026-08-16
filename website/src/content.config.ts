@@ -34,6 +34,7 @@ const valueKind = z.enum([
 	"duration",
 	"text",
 	"rate",
+	"lane",
 ]);
 
 const docs = defineCollection({

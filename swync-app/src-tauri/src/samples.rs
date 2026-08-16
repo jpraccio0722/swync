@@ -268,6 +268,7 @@ fn walk(e: &Expr, found: &mut Vec<String>) {
         }
 
         Expr::Neg { expr } => walk(expr, found),
+        Expr::Quote { expr } => walk(expr, found),
 
         // Leaves.
         Expr::Num(_) | Expr::Str(_) | Expr::Rest | Expr::Trigger | Expr::Var(_) => {}

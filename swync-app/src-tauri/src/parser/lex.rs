@@ -116,6 +116,17 @@ pub enum Token {
     #[token("::*")]
     PathGlob,
 
+    /// Marks a list as one value rather than a sequence to read through:
+    /// `play(riff, bzzz, div: '[2, 3])`. Short for `list(2, 3)`.
+    ///
+    /// The Lisp spelling, for the Lisp meaning — everywhere else brackets
+    /// around a lane are the steps of a pattern, and the quote is what says
+    /// this pair is data instead. A character with no infix reading was the
+    /// point of choosing it: `*` would have lexed just as well, but `a *[1, 2]`
+    /// is a multiplication the parser has no way to tell from a quoted list.
+    #[token("'")]
+    Quote,
+
     /// A rest inside a pattern: `[220, `, 330, `]`.
     #[token("`")]
     Rest,
@@ -198,6 +209,7 @@ impl fmt::Display for Token {
             Token::ParensClose => ")",
             Token::PathSep => "::",
             Token::PathGlob => "::*",
+            Token::Quote => "'",
             Token::Rest => "`",
             Token::Trigger => "\\",
             Token::Percent => "%",

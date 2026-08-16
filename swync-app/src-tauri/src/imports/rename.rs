@@ -196,6 +196,7 @@ impl<'a> Scope<'a> {
             }
 
             Expr::Neg { expr } => self.expr(expr),
+            Expr::Quote { expr } => self.expr(expr),
 
             Expr::List(items) => {
                 for item in items {
