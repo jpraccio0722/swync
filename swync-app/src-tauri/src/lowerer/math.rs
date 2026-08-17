@@ -13,6 +13,7 @@
 //! silence much later, which is miserable to trace back.
 
 use crate::swync_graph::environment::Value;
+use crate::lowerer::expr::{as_data, not_this_member};
 use crate::lowerer::lists::check_arity;
 use crate::lowerer::lower::Lowerer;
 /// `bpm` is the transport's own conversion, so the two can never disagree.
@@ -27,11 +28,12 @@ const CENTS_PER_OCTAVE: f64 = 1200.0;
 /// Shared with `lowerer::random`, which draws numbers into the same fold and so
 /// has to reject a signal in the same words.
 pub(crate) fn number(func: &str, what: &str, v: &Value) -> Result<f64, String> {
-    match v {
+    match as_data(v) {
         Value::Number(n) => Ok(*n),
-        _ => Err(format!(
-            "{func}: {what} must be a compile-time number (it folds during lowering)"
-        )),
+        _ => Err(not_this_member(v, &format!("{func}: {what} must be a number"))
+            .unwrap_or_else(|| format!(
+                "{func}: {what} must be a compile-time number (it folds during lowering)"
+            ))),
     }
 }
 
@@ -50,8 +52,9 @@ pub(crate) fn range(func: &str, lo: f64, hi: f64) -> Result<(), String> {
 }
 
 pub(crate) fn scale_tones(func: &str, v: &Value) -> Result<Vec<f64>, String> {
-    let Value::List(items) = v else {
-        return Err(format!("{func}: the scale must be a list of semitone offsets"));
+    let wanted = format!("{func}: the scale must be a list of semitone offsets");
+    let Value::List(items) = as_data(v) else {
+        return Err(not_this_member(v, &wanted).unwrap_or(wanted));
     };
     if items.is_empty() {
         return Err(format!("{func}: the scale is empty"));

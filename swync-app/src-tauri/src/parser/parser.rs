@@ -28,11 +28,23 @@ impl Arg {
     }
 }
 
+/// One alternative of an `enum`, and the value it stands for.
+///
+/// The value is optional because the two things enums are for want different
+/// halves of this. A tag — `enum Section { verse, chorus }` — is worth nothing
+/// but its own identity, and giving it a number would invent an ordering nobody
+/// wrote. A named constant — `enum Scale { major = [0, 2, 4, 5, 7, 9, 11] }` —
+/// is reached for precisely because of what it holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnumMember { pub name: Ident, pub value: Option<Expr> }
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SwyncItem {
     Function { name: Ident, params: Vec<Param>, body: Expr },
     Let { name: Ident, value: Expr },
     Call { func: Ident, args: Vec<Arg> },
+    /// `enum Scale { major = [0, 2, 4, 5, 7, 9, 11], minor = [...] }`.
+    Enum { name: Ident, members: Vec<EnumMember> },
     Expr(Expr),
     /// `use drums::kick` — another file's definitions, named here.
     ///
@@ -191,6 +203,20 @@ where I: ValueInput<'a, Token = Token, Span = SimpleSpan> {
 fn kw_as<'a, I>() -> impl Parser<'a, I, (), extra::Err<Rich<'a, Token>>> + Clone
 where I: ValueInput<'a, Token = Token, Span = SimpleSpan> {
     select! { Token::Ident(name) if name == "as" => () }.labelled("`as`")
+}
+
+/// The first member name written twice, if any.
+///
+/// Quadratic, and deliberately: an enum is a handful of names, and a `HashSet`
+/// here would report *a* duplicate rather than the first one, which is the one
+/// the writer's eye is already on.
+fn first_duplicate(members: &[EnumMember]) -> Option<&str> {
+    members.iter().enumerate().find_map(|(i, m)| {
+        members[..i]
+            .iter()
+            .any(|earlier| earlier.name.0 == m.name.0)
+            .then_some(m.name.0.as_str())
+    })
 }
 
 /// A name, qualified by the module it came from if it needs to be:
@@ -721,6 +747,53 @@ where I: ValueInput<'a, Token = Token, Span = SimpleSpan> {
         .then(expr())
         .map(|(name, value)| SwyncItem::Let { name, value });
 
+    // `enum Scale { major = [0, 2, 4], minor }`.
+    //
+    // Members separate on a comma *or* a line break, and any number of either.
+    // The lexer inserts a terminator inside these braces exactly as it does
+    // inside a block — brace depth is not tracked — so a member list written
+    // over lines arrives with `Term`s between its entries and a one-line list
+    // arrives with commas. Accepting both is what lets the same enum be written
+    // either way, which is how every other braced construct in the language
+    // already reads.
+    let enum_member = ident()
+        .then(just(Token::Assign).ignore_then(expr()).or_not())
+        .map(|(name, value)| EnumMember { name, value });
+
+    let member_sep = choice((
+        just(Token::Comma).ignored(),
+        just(Token::Term).ignored(),
+    ))
+    .repeated()
+    .at_least(1);
+
+    let enum_item = just(Token::Enum)
+        .ignore_then(ident())
+        .then(
+            enum_member
+                .separated_by(member_sep)
+                .allow_leading()
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::BraceOpen), just(Token::BraceClose)),
+        )
+        .try_map(|(name, members), span| {
+            // An enum with no members has no value that could ever be written,
+            // so it is a declaration that cannot be used — always a half-typed
+            // line rather than an intent.
+            if members.is_empty() {
+                return Err(Rich::custom(span, "an enum needs at least one member: \
+                                               `enum Scale { major, minor }`"));
+            }
+            if let Some(dup) = first_duplicate(&members) {
+                return Err(Rich::custom(span, format!(
+                    "`{}` is declared twice in enum `{}` — two members of one enum \
+                     cannot share a name, since `{}.{}` could then mean either",
+                    dup, name.0, name.0, dup)));
+            }
+            Ok(SwyncItem::Enum { name, members })
+        });
+
     // `use lib::drums`, `use lib::drums as d`, `use lib::drums::kick`,
     // `use lib::drums::{kick, snare as clap}`, `use lib::drums::*`.
     //
@@ -758,6 +831,7 @@ where I: ValueInput<'a, Token = Token, Span = SimpleSpan> {
     let item = choice((
         use_item,
         function,
+        enum_item,
         expr().map(SwyncItem::Expr),
         let_item,
     ));

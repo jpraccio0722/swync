@@ -138,6 +138,14 @@ a {
     @apply text-gray-800 dark:text-gray-200;
 }
 
+/* Both halves of `Scale.major`, which is one reference and is coloured as one.
+   Indigo sits between the blue a function takes and the purple of a keyword —
+   the only gap left — and stays out of the pattern colours, which an enum
+   member can never appear among. */
+.prose-swync .tok-enum {
+    @apply text-indigo-700 dark:text-indigo-400;
+}
+
 /* Warm for silence, cool-bright for a hit: the pair has to be separable at a
    glance inside a dense pattern like `[\, `, \, [\, \]]`. */
 .prose-swync .tok-rest {

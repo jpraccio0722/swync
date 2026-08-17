@@ -1,10 +1,10 @@
 use std::rc::Rc;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use crate::swync_graph::environment::{Env, FunctionDef, Value};
+use crate::swync_graph::environment::{written, Env, EnumDef, EnumMemberDef, FunctionDef, Value};
 use crate::swync_graph::graph::SwyncGraph;
 use crate::swync_graph::ugen_nodes::{NodeId, NodeInput, NodeKind, UGenNode};
-use crate::parser::parser::SwyncItem;
+use crate::parser::parser::{Expr, SwyncItem};
 use crate::pattern::patterns::{Binding, ChoiceGroup};
 use crate::samples::Samples;
 use crate::scheduler::clock::Meter;
@@ -211,18 +211,57 @@ impl Lowerer {
     fn item(&mut self, item: &SwyncItem) -> Result<(), String> {
         match item {
             SwyncItem::Function { name, params, body } => {
+                self.shadows_enum(&name.0, "fn")?;
                 self.env.define(&name.0.as_str(), Value::Function(
                     Rc::new(
                         FunctionDef { params: params.to_vec(), body: body.clone() }
                     )
                 ));
-                
+
                 Ok(())
             }
 
             SwyncItem::Let { name, value } => {
+                self.shadows_enum(&name.0, "let")?;
                 let v = self.expr(value)?;
                 self.env.define(&name.0.as_str(), v);
+                Ok(())
+            }
+
+            SwyncItem::Enum { name, members } => {
+                // Refused rather than shadowed, and refused from both sides.
+                //
+                // Everywhere else in the language a later definition simply wins,
+                // and that is fine because what it wins is one name meaning one
+                // thing. An enum is not one name: `Scale` is also every `Scale.x`
+                // written anywhere in the file. Letting a `let Scale = 4` take it
+                // would leave those reading as method calls on 4, reported one at
+                // a time and nowhere near the line that caused it. One error, on
+                // the collision itself, is the only version of this a reader can
+                // act on.
+                if self.env.lookup(&name.0).is_some() {
+                    return Err(format!(
+                        "`{}` is already defined, and an enum needs its name to \
+                         itself — every `{}.x` in the file reads through it. \
+                         Rename one of the two",
+                        written(&name.0), written(&name.0)));
+                }
+
+                let mut defined: Vec<EnumMemberDef> = Vec::with_capacity(members.len());
+                for member in members {
+                    // A member's value is evaluated here, once, in the scope the
+                    // enum is declared in — see `EnumDef`.
+                    let value = match &member.value {
+                        Some(e) => Some(self.member_value(&name.0, &member.name.0, e)?),
+                        None => None,
+                    };
+                    defined.push(EnumMemberDef { name: member.name.0.clone(), value });
+                }
+
+                self.env.define(&name.0, Value::EnumType(Rc::new(EnumDef {
+                    name: name.0.clone(),
+                    members: defined,
+                })));
                 Ok(())
             }
 
@@ -244,6 +283,46 @@ impl Lowerer {
 
 
             _ => Ok (())
+        }
+    }
+
+    /// Refuse a definition that would take an enum's name out from under it.
+    ///
+    /// The other half of the rule in `SwyncItem::Enum`, and it has to be a
+    /// separate check because the two arrive in whichever order they were
+    /// written. Only an enum is protected this way: a `fn` redefining a `fn` is
+    /// ordinary and has always been allowed.
+    fn shadows_enum(&self, name: &str, what: &str) -> Result<(), String> {
+        match self.env.lookup(name) {
+            Some(Value::EnumType(def)) => Err(format!(
+                "`{what} {name}` would take the name of enum `{}`, and every \
+                 `{}.x` in the file reads through it. Rename one of the two",
+                def.written(), def.written())),
+            _ => Ok(()),
+        }
+    }
+
+    /// Evaluate one member's value, where the enum is declared.
+    ///
+    /// Refused here rather than at the mention, because a member is a constant
+    /// and the things refused are the ones that cannot be one: a signal is a
+    /// node in a graph that outlives no eval, and a member of an enum is read at
+    /// lowering by whatever asks for it. The message names the enum and the
+    /// member, since a declaration may hold a dozen and the expression alone
+    /// does not say which line it was on.
+    fn member_value(&mut self, ty: &str, member: &str, e: &Expr) -> Result<Value, String> {
+        let value = self.expr(e)?;
+        match value {
+            Value::Signal(_) => Err(format!(
+                "`{}.{member}` is a signal, and an enum member is a constant — it \
+                 is read once, where the enum is written, and a signal only means \
+                 something in the graph it is part of",
+                written(ty))),
+            Value::EnumType(_) => Err(format!(
+                "`{}.{member}` is an enum rather than a value. An enum member \
+                 holds what it stands for; name one of that enum's members instead",
+                written(ty))),
+            other => Ok(other),
         }
     }
 

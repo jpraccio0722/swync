@@ -174,6 +174,16 @@ pub(crate) fn paths_in(items: &[SwyncItem]) -> Vec<String> {
                     walk(&arg.value, &mut found);
                 }
             }
+            // A member's value is an ordinary expression, so an enum can name a
+            // file: `enum Kit { kick = load("kick.wav") }` is a buffer under a
+            // name, and the decode has to be queued from here like any other.
+            SwyncItem::Enum { members, .. } => {
+                for member in members {
+                    if let Some(value) = &member.value {
+                        walk(value, &mut found);
+                    }
+                }
+            }
             // Expanded away before this runs; nothing of it survives to lower.
             SwyncItem::Use(_) => {}
         }

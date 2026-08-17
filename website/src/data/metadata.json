@@ -2277,7 +2277,8 @@
     "for",
     "in",
     "use",
-    "as"
+    "as",
+    "enum"
   ],
   "durations": [
     {

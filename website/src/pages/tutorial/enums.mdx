@@ -1,0 +1,90 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: enums
+---
+
+Enums make repetition easier ahnd more readable
+
+```swync
+fn lead(n) = saw(n.m2h) * env(0.01, 0.1, 0.6, 0.2, dur)
+
+play([60, 63, 67, 70].map(scale, '[0, 2, 3, 5, 7, 8, 10]), lead)
+```
+
+An `enum` gives a group of related values one name each, in one place:
+
+```swync
+enum Scale {
+  major = [0, 2, 4, 5, 7, 9, 11]
+  minor = [0, 2, 3, 5, 7, 8, 10]
+  pentatonic = [0, 3, 5, 7, 10]
+}
+
+sin(61.scale(Scale.major).m2h) * 0.2
+```
+
+A member does not have to have a value. 
+
+```swync
+enum Section { verse, chorus, bridge }
+```
+
+```swync
+enum Section { verse, chorus }
+
+let part = Section.chorus
+
+fn lead(n) = saw(n.m2h) * env(0.01, 0.1, 0.6, 0.2, dur)
+
+play(if part == Section.chorus { [72, 75, 79] } else { [60, 63] }, lead)
+```
+
+Two members are equal only when they are the *same member*. 
+
+```swync
+enum Level { quiet = 0.2, soft = 0.2 }
+```
+
+`Level.quiet == Level.soft` is false. They hold the same number, and they are
+still two different members — which is the whole reason a member keeps its
+identity instead of simply becoming its value.
+
+For the same reason, comparing across two enums is an error rather than
+`false`. Nothing is both a `Scale` and a `Section`, and a program asking is a
+program with a mistake in it that `false` would let run forever.
+
+
+A member can be anything that is a constant: a number, a list, a written note value, a buffer
+from `load`. Not a signal — a member is read once, where the enum is written,
+and a signal only means something inside the graph it is part of.
+
+```swync
+enum Kit {
+  kick = load("kick.wav")
+  snare = load("snare.wav")
+}
+
+sample(Kit.kick, ramp(1 / Kit.kick.secs)) * 0.6
+```
+
+A member cannot be a step in a pattern or a value in a lane, even one holding a
+number:
+
+```swync
+enum Tuning { a = 440 }
+
+[Tuning.a] >> play(lead)   // refused
+```
+
+Everywhere else in the language a member stands for what it holds, because
+everywhere else it is read while your program is being compiled. A pattern is
+not: it is handed to the scheduler, which builds a voice per note against a
+clock that is already running, and only plain numbers make that crossing. Write
+the number, or bind it outside the pattern:
+
+```swync
+enum Tuning { a = 440 }
+
+let a = Tuning.a
+[a] >> play(lead)
+```

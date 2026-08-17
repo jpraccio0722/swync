@@ -4303,3 +4303,204 @@ mod metrical_tests {
 
 
 
+
+// ---- enums ----
+
+/// The two halves of what an enum member is, in one program: `Tuning.a` is read
+/// as 440 where a number is wanted, and is still its own tag when compared.
+#[test]
+fn a_member_holding_a_number_is_that_number_where_a_number_is_wanted() {
+    assert_eq!(enum_num("Tuning.a"), 440.0);
+    assert_eq!(enum_num("Tuning.a / 2"), 220.0);
+}
+
+/// The named-constant half: a member declared as a list is a list at every
+/// place a list is read, so `scale` takes one without being told about enums.
+#[test]
+fn a_member_holding_a_list_is_that_list_where_a_list_is_wanted() {
+    assert_eq!(enum_num("61.scale(Scale.major)"), 60.0);
+    assert_eq!(enum_num("len(Scale.pentatonic)"), 4.0);
+    assert_eq!(enum_num("Scale.pentatonic[2]"), 5.0);
+}
+
+/// The tag half: identity, not value. Both members here hold nothing, so there
+/// is no value for this to be answering from.
+#[test]
+fn members_of_one_enum_compare_by_which_member_they_are() {
+    assert_eq!(enum_num("if Section.verse == Section.verse { 1 } else { 0 }"), 1.0);
+    assert_eq!(enum_num("if Section.verse == Section.chorus { 1 } else { 0 }"), 0.0);
+    assert_eq!(enum_num("if Section.verse != Section.chorus { 1 } else { 0 }"), 1.0);
+}
+
+/// Two members given the same value are still two members. This is the case
+/// that a value-based equality would get wrong, and the reason the member is
+/// opaque rather than transparent.
+#[test]
+fn two_members_holding_the_same_value_are_not_equal() {
+    let src = "enum Pair { a = 1, b = 1 }\n\
+               sin(if Pair.a == Pair.b { 1 } else { 0 })\n";
+    let g = lower_src(src).expect("lower failed");
+    assert_eq!(g.nodes[0].inputs[0], Const(0.0));
+}
+
+/// Comparing across two enums is refused rather than answered `false`: no
+/// program means to ask it, and `false` is the answer that lets it run forever.
+#[test]
+fn comparing_members_of_different_enums_is_an_error() {
+    let err = enum_err("Section.verse == Scale.major");
+    assert!(err.contains("different enums"), "got: {err}");
+}
+
+/// Members are a set, not a scale — the order they were written in is a fact
+/// about the file, not about the music.
+#[test]
+fn members_cannot_be_ordered() {
+    let err = enum_err("Section.verse < Section.chorus");
+    assert!(err.contains("`==` and `!=`"), "got: {err}");
+}
+
+/// An enum member and a number have nothing to compare, and saying so beats
+/// unwrapping one side and answering about the other.
+#[test]
+fn comparing_a_member_with_a_number_is_an_error() {
+    let err = enum_err("Tuning.a == 440");
+    assert!(err.contains("nothing to compare"), "got: {err}");
+}
+
+/// A misspelled member names the ones that exist: the enum is somewhere else in
+/// the file, and this is the message that saves scrolling to it.
+#[test]
+fn an_unknown_member_lists_the_ones_there_are() {
+    let err = enum_err("Scale.majr");
+    assert!(err.contains("no member `majr`"), "got: {err}");
+    assert!(err.contains("major"), "and offers the real ones: {err}");
+}
+
+/// A member reached for as data that does not hold that sort of data points at
+/// the declaration, since the mention itself reads correctly.
+#[test]
+fn a_tag_used_as_data_is_reported_against_its_declaration() {
+    let err = enum_err("Section.verse + 1");
+    assert!(err.contains("holds nothing"), "got: {err}");
+    assert!(err.contains("tag"), "and says what that means: {err}");
+}
+
+/// The enum itself is not one of its members.
+#[test]
+fn naming_the_enum_without_a_member_is_an_error() {
+    let err = enum_err("Scale");
+    assert!(err.contains("enum `Scale`"), "got: {err}");
+}
+
+/// A member is a value, so calling one is not a call with the wrong arity.
+#[test]
+fn a_member_cannot_be_called() {
+    let err = enum_err("Tuning.a(2)");
+    assert!(err.contains("rather than something to call"), "got: {err}");
+}
+
+/// Both halves of the collision rule, since the two arrive in whichever order
+/// they were written.
+#[test]
+fn an_enum_and_another_definition_cannot_share_a_name() {
+    let after = lower_src("let Scale = 4\nenum Scale { major }\n").unwrap_err();
+    assert!(after.contains("already defined"), "got: {after}");
+
+    let before = lower_src("enum Scale { major }\nlet Scale = 4\n").unwrap_err();
+    assert!(before.contains("would take the name"), "got: {before}");
+
+    let func = lower_src("enum Scale { major }\nfn Scale(x) = x\n").unwrap_err();
+    assert!(func.contains("would take the name"), "got: {func}");
+}
+
+/// A member is evaluated once, where the enum is written — which is what makes
+/// it a constant rather than an expression under a name.
+#[test]
+fn a_member_is_evaluated_once_at_its_declaration() {
+    let src = "enum R { x = rand(0, 1000) }\n\
+               sin(R.x - R.x)\n";
+    let g = lower_src(src).expect("lower failed");
+    assert_eq!(g.nodes[0].inputs[0], Const(0.0),
+               "two mentions of one member are the same draw");
+}
+
+/// A signal cannot be a member: it is a node in a graph, and a member is read
+/// wherever it is mentioned.
+#[test]
+fn a_member_cannot_hold_a_signal() {
+    let err = lower_src("enum Bad { tone = sin(440) }\nsin(1)\n").unwrap_err();
+    assert!(err.contains("is a signal"), "got: {err}");
+}
+
+/// Refused at the pattern boundary even when the member holds a number — see
+/// `enum_not_a_step`. The message says what to write instead.
+#[test]
+fn a_member_cannot_be_a_pattern_step() {
+    let src = "fn bass(n) = sin(n)\n\
+               enum Tuning { a = 440 }\n\
+               [Tuning.a] >> play(bass)\n";
+    let err = lower_src(src).unwrap_err();
+    assert!(err.contains("a pattern cannot contain `Tuning.a`"), "got: {err}");
+    assert!(err.contains("Write `440` here"), "and says what to write: {err}");
+}
+
+/// An enum with no members is a declaration nothing could ever use.
+#[test]
+fn an_empty_enum_is_a_parse_error() {
+    assert!(parse("enum Nothing { }\n".to_string()).is_err());
+}
+
+/// Two members of one name would make `E.x` mean either.
+#[test]
+fn a_repeated_member_name_is_a_parse_error() {
+    assert!(parse("enum E { x = 1, x = 2 }\n".to_string()).is_err());
+}
+
+/// Members separate on a comma, a line break, or both — the lexer inserts a
+/// terminator inside these braces exactly as it does inside a block.
+#[test]
+fn members_may_be_separated_by_lines_commas_or_both() {
+    let one_line = "enum S { a = 1, b = 2, c = 3 }\n";
+    let over_lines = "enum S {\n  a = 1\n  b = 2\n  c = 3\n}\n";
+    let mixed = "enum S {\n  a = 1,\n  b = 2,\n  c = 3,\n}\n";
+
+    for src in [one_line, over_lines, mixed] {
+        let g = lower_src(&format!("{src}sin(S.a + S.b + S.c)\n"))
+            .unwrap_or_else(|e| panic!("failed on {src:?}: {e}"));
+        assert_eq!(g.nodes[0].inputs[0], Const(6.0), "for {src:?}");
+    }
+}
+
+/// The declarations every enum test above is written against.
+const ENUMS: &str = "enum Scale { major = [0, 2, 4, 5, 7, 9, 11], pentatonic = [0, 3, 5, 7] }\n\
+                     enum Section { verse, chorus }\n\
+                     enum Tuning { a = 440 }\n";
+
+/// Lower an expression with those declarations in front of it, and read back
+/// the constant it folded to.
+fn enum_num(src: &str) -> f64 {
+    let g = lower_src(&format!("{ENUMS}sin({src})\n")).expect("lower failed");
+    match g.nodes[0].inputs[0] {
+        Const(v) => v,
+        _ => panic!("expected a folded constant"),
+    }
+}
+
+/// The same, for an expression that should be refused.
+fn enum_err(src: &str) -> String {
+    lower_src(&format!("{ENUMS}sin({src})\n")).unwrap_err()
+}
+
+/// An enum has to be written before it is used, exactly as a `fn` does: items
+/// are lowered in order, and this is the same rule the rest of the file obeys.
+/// Pinned because "the enum is further down" is a plausible thing to try.
+#[test]
+fn an_enum_must_be_declared_before_it_is_used() {
+    let after = lower_src("sin(Scale.major[0])\nenum Scale { major = [0, 2] }\n");
+    assert!(after.is_err(), "an enum used before it is written is unbound");
+
+    // And the same program the other way round is fine, which is what says the
+    // rule is about order rather than about enums.
+    let before = lower_src("enum Scale { major = [0, 2] }\nsin(Scale.major[1])\n");
+    assert!(before.is_ok(), "got: {before:?}");
+}
