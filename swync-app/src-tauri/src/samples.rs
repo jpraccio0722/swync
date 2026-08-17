@@ -30,6 +30,25 @@ use crate::parser::parser::{Expr, SwyncItem, Statement};
 /// program that assembles it runs.
 pub const LOAD: &str = "load";
 
+/// What an audio file is called, as far as this app is concerned — lowercase,
+/// without the dot.
+///
+/// Nothing here is consulted before decoding: `load` hands any path it is given
+/// to symphonia, which probes the file itself, so a `.wav` that is really an
+/// AIFF still plays. This is the other question — *which rows in the project
+/// tree are worth offering a play button on* — and it is answered here, beside
+/// the decoder, rather than in a list in the frontend that could quietly come
+/// to disagree with what can actually be read. It is served by the
+/// `sample_extensions` command.
+///
+/// It is a hand-written list either way, since symphonia has no way to be asked
+/// what it was built with. Adding one that cannot be decoded costs a button
+/// that reports why when pressed; leaving one out costs a file with no button,
+/// which nothing else in the app would explain.
+pub const EXTENSIONS: &[&str] = &[
+    "wav", "wave", "aif", "aiff", "aifc", "caf", "flac", "mp3", "m4a", "mp4", "aac", "ogg", "oga",
+];
+
 /// The buffers a program asked for, keyed by the path as it was written.
 ///
 /// The key is the source text rather than the resolved path because that is

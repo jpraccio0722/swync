@@ -21,6 +21,7 @@ use tauri::menu::{IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, 
 use tauri::{Emitter, Manager};
 
 mod audio_in;
+mod audition;
 mod devices;
 mod meter;
 mod pattern;
@@ -191,6 +192,47 @@ fn stop_audio(
     eng.clock.reset();
 
     Ok(())
+}
+
+/// Backend hook for the play button beside a sample in the project tree.
+///
+/// Answers with how long the file plays for, in seconds, which is the one thing
+/// the editor cannot work out for itself and needs in order to put the button
+/// back when the sound has finished.
+///
+/// It reads a disk, so it belongs on this thread and nowhere else — the same
+/// rule `run_code` follows for `load`, and through the same cache, so a sample
+/// heard here and then named by a program is decoded once. Everything after
+/// that is the scheduler's: it owns the sequencer the voice is pushed into.
+///
+/// Nothing about the program being edited is touched. What is playing goes on
+/// playing, and a file that turns out not to be audio is a message in the
+/// problems panel rather than a stopped performance.
+#[tauri::command]
+fn audition_sample(
+    path: String,
+    sched: tauri::State<SchedulerState>,
+    samples: tauri::State<samples::Cache>,
+) -> Result<f64, String> {
+    let wave = samples.read(std::path::Path::new(&path))?;
+    let voice = audition::voice(&wave)?;
+    let secs = voice.secs;
+    sched.audition(voice);
+    Ok(secs)
+}
+
+/// Stop the sample being auditioned, and nothing else — the graph and the
+/// patterns are the transport's business, not this button's.
+#[tauri::command]
+fn stop_audition(sched: tauri::State<SchedulerState>) {
+    sched.silence_audition();
+}
+
+/// Which files the project tree offers a play button on. See
+/// `samples::EXTENSIONS` for why the list lives beside the decoder.
+#[tauri::command]
+fn sample_extensions() -> &'static [&'static str] {
+    samples::EXTENSIONS
 }
 
 /// The transport panel's controls, as the frontend shows them: tempo in beats
@@ -1332,6 +1374,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_code,
             stop_audio,
+            audition_sample,
+            stop_audition,
+            sample_extensions,
             transport,
             set_tempo,
             set_meter,

@@ -14,7 +14,7 @@ use crate::swync_graph::{
 ///
 /// Note this is *not* `lfo()` / `envelope()`, which sample at 2 ms with
 /// pseudorandom jitter — far too coarse for a short attack.
-const ENV_INTERVAL: f64 = 0.0005;
+pub(crate) const ENV_INTERVAL: f64 = 0.0005;
 
 /// Attack-decay-sustain shape, ignoring release. Returns 0..=1.
 fn ads_level(t: f64, attack: f64, decay: f64, sustain: f64) -> f64 {

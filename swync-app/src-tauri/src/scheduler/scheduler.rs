@@ -11,6 +11,7 @@ use std::time::Duration;
 use fundsp::prelude64::AudioUnit;
 use fundsp::sequencer::{EventId, Fade, Sequencer};
 
+use crate::audition::Audition;
 use crate::diagnostic::{Diagnostic, Stage};
 use crate::pattern::pattern::Span;
 use crate::pattern::patterns::Patterns;
@@ -30,6 +31,19 @@ const FADE_OUT_SECS: f64 = 0.02;
 /// Where a failure the scheduler cannot recover from is sent. The app sets one
 /// that emits to the editor; tests set one that records.
 type Reporter = Box<dyn Fn(Diagnostic) + Send + Sync>;
+
+/// What the project panel's play button has asked for, waiting for the one
+/// thread allowed to touch the sequencer.
+///
+/// One slot rather than a queue, and the two asks share it rather than having a
+/// flag each: they are the same button, so what matters is which was pressed
+/// last. Clicking down a folder of kicks means the one under the pointer now,
+/// not all of them at once — and a stop that arrived a moment before a play
+/// must not silence the play.
+enum Asked {
+    Play(Audition),
+    Silence,
+}
 
 /// Shared handles the scheduler reads each pass. An eval swaps their contents.
 #[derive(Clone)]
@@ -52,6 +66,10 @@ pub struct SchedulerState {
     /// what keeps it out of a mutex — while the thing that moves the rate is a
     /// device switch on the command thread. See `set_sample_rate`.
     sample_rate: Arc<AtomicU64>,
+    /// A sample the project panel wants heard, or a request to stop hearing
+    /// one. Here for the same reason `sample_rate` is: the sequencer belongs to
+    /// the scheduler thread outright, and the button is pressed on another.
+    asked: Arc<Mutex<Option<Asked>>>,
 }
 
 impl SchedulerState {
@@ -62,7 +80,33 @@ impl SchedulerState {
             stop: Arc::new(AtomicBool::new(false)),
             report: Arc::new(OnceLock::new()),
             sample_rate: Arc::new(AtomicU64::new(0)),
+            asked: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Play a sample file, as soon as the next pass can push it.
+    ///
+    /// The buffer was decoded and the voice built by whoever called this — the
+    /// command thread, which is the only one allowed to read a disk. Nothing
+    /// here can fail in a way worth telling anybody about: a lock so poisoned
+    /// that a button press is lost is a scheduler that has already stopped
+    /// playing, and it will have said so through its own reporter.
+    pub fn audition(&self, voice: Audition) {
+        if let Ok(mut asked) = self.asked.lock() {
+            *asked = Some(Asked::Play(voice));
+        }
+    }
+
+    /// Stop whatever is being auditioned. Not a stop of the performance: the
+    /// graph and the patterns are untouched.
+    pub fn silence_audition(&self) {
+        if let Ok(mut asked) = self.asked.lock() {
+            *asked = Some(Asked::Silence);
+        }
+    }
+
+    fn take_asked(&self) -> Option<Asked> {
+        self.asked.lock().ok()?.take()
     }
 
     /// The output device has moved to another rate, so voices pushed from now
@@ -166,6 +210,10 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
     // does not look like a huge backlog to catch up on.
     let mut scheduled_through: Option<Mark> = None;
     let mut live: Vec<Live> = Vec::new();
+    // The sample being auditioned, which is at most one — see [`Asked`]. Kept
+    // apart from `live` because it is not part of the performance: it is not
+    // scheduled against bar time, and nothing about it survives an eval.
+    let mut auditioning: Option<Live> = None;
     // What `wire` stamped the sequencer with is right until a device switch
     // says otherwise, and zero here means nothing has.
     let mut rate = 0.0;
@@ -183,13 +231,70 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
 
         if state.take_stop() {
             silence(&mut seq, &mut live);
+            // Stop means the room goes quiet, and a sample being auditioned is
+            // a sound in the room like any other.
+            cut(&mut seq, &mut auditioning);
             // The horizon restarts from the present on the next eval.
             scheduled_through = None;
             continue;
         }
 
+        // After the stop, so a play button pressed while a stop was pending is
+        // heard rather than cut by it, and before the pass, since it is what
+        // somebody is waiting on.
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+
         scheduled_through = schedule_pass(&mut seq, &clock, &state, scheduled_through, &mut live);
-        retire(&mut live, clock.now_secs());
+        let now = clock.now_secs();
+        retire(&mut live, now);
+        if auditioning.as_ref().is_some_and(|voice| voice.end_secs <= now) {
+            auditioning = None;
+        }
+    }
+}
+
+/// Play, or stop playing, whatever the project panel's button last asked for.
+///
+/// A new audition cuts the one before it. Two samples at once is not what
+/// clicking down a folder means, and the alternative — letting them pile up —
+/// turns a list of kicks into a mush that says nothing about any of them.
+fn take_audition(
+    seq: &mut Sequencer,
+    clock: &Clock,
+    state: &SchedulerState,
+    auditioning: &mut Option<Live>,
+) {
+    let voice = match state.take_asked() {
+        None => return,
+        Some(Asked::Silence) => {
+            cut(seq, auditioning);
+            return;
+        }
+        Some(Asked::Play(voice)) => voice,
+    };
+
+    cut(seq, auditioning);
+
+    // The same lookahead every note is pushed with, and for the same reason: a
+    // start time the audio thread has already rendered past is a note that
+    // never sounds. What it costs is that a press is heard a fifth of a second
+    // later, which for listening to a file is not a deadline anybody feels.
+    let start_secs = clock.now_secs() + LOOKAHEAD_SECS;
+    // Held open past the end of the buffer so that the fade-out lands on
+    // silence rather than on the sample's last twenty milliseconds. `voice`
+    // reads past the end as silence, which is what makes that free — see
+    // `audition::voice`.
+    let dur_secs = voice.secs + FADE_OUT_SECS;
+
+    if let Some(id) = push_voice(seq, start_secs, dur_secs, voice.net) {
+        *auditioning = Some(Live { id, end_secs: start_secs + dur_secs });
+    }
+}
+
+/// Fade out one voice we are holding, if there is one, and forget it.
+fn cut(seq: &mut Sequencer, voice: &mut Option<Live>) {
+    if let Some(voice) = voice.take() {
+        seq.edit_relative(voice.id, FADE_OUT_SECS, FADE_OUT_SECS);
     }
 }
 
@@ -397,6 +502,137 @@ mod tests {
         assert!(push_voice(&mut seq, 0.0, 0.0, voice_net()).is_none());
         assert!(push_voice(&mut seq, f64::NAN, 1.0, voice_net()).is_none());
         assert!(push_voice(&mut seq, 0.0, -1.0, voice_net()).is_none());
+    }
+
+    // ---- auditioning a sample ----
+
+    const AUDITION_RATE: f64 = 44100.0;
+    /// A tenth of a second, which is about what a drum hit is.
+    const AUDITION_LENGTH: usize = 4410;
+
+    /// A buffer holding a constant, so a rendered frame either is it or is not.
+    fn a_sample() -> std::sync::Arc<fundsp::wave::Wave> {
+        let mut wave = fundsp::wave::Wave::new(1, AUDITION_RATE);
+        for _ in 0..AUDITION_LENGTH {
+            wave.push(0.5);
+        }
+        std::sync::Arc::new(wave)
+    }
+
+    fn an_audition() -> Audition {
+        crate::audition::voice(&a_sample()).expect("should build")
+    }
+
+    /// Render `frames` and answer with the loudest thing in them.
+    fn peak(seq: &mut Sequencer, frames: usize) -> f32 {
+        (0..frames).fold(0.0f32, |peak, _| {
+            let (l, r) = seq.get_stereo();
+            peak.max(l.abs()).max(r.abs())
+        })
+    }
+
+    /// The whole of what the play button does, from the ask to the sound.
+    #[test]
+    fn an_auditioned_sample_is_pushed_and_heard() {
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(AUDITION_RATE);
+        let clock = Clock::new(AUDITION_RATE);
+        let state = SchedulerState::new();
+        let mut auditioning = None;
+
+        state.audition(an_audition());
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+        assert!(auditioning.is_some(), "the sample should be playing");
+
+        // The lookahead first, which is silence, and then the sample.
+        let lead = (LOOKAHEAD_SECS * AUDITION_RATE) as usize;
+        assert!(peak(&mut seq, lead) < 1e-6, "nothing should sound before the lead is up");
+        assert!(peak(&mut seq, AUDITION_LENGTH) > 0.4, "the sample should be audible");
+    }
+
+    /// Asking twice does not play twice over: the second press replaces the
+    /// first, which is what clicking down a folder of kicks means.
+    #[test]
+    fn a_second_audition_replaces_the_first() {
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(AUDITION_RATE);
+        let clock = Clock::new(AUDITION_RATE);
+        let state = SchedulerState::new();
+        let mut auditioning = None;
+
+        state.audition(an_audition());
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+        let first = auditioning.as_ref().map(|voice| voice.id);
+
+        state.audition(an_audition());
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+        let second = auditioning.as_ref().map(|voice| voice.id);
+
+        assert!(first.is_some() && second.is_some());
+        assert_ne!(first, second, "the second press should be a new voice");
+    }
+
+    /// The button's other press. Nothing else about the scheduler moves — this
+    /// is not the transport's stop.
+    #[test]
+    fn silencing_an_audition_ends_it() {
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(AUDITION_RATE);
+        let clock = Clock::new(AUDITION_RATE);
+        let state = SchedulerState::new();
+        let mut auditioning = None;
+
+        state.audition(an_audition());
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+
+        state.silence_audition();
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+        assert!(auditioning.is_none(), "nothing should be auditioning");
+
+        // Well past the lead and the fade, so what is left is what the cut left.
+        let lead = (LOOKAHEAD_SECS * AUDITION_RATE) as usize;
+        assert!(peak(&mut seq, lead + AUDITION_LENGTH) < 1e-6, "it should be silent");
+    }
+
+    /// A pass with nobody pressing anything leaves what is playing alone. The
+    /// slot is empty on all but a handful of passes in a session, and a pass
+    /// that mistook that for a stop would cut every audition after 25 ms.
+    #[test]
+    fn a_pass_with_nothing_asked_for_changes_nothing() {
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(AUDITION_RATE);
+        let clock = Clock::new(AUDITION_RATE);
+        let state = SchedulerState::new();
+        let mut auditioning = None;
+
+        state.audition(an_audition());
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+        let playing = auditioning.as_ref().map(|voice| voice.id);
+
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+        assert_eq!(auditioning.as_ref().map(|voice| voice.id), playing);
+    }
+
+    /// The event has to outlast the buffer, or the fade-out would be laid over
+    /// the sample's own last twenty milliseconds instead of over the silence
+    /// after it.
+    #[test]
+    fn an_audition_is_held_open_past_the_end_of_the_file() {
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(AUDITION_RATE);
+        let clock = Clock::new(AUDITION_RATE);
+        let state = SchedulerState::new();
+        let mut auditioning = None;
+
+        state.audition(an_audition());
+        take_audition(&mut seq, &clock, &state, &mut auditioning);
+
+        let voice = auditioning.expect("should be playing");
+        let played = voice.end_secs - LOOKAHEAD_SECS;
+        assert!(
+            played > AUDITION_LENGTH as f64 / AUDITION_RATE,
+            "the note should be longer than the file, was {played}"
+        );
     }
 
     /// A mono unit must be rejected rather than tripping push's arity assert.
