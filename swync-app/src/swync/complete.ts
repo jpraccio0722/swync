@@ -32,6 +32,47 @@ const FN = /\bfn\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)/g;
 /** A `let`, with as much of its value as fits on the line — enough to guess
  *  whether the name holds a list. */
 const LET = /\blet\s+([a-zA-Z_]\w*)\s*(?:=\s*([^\n]*))?/g;
+
+/** `enum Scale { major = [0, 2], minor }` — the name, and the braces whole.
+ *
+ *  A member's value may hold anything but a `}`, which is what the inner class
+ *  says: a list, a call, arithmetic. Nesting braces inside one would need the
+ *  real parser, and a member whose value is a block is not something anybody
+ *  writes — the value of a member is a constant. */
+const ENUM = /\benum\s+([a-zA-Z_]\w*)\s*\{([^}]*)\}/g;
+
+/**
+ * The member names inside an `enum`'s braces, ignoring their values.
+ *
+ * Splits only on the commas and line breaks that separate *members*, which
+ * means tracking bracket depth: `major = [0, 2, 4]` holds two commas that
+ * separate nothing. Elsewhere in this file over-offering a name is the accepted
+ * trade, but not here — after `Scale.` this list is presented as the closed set
+ * of what may be written, so a `2` from inside a list would be a wrong answer
+ * rather than a surplus one.
+ */
+function enumMembers(body: string): string[] {
+  const entries: string[] = [];
+  let depth = 0;
+  let entry = "";
+
+  for (const ch of body) {
+    if (ch === "[" || ch === "(") depth++;
+    else if (ch === "]" || ch === ")") depth--;
+
+    if (depth === 0 && (ch === "," || ch === "\n")) {
+      entries.push(entry);
+      entry = "";
+    } else {
+      entry += ch;
+    }
+  }
+  entries.push(entry);
+
+  return entries
+    .map((e) => e.split("=")[0].trim())
+    .filter((name) => /^[a-zA-Z_]\w*$/.test(name));
+}
 const FOR = /\bfor\s+([a-zA-Z_]\w*)\s+in\b/g;
 /**
  * A `use`, split into its path and whatever follows it.
@@ -89,6 +130,9 @@ interface LocalSymbol {
   /** A `let`'s value, as written. Resolved on demand to work out what a dot on
    *  this name may reach — `let riff = [60, 63]` makes `riff.` a list. */
   value?: string;
+  /** An enum's members. Absent for everything else, and never empty for an
+   *  enum, so its presence is what marks one. */
+  members?: string[];
 }
 
 function scrapeLocals(doc: string): LocalSymbol[] {
@@ -119,6 +163,16 @@ function scrapeLocals(doc: string): LocalSymbol[] {
   for (const [, name, value] of text.matchAll(LET)) {
     if (!found.has(name)) {
       found.set(name, { name, detail: "binding", type: "variable", value });
+    }
+  }
+
+  // Ahead of the `for` variables and the imports for the same reason `fn` is
+  // ahead of `let`: a name can only be one of these, and the lowerer refuses a
+  // file where an enum shares a name with anything else outright.
+  for (const [, name, body] of text.matchAll(ENUM)) {
+    const members = enumMembers(body);
+    if (members.length > 0) {
+      found.set(name, { name, detail: "enum", type: "variable", members });
     }
   }
 
@@ -346,6 +400,33 @@ function kindOf(expr: string, scope: Scope, depth = 4): ValueKind {
   // anything bound wins, exactly as the lowerer resolves it.
   if (scope.durations.has(word)) return "duration";
   return "any";
+}
+
+/**
+ * The members of the enum the text ends in, or null if it does not end in one.
+ *
+ * The shape recognised here is the shape the lowerer recognises: a bare name,
+ * bound to an enum, with the dot straight after it. An indexed or computed
+ * receiver is deliberately not it, and neither is a qualified `kit::Scale` —
+ * that one arrives through `imported` instead, spelled the way this file writes
+ * it, which is why both lists are asked.
+ *
+ * Scraped names win over imported ones, matching the lowerer: a file's own
+ * definitions beat what it brought in.
+ */
+function enumAt(
+  before: string,
+  scraped: LocalSymbol[],
+  imported: ModuleSymbol[],
+): string[] | null {
+  const name = before.match(/([a-zA-Z_][\w:]*)$/)?.[1];
+  if (name === undefined) return null;
+
+  const local = scraped.find((s) => s.name === name);
+  if (local?.members?.length) return local.members;
+
+  const module = imported.find((s) => s.name === name);
+  return module?.members.length ? module.members : null;
 }
 
 /**
@@ -761,6 +842,25 @@ export function swyncCompletions(
         patterns: new Set(patternNames()),
         durations: durationNames,
       };
+
+      // An enum receiver is answered first and answered alone. What follows
+      // `Scale.` is a member and can be nothing else — the lowerer reads it
+      // straight off the enum without ever calling anything — so every builtin
+      // and every local `fn` is wrong here. Without this the receiver reads as
+      // an unidentifiable expression, which is treated as `"any"`, and `"any"`
+      // accepts everything: the menu would offer `Scale.reverb`.
+      const members = enumAt(doc.slice(0, dot), scraped, imported);
+      if (members !== null) {
+        return members.map((name, i) => ({
+          label: name,
+          detail: "member",
+          type: "enum",
+          // In the order they were written. An enum is a short list somebody
+          // chose an order for, and alphabetising it would lose that.
+          boost: METHOD_BOOST.suited - i,
+        }));
+      }
+
       const receiver = kindOf(doc.slice(0, dot), scope);
 
       const fromBuiltins = methods

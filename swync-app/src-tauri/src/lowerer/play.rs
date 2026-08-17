@@ -572,6 +572,12 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
         Value::Rate(_) => Err(
             "a pattern cannot contain a rate — `accel` says how fast a pattern runs, \
              so it belongs in `play`'s rate rather than among its steps".to_string()),
+        Value::EnumType(def) => Err(format!(
+            "`{}` is an enum rather than a step. Name one of its members — \
+             `{}.{}` — if one of them is what should sound here",
+            def.written(), def.written(),
+            def.members.first().map_or("x", |m| m.name.as_str()))),
+        Value::Enum { .. } => Err(enum_not_a_step(v)),
     }
 }
 
@@ -682,6 +688,33 @@ fn whole_lengths(p: &Pattern) -> Result<(), f64> {
     }
 }
 
+/// Why an enum member cannot be a step or a lane value.
+///
+/// Refused rather than unwrapped, even for a member holding a number, and this
+/// is the one place in the language where a member does not stand for what it
+/// holds. A pattern is not read here: it is handed to the scheduler thread,
+/// which builds a voice per note against a clock that has already been set
+/// running, and what crosses has to be plain data. Unwrapping at this boundary
+/// would work, and would mean an enum whose meaning quietly depended on which
+/// side of a thread it was read on — so both sides refuse it, and the message
+/// says what to write instead.
+fn enum_not_a_step(v: &Value) -> String {
+    let Value::Enum { def, member } = v else {
+        unreachable!("only called for an enum member")
+    };
+    let member = &def.members[*member];
+    let instead = match &member.value {
+        Some(Value::Number(n)) => format!("Write `{n}` here"),
+        _ => "Write the value here".to_string(),
+    };
+    format!(
+        "a pattern cannot contain `{}.{}`. An enum member stands for what it holds \
+         everywhere a value is read at lowering, but a pattern is read a note at a \
+         time on the scheduler's own thread, where only plain numbers reach. \
+         {instead}, or bind it with a `let` outside the pattern",
+        def.written(), member.name)
+}
+
 fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
     match v {
         Value::Number(n) => Ok(Step::Value(*n)),
@@ -740,6 +773,12 @@ fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
         Value::Rate(_) => Err(
             "a pattern cannot contain a rate — `accel` says how fast a pattern runs, \
              so it belongs in `play`'s rate rather than among its steps".to_string()),
+        Value::EnumType(def) => Err(format!(
+            "`{}` is an enum rather than a step. Name one of its members — \
+             `{}.{}` — if one of them is what should sound here",
+            def.written(), def.written(),
+            def.members.first().map_or("x", |m| m.name.as_str()))),
+        Value::Enum { .. } => Err(enum_not_a_step(v)),
     }
 }
 

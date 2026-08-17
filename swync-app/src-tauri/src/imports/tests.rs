@@ -1126,3 +1126,99 @@ fn a_files_own_definitions_are_reported() {
 fn a_file_that_does_not_expand_reports_nothing() {
     assert!(symbols_of("use nothing::at::all\n", &[]).is_empty());
 }
+
+// ---- enums across files ----
+
+/// A module that names a scale, for the tests below.
+const TONES: &str = "enum Scale { major = [0, 2, 4, 5, 7, 9, 11], pentatonic = [0, 3, 5, 7] }\n";
+
+/// Read back the constant a program folded to, once expanded.
+fn folds_to(entry: &str, modules: &[(&str, &str)]) -> f64 {
+    let items = expand_ok(entry, modules);
+    let g = lower(&items).expect("should lower").graph;
+    match g.nodes[0].inputs[0] {
+        NodeInput::Const(v) => v,
+        _ => panic!("expected a folded constant"),
+    }
+}
+
+/// An enum is filed under the module's name like any other definition, and is
+/// reached the same three ways.
+#[test]
+fn an_enum_can_be_imported() {
+    assert_eq!(
+        folds_to("use tones\nsin(61.scale(tones::Scale.major))\n",
+                 &[("/p/tones.swync", TONES)]),
+        60.0, "qualified through the module");
+
+    assert_eq!(
+        folds_to("use tones::Scale\nsin(61.scale(Scale.major))\n",
+                 &[("/p/tones.swync", TONES)]),
+        60.0, "named directly");
+
+    assert_eq!(
+        folds_to("use tones::*\nsin(61.scale(Scale.major))\n",
+                 &[("/p/tones.swync", TONES)]),
+        60.0, "brought in by a glob");
+}
+
+/// `use tones::Scale as S` — an enum renames like anything else, and its
+/// members are still reached through whatever it is called here.
+#[test]
+fn an_imported_enum_can_be_aliased() {
+    assert_eq!(
+        folds_to("use tones::Scale as S\nsin(61.scale(S.major))\n",
+                 &[("/p/tones.swync", TONES)]),
+        60.0);
+}
+
+/// The renamer trap, and the reason `Scope` knows which names are enums.
+///
+/// `Scale.major` is the same shape as `xs.rev`, so the walk that rewrites
+/// imported names would rewrite `major` too. It only shows when the file has
+/// something else by that name — here an imported `major` from a second module,
+/// which the member must not be confused for.
+#[test]
+fn a_member_is_not_renamed_to_an_import_of_the_same_name() {
+    let entry = "use tones::Scale\n\
+                 use helpers::major\n\
+                 sin(61.scale(Scale.major) + major(1))\n";
+    let modules = &[
+        ("/p/tones.swync", TONES),
+        ("/p/helpers.swync", "fn major(x) = x * 1000\n"),
+    ];
+
+    let items = expand_ok(entry, modules);
+    let g = lower(&items).expect("should lower").graph;
+    // 60 from the snapped note, 1000 from the function: the member and the
+    // function are two different things and both still work.
+    assert_eq!(g.nodes[0].inputs[0], NodeInput::Const(1060.0));
+}
+
+/// A parameter called `Scale` is not the enum, so the dot after it is an
+/// ordinary method call — which is what makes the rule above safe to apply.
+#[test]
+fn a_binding_shadowing_an_enum_is_not_reached_through() {
+    let entry = "use tones::Scale\n\
+                 fn f(Scale) = Scale.rev[0]\n\
+                 sin(f([7, 8]))\n";
+    let items = expand_ok(entry, &[("/p/tones.swync", TONES)]);
+    let g = lower(&items).expect("should lower").graph;
+    assert_eq!(g.nodes[0].inputs[0], NodeInput::Const(8.0));
+}
+
+/// A module's enum keeps its written name in messages: the reader wrote
+/// `use tones::Scale`, and has never seen the spelling expansion filed it under.
+#[test]
+fn an_error_about_an_imported_enum_names_it_as_the_file_wrote_it() {
+    let items = expand_ok(
+        "use tones::Scale\nsin(Scale.majr)\n",
+        &[("/p/tones.swync", TONES)],
+    );
+    let err = match lower(&items) {
+        Err(e) => e,
+        Ok(_) => panic!("`Scale.majr` should be refused"),
+    };
+    assert!(err.contains("enum `Scale`"), "got: {err}");
+    assert!(!err.contains("tones::Scale"), "and not the filed name: {err}");
+}

@@ -296,6 +296,14 @@ pub struct Symbol {
     pub optional: Vec<bool>,
     /// True for a `fn`: something a `play` could name as an instrument.
     pub callable: bool,
+    /// An enum's members, in the order they were written. Empty for everything
+    /// else — and never empty for an enum, which the parser refuses without at
+    /// least one member, so this doubles as "is this an enum?".
+    ///
+    /// Carried here because the editor cannot read them any other way: an
+    /// imported enum's members are in a file the buffer never mentions, and
+    /// after `Scale.` there is nothing else to offer.
+    pub members: Vec<String>,
 }
 
 /// Every name a file may write, resolved exactly as running it would resolve.
@@ -320,7 +328,7 @@ pub fn symbols(items: Vec<SwyncItem>, code: &str, ws: &Workspace) -> Vec<Symbol>
     // still has what it scraped from the buffer itself.
     let Ok((program, scope)) = expanded else { return Vec::new() };
 
-    let mut defined: HashMap<&str, (Vec<String>, Vec<bool>, bool)> = HashMap::new();
+    let mut defined: HashMap<&str, (Vec<String>, Vec<bool>, bool, Vec<String>)> = HashMap::new();
     for item in &program {
         match item {
             SwyncItem::Function { name, params, .. } => {
@@ -330,11 +338,23 @@ pub fn symbols(items: Vec<SwyncItem>, code: &str, ws: &Workspace) -> Vec<Symbol>
                         params.iter().map(|p| p.name.0.clone()).collect(),
                         params.iter().map(|p| p.default.is_some()).collect(),
                         true,
+                        Vec::new(),
                     ),
                 );
             }
             SwyncItem::Let { name, .. } => {
-                defined.insert(name.0.as_str(), (Vec::new(), Vec::new(), false));
+                defined.insert(name.0.as_str(), (Vec::new(), Vec::new(), false, Vec::new()));
+            }
+            SwyncItem::Enum { name, members } => {
+                defined.insert(
+                    name.0.as_str(),
+                    (
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        members.iter().map(|m| m.name.0.clone()).collect(),
+                    ),
+                );
             }
             _ => {}
         }
@@ -360,12 +380,13 @@ pub fn symbols(items: Vec<SwyncItem>, code: &str, ws: &Workspace) -> Vec<Symbol>
     let mut found: Vec<Symbol> = spellings
         .into_iter()
         .filter_map(|(written, filed)| {
-            let (params, optional, callable) = defined.get(filed)?;
+            let (params, optional, callable, members) = defined.get(filed)?;
             Some(Symbol {
                 name: written,
                 params: params.clone(),
                 optional: optional.clone(),
                 callable: *callable,
+                members: members.clone(),
             })
         })
         .collect();
@@ -423,6 +444,13 @@ struct Resolver<'a> {
     /// Every module's definitions, in the order they must be defined:
     /// a module is always finished before the file that imported it.
     out: Vec<SwyncItem>,
+    /// The filed names of every enum seen so far, across every file.
+    ///
+    /// Kept for the renamer, which cannot do its job without it: `Scale.major`
+    /// is a chain, and the name after the dot is a member rather than anything
+    /// this walk should rewrite. Accumulated on the resolver rather than per
+    /// file because a file can name an enum it did not define.
+    enums: HashSet<String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -435,6 +463,7 @@ impl<'a> Resolver<'a> {
             prefixes: HashSet::new(),
             libraries,
             out: Vec::new(),
+            enums: HashSet::new(),
         }
     }
 
@@ -484,7 +513,20 @@ impl<'a> Resolver<'a> {
         let exports = own_names(&rest, prefix);
         names.extend(exports.iter().map(|(k, v)| (k.clone(), v.clone())));
 
-        let mut scope = Scope::new(&names, &modules);
+        // Recorded before the rename walk below, which needs to know that
+        // `Scale` in `Scale.major` is an enum in order to leave `major` alone.
+        for item in &rest {
+            if let SwyncItem::Enum { name, .. } = item {
+                if let Some(filed) = exports.get(&name.0) {
+                    self.enums.insert(filed.clone());
+                }
+            }
+        }
+        // Cloned because the walk borrows it while `self` is still being used
+        // to read further modules. An enum per program is a handful of strings.
+        let enums = self.enums.clone();
+
+        let mut scope = Scope::new(&names, &modules, &enums);
         // A module's `load` paths move with its definitions, so they are made
         // absolute here, while the folder they were written in is still known.
         // The program's own stay as written; nothing has moved them, and
@@ -724,7 +766,9 @@ fn own_names(items: &[SwyncItem], prefix: Option<&str>) -> HashMap<String, Strin
     let mut names = HashMap::new();
     for item in items {
         let own = match item {
-            SwyncItem::Function { name, .. } | SwyncItem::Let { name, .. } => &name.0,
+            SwyncItem::Function { name, .. }
+            | SwyncItem::Let { name, .. }
+            | SwyncItem::Enum { name, .. } => &name.0,
             _ => continue,
         };
         let filed = match prefix {
@@ -739,7 +783,9 @@ fn own_names(items: &[SwyncItem], prefix: Option<&str>) -> HashMap<String, Strin
 /// File a definition under the name the program knows it by.
 fn define_as(item: &mut SwyncItem, names: &HashMap<String, String>) {
     let name = match item {
-        SwyncItem::Function { name, .. } | SwyncItem::Let { name, .. } => name,
+        SwyncItem::Function { name, .. }
+        | SwyncItem::Let { name, .. }
+        | SwyncItem::Enum { name, .. } => name,
         _ => return,
     };
     if let Some(filed) = names.get(&name.0) {

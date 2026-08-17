@@ -51,9 +51,18 @@ pub enum Token {
     #[token("else")]
     Else,
 
+    /// `enum Scale { major = [0, 2, 4, 5, 7, 9, 11] }`.
+    ///
+    /// A token rather than a contextual keyword, unlike `as`: `as` is only ever
+    /// a keyword inside a `use`, where the parser already knows what it is
+    /// reading, while `enum` has to be recognisable at the top level with
+    /// nothing in front of it to say so.
+    #[token("enum")]
+    Enum,
+
     #[token("==")]
     EqEq,
-    
+
     #[token("for")]
     For,
 
@@ -189,6 +198,7 @@ impl fmt::Display for Token {
             Token::Dot => ".",
             Token::DotDotEq => "..=",
             Token::Else => "else",
+            Token::Enum => "enum",
             Token::EqEq => "==",
             Token::For => "for",
             Token::Function => "fn",

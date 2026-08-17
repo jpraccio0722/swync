@@ -41,6 +41,13 @@ export const noteTag = Tag.define();
  *  apart from both notes and variables: rhythm is the other thing you scan a
  *  pattern for, and it is read in a different place from pitch. */
 export const durationTag = Tag.define();
+/** An enum where it is used: both `Scale` and `major` in `Scale.major`.
+ *
+ *  One tag for the pair rather than two, because they are one reference — a
+ *  member is reached through its enum and nowhere else, and colouring the
+ *  halves apart would split a thing that is read whole. The declaration keeps
+ *  `def`, exactly as a `fn` does: defined in one colour, used in another. */
+export const enumTag = Tag.define();
 
 function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<TokenizerState> {
   return {
@@ -71,6 +78,7 @@ function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<Token
       swyncBuiltin: builtinTag,
       swyncNote: noteTag,
       swyncDuration: durationTag,
+      swyncEnum: enumTag,
       swyncRest: restTag,
       swyncTrigger: triggerTag,
       swyncQuote: quoteTag,
@@ -102,6 +110,12 @@ export const swyncHighlightStyle = HighlightStyle.define([
   { tag: t.function(t.variableName), color: "#93c5fd" },
   { tag: t.definition(t.variableName), color: "#fcd34d" },
   { tag: t.variableName, color: "#e5e7eb" },
+  // Indigo: the one clear gap left in the palette, between the paler blue that
+  // functions take and the purple of the keywords. Deliberately outside the
+  // pattern colours — rose, amber, orange, green, cyan — which have to stay
+  // maximally separable from each other inside a dense bar. An enum member
+  // cannot appear in a pattern at all, so it never has to compete with them.
+  { tag: enumTag, color: "#818cf8" },
   // Warm for silence, cool-bright for a hit: the pair has to be separable at
   // a glance inside a dense pattern like `[\, `, \, [\, \]]`.
   { tag: restTag, color: "#fb923c", fontWeight: "bold" },

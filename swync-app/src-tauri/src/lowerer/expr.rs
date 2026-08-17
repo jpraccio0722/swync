@@ -39,19 +39,41 @@ impl Lowerer {
                 self.call(func, args),
             
             Expr::Chain { lhs , rhs } => {
+                // Before the receiver is evaluated, because `Scale` on its own is
+                // not a value the way `xs` in `xs.rev` is — it is a type, and
+                // evaluating it to hand to `major` as an argument is exactly the
+                // reading this is here to prevent. The same reason `play` and
+                // `load` intercept in `call_with`: some receivers are read rather
+                // than computed.
+                if let Some(member) = self.enum_member(lhs, rhs)? {
+                    return Ok(member);
+                }
                 let piped = self.expr(lhs)?;
                 match rhs.as_ref() {
-                    Expr::Call { func, args } => 
+                    Expr::Call { func, args } =>
                         self.call_with(func, args, Some(piped)),
-                    Expr::Var(func) => 
+                    Expr::Var(func) =>
                         self.call_with(func, &vec![], Some(piped)),
                     _ => Err("right side of chain must be a function call or variable".into())
                 }
             }
 
             Expr::Cmp { op, lhs, rhs } => {
-                let a = self.number(lhs, "comparison")?;
-                let b = self.number(rhs, "comparison")?;
+                let a = self.expr(lhs)?;
+                let b = self.expr(rhs)?;
+
+                // Two enum members compare as tags: which alternative is this,
+                // not what it happens to hold. That is the whole point of the
+                // member being opaque — `Section.verse == Section.chorus` has an
+                // answer even though neither carries a value, and two members
+                // that happened to be given the same number are still two
+                // different members.
+                if let (Value::Enum { .. }, _) | (_, Value::Enum { .. }) = (&a, &b) {
+                    return self.compare_enums(*op, &a, &b);
+                }
+
+                let a = self.as_number(a, "comparison")?;
+                let b = self.as_number(b, "comparison")?;
                 let truth = match op {
                     CmpOp::Lt => a < b,   CmpOp::Le => a <= b,
                     CmpOp::Gt => a > b,   CmpOp::Ge => a >= b,
@@ -184,9 +206,13 @@ impl Lowerer {
             }
 
             Expr::Index { base, index } => {
-                let items = match self.expr(base)? {
-                    Value::List(items) => items,
-                    _ => return Err("cannot index a value that is not a list".into()),
+                let base = self.expr(base)?;
+                let items = match as_data(&base) {
+                    Value::List(items) => items.clone(),
+                    _ => return Err(
+                        not_this_member(&base, "cannot index a value that is not a list")
+                            .unwrap_or_else(||
+                                "cannot index a value that is not a list".to_string())),
                 };
                 let i = self.number(index, "list index")?;
                 if i < 0.0 || i.fract() != 0.0 {
@@ -357,6 +383,13 @@ impl Lowerer {
     pub fn combine(&mut self, kind: NodeKind, fold: fn(f64, f64) -> f64,
                l: Value, r: Value) -> Result<Value, String> {
 
+        // Arithmetic is a place data is wanted, so a member stands for what it
+        // holds before either side is looked at. It has to happen here rather
+        // than in the arms below: a member left whole would miss the two folding
+        // cases and fall through to the node builder, which would quietly turn
+        // `Tuning.a / 2` into a divider in the audio graph instead of 220.
+        let (l, r) = (into_data(l), into_data(r));
+
         match (l, r) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(fold(a, b))),
             // A tie: `h + e` is a half held into an eighth. Only addition — the
@@ -447,15 +480,124 @@ impl Lowerer {
     }
 
     fn number(&mut self, e: &Expr, what: &str) -> Result<f64, String> {
-    match self.expr(e)? {
-        Value::Number(n) => Ok(n),
-        _ => Err(format!(
-            "{what} needs a compile-time number, got a signal \
-             (use select(gate, a, b) to choose at audio rate)")),
+        let v = self.expr(e)?;
+        self.as_number(v, what)
     }
-}
+
+    /// A value as a number, unwrapping an enum member that holds one.
+    ///
+    /// Split out from [`number`](Lowerer::number) because two callers already
+    /// have the value rather than the expression — a comparison, which has to
+    /// look at both sides before it knows whether it is comparing tags at all.
+    pub(crate) fn as_number(&mut self, v: Value, what: &str) -> Result<f64, String> {
+        if let Value::Number(n) = as_data(&v) {
+            return Ok(*n);
+        }
+        Err(not_this_member(&v, &format!("{what} needs a number"))
+            .unwrap_or_else(|| format!(
+                "{what} needs a compile-time number, got a signal \
+                 (use select(gate, a, b) to choose at audio rate)")))
+    }
+
+    /// `Scale.major`, when the left of a dot is an enum rather than a value.
+    ///
+    /// Answers `None` for every other chain, which is nearly all of them: the
+    /// shape this recognises is a bare name bound to an enum, and one dot after
+    /// it. An indexed or computed receiver — `enums[0].major` — is deliberately
+    /// not it. The receiver has to be readable from the text for the same reason
+    /// a note only sets the octave when it is written as the whole step: what
+    /// this rule turns on should be visible at the place it applies.
+    fn enum_member(&self, lhs: &Expr, rhs: &Expr) -> Result<Option<Value>, String> {
+        let Expr::Var(ty) = lhs else { return Ok(None) };
+        let Some(Value::EnumType(def)) = self.env.lookup(&ty.0) else { return Ok(None) };
+
+        let (name, args) = match rhs {
+            Expr::Call { func, args } => (&func.0, args.as_slice()),
+            // `Scale >> major`. The pipe and the dot build the same node, so
+            // both spellings reach a member; refusing one would be a rule with
+            // nothing behind it.
+            Expr::Var(func) => (&func.0, &[][..]),
+            _ => return Err(format!(
+                "`{}` is an enum, so what follows the dot has to name one of its \
+                 members: {}", def.written(), def.member_names())),
+        };
+
+        let Some(index) = def.member(name) else {
+            return Err(format!(
+                "enum `{}` has no member `{name}`. It has {}",
+                def.written(), def.member_names()));
+        };
+
+        // A member is a constant, so `Scale.major(2)` is not a call with the
+        // wrong arity — it is a call on something that was never callable, and
+        // saying so is more use than counting arguments.
+        if !args.is_empty() {
+            return Err(format!(
+                "`{}.{name}` is an enum member, which is a value rather than \
+                 something to call — write it without the arguments",
+                def.written()));
+        }
+
+        Ok(Some(Value::Enum { def: def.clone(), member: index }))
+    }
+
+    /// Compare two enum members, or say why one side cannot be compared.
+    ///
+    /// Only `==` and `!=`: members are a set, not a scale. They are written in
+    /// an order, but it is the order somebody happened to type them in, and
+    /// answering `Section.verse < Section.chorus` from it would be inventing a
+    /// fact about the music out of a fact about the file.
+    ///
+    /// Comparing across two enums is refused rather than answered `false`. It is
+    /// a mistake every time — no program means to ask whether a section is a
+    /// scale — and `false` is the answer that lets it run forever.
+    fn compare_enums(&mut self, op: CmpOp, a: &Value, b: &Value) -> Result<Value, String> {
+        let (Value::Enum { def: left, member: i }, Value::Enum { def: right, member: j }) = (a, b)
+        else {
+            let (member, other) = match a {
+                Value::Enum { .. } => (a, b),
+                _ => (b, a),
+            };
+            let Value::Enum { def, member: index } = member else {
+                unreachable!("one side is an enum member; this is the check for which")
+            };
+            return Err(format!(
+                "`{}.{}` is an enum member and {} is not, so there is nothing to \
+                 compare. An enum member is only ever equal to a member of the \
+                 same enum",
+                def.written(), def.members[*index].name, describe(other)));
+        };
+
+        if left.name != right.name {
+            return Err(format!(
+                "`{}.{}` and `{}.{}` are members of different enums, so the answer \
+                 is no in a way that is never what was meant — nothing is both. \
+                 Compare two members of one enum",
+                left.written(), left.members[*i].name,
+                right.written(), right.members[*j].name));
+        }
+
+        let same = i == j;
+        let truth = match op {
+            CmpOp::Eq => same,
+            CmpOp::Ne => !same,
+            _ => return Err(format!(
+                "enum members can be compared with `==` and `!=` and nothing else. \
+                 `{}` has an order because its members had to be written in one, \
+                 not because one is less than another",
+                left.written())),
+        };
+        Ok(Value::Number(if truth { 1.0 } else { 0.0 }))
+    }
 
     pub fn as_input(&self, v: Value) -> Result<NodeInput, String> {
+        // A member holding a number is one here, which is the auto-unwrap
+        // reaching the signal graph: `sin(Tuning.a)` is `sin(440)`. A member
+        // holding anything else, or nothing, falls through to that value's own
+        // refusal below — a list is no more a signal for being named.
+        if let Some(Value::Number(n)) = unwrap_enum(&v) {
+            return Ok(NodeInput::Const(*n));
+        }
         match v {
             Value::Number(n) => Ok(NodeInput::Const(n)),
             Value::Signal(id) => Ok(NodeInput::Node(id)),
@@ -484,7 +626,105 @@ impl Lowerer {
                 "cannot use a quoted list as a signal — `'` marks a list as one value \
                  for a `play` lane, and means nothing anywhere else. Write the list \
                  without the quote".into()),
+            Value::EnumType(def) => Err(format!(
+                "cannot use enum `{}` as a signal — it is the enum itself rather \
+                 than one of its members. Write `{}.{}`",
+                def.written(), def.written(),
+                def.members.first().map_or("x", |m| m.name.as_str()))),
+            // Only the members a number could not be reached through: the
+            // unwrap above has already answered for those.
+            v @ Value::Enum { .. } => Err(
+                not_this_member(&v, "a signal needs a number")
+                    .expect("just matched an enum member")),
         }
+    }
+}
+
+/// What an enum member stands for, where something wants data rather than a tag.
+///
+/// This is the auto-unwrap, and it is a lookup rather than a conversion: the
+/// member keeps its identity, and what comes back is the value it was declared
+/// with. Every consumer that wants a number or a list goes through here first,
+/// which is what makes `61.scale(Scale.major)` read the offsets without the
+/// writer unwrapping them by hand.
+///
+/// `None` covers both "not a member" and "a member holding nothing", because no
+/// caller here tells them apart — either way there is no data to read. What
+/// separates them is only ever the wording of a refusal, and that is
+/// [`not_this_member`]'s business rather than this one's.
+pub(crate) fn unwrap_enum(v: &Value) -> Option<&Value> {
+    match v {
+        Value::Enum { def, member } => def.members[*member].value.as_ref(),
+        _ => None,
+    }
+}
+
+/// A value as data: what an enum member stands for, or the value itself.
+///
+/// The one function every consumer of a number or a list runs its argument
+/// through. Keeping the unwrap in one place is what makes the rule statable —
+/// a member is its value wherever data is wanted — rather than a list of the
+/// positions somebody remembered to handle.
+pub(crate) fn as_data(v: &Value) -> &Value {
+    unwrap_enum(v).unwrap_or(v)
+}
+
+/// An owned [`as_data`], for the callers holding a value rather than a
+/// reference to one.
+///
+/// A tag comes back unchanged, still a member: there is nothing for it to stand
+/// for, and whatever wanted data will refuse it in its own words.
+pub(crate) fn into_data(v: Value) -> Value {
+    match unwrap_enum(&v) {
+        Some(inner) => inner.clone(),
+        None => v,
+    }
+}
+
+/// Why this enum member could not be read as the thing that was wanted, or
+/// `None` if it is not an enum member at all.
+///
+/// Callers fall back to the message they had before enums existed, so a value
+/// that was already wrong stays wrong in the words it always used. Only the
+/// member case is worth new words, and it needs them: the mention reads fine —
+/// `Scale.major` is spelled correctly and names a real member — and what is
+/// wrong with it is the declaration, elsewhere in the file. A message that did
+/// not point there would leave the reader staring at a correct line.
+pub(crate) fn not_this_member(v: &Value, wanted: &str) -> Option<String> {
+    let Value::Enum { def, member } = v else { return None };
+    let member = &def.members[*member];
+    let holds = match &member.value {
+        Some(value) => describe(value),
+        None => "nothing — it is a tag, standing only for itself",
+    };
+    Some(format!(
+        "{wanted}, and `{}.{}` holds {holds}. An enum member stands for whatever \
+         it was declared with, so declare it as one — or write the value here \
+         instead of the member",
+        def.written(), member.name))
+}
+
+/// A short noun for a value, for messages that have to say what something is.
+///
+/// Exhaustive on purpose: a new variant should have to decide what it is called
+/// here rather than inherit a catch-all that reads wrongly about it.
+pub(crate) fn describe(v: &Value) -> &'static str {
+    match v {
+        Value::Number(_) => "a number",
+        Value::Signal(_) => "a signal",
+        Value::Function(_) => "a function",
+        Value::List(_) => "a list",
+        Value::Stack(_) => "a stack",
+        Value::Quoted(_) => "a quoted list",
+        Value::Buffer(_) => "a buffer",
+        Value::EnumType(_) => "an enum",
+        Value::Enum { .. } => "an enum member",
+        Value::Rest => "a rest",
+        Value::Trigger => "a trigger",
+        Value::Duration(_) => "a written note value",
+        Value::Tuplet => "the tuplet marker",
+        Value::Rate(_) => "a rate",
+        Value::Play { .. } => "a play",
     }
 }
 

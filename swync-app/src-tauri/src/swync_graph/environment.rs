@@ -40,6 +40,31 @@ pub enum Value {
     /// A loaded audio file, as `load` answers with it. Not a signal — nothing
     /// comes out of a buffer until `sample` reads it at a position.
     Buffer(Arc<Wave>),
+    /// An `enum` itself, as the bare `Scale` in `Scale.major` resolves to.
+    ///
+    /// It lives in the environment like any other binding rather than in a
+    /// table beside it, which is what gives it scoping and shadowing for free —
+    /// and, more to the point, is what lets the collision check be "is this name
+    /// already bound?" rather than a second question asked of a second place.
+    ///
+    /// Nothing may be done with one except reach through it for a member. That
+    /// is a refusal every consumer already makes, since a type is not a number,
+    /// a list or a signal.
+    EnumType(Rc<EnumDef>),
+    /// One member of one enum: `Scale.major`.
+    ///
+    /// Opaque, and carrying its value rather than being it. The two halves are
+    /// both load-bearing and pull opposite ways — identity is what `==` compares,
+    /// so that `Section.verse == Section.chorus` is a question about which tag
+    /// this is and not about what the tags happen to hold; while the value is
+    /// what the member is *for* wherever data is wanted, so that
+    /// `61.scale(Scale.major)` reads the offsets without the writer having to
+    /// unwrap them. Collapsing either half into the other loses one of the two
+    /// things enums were added to do.
+    ///
+    /// The member is held as an index into `def.members` rather than by name, so
+    /// that a value is a pointer and a number however long the names are.
+    Enum { def: Rc<EnumDef>, member: usize },
     /// A silent step. Only meaningful inside a pattern.
     Rest,
     /// A sounding step carrying no value. Only meaningful inside a pattern.
@@ -146,6 +171,59 @@ impl Item {
 pub struct FunctionDef {
     pub params: Vec<Param>,
     pub body: Expr
+}
+
+/// An `enum` as the program can use it: its name, and its members in the order
+/// they were written, each with the value it was given.
+///
+/// The members' values are evaluated once, where the enum is declared, rather
+/// than at each mention. That is what makes a member a constant: `enum R { x =
+/// rand() }` draws one number and every `R.x` is that number, which is the only
+/// reading under which two mentions of one name are the same value.
+pub struct EnumDef {
+    /// As the program knows it — `Scale`, or `kit::Scale` once imported.
+    pub name: String,
+    pub members: Vec<EnumMemberDef>,
+}
+
+pub struct EnumMemberDef {
+    pub name: String,
+    /// What the member stands for where data is wanted, or `None` for a tag
+    /// that stands only for itself.
+    pub value: Option<Value>,
+}
+
+impl EnumDef {
+    /// The index of a member by name, for `Scale.major`.
+    pub fn member(&self, name: &str) -> Option<usize> {
+        self.members.iter().position(|m| m.name == name)
+    }
+
+    /// The members' names, for a message that has to say what was on offer.
+    pub fn member_names(&self) -> String {
+        self.members
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// How the program writes this enum's name, without the module prefix
+    /// expansion gave it.
+    pub fn written(&self) -> &str {
+        written(&self.name)
+    }
+}
+
+/// A definition's name as the file that mentions it writes it, without the
+/// module prefix expansion filed it under.
+///
+/// Every message about an enum quotes this rather than the filed name: a reader
+/// who wrote `use kit::Scale` and then `Scale.majr` has never seen the spelling
+/// `kit::Scale`, and an error naming it would be about a program they did not
+/// write.
+pub fn written(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
 }
 
 pub struct Env {

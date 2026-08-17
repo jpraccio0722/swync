@@ -86,6 +86,11 @@ export const TUTORIAL: TutorialPage[] = [
 		title: "Sampling",
 		blurb: "Amen",
 	},
+	{
+		slug: "enums",
+		title: "Enums",
+		blurb: "Giving a group of related values one name each, and comparing them",
+	},
 ];
 
 export function pageBySlug(slug: string): TutorialPage | undefined {

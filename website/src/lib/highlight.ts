@@ -55,6 +55,7 @@ const CLASSES: Record<string, string> = {
 	swyncBuiltin: "tok-builtin",
 	swyncNote: "tok-note",
 	swyncDuration: "tok-duration",
+	swyncEnum: "tok-enum",
 	swyncRest: "tok-rest",
 	swyncTrigger: "tok-trigger",
 	swyncQuote: "tok-quote",

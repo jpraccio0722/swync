@@ -25,6 +25,13 @@ export interface Symbol {
   optional: boolean[];
   /** True for a `fn`: something a `play` could name as an instrument. */
   callable: boolean;
+  /** An enum's members, in the order they were written. Empty for everything
+   *  else, and never empty for an enum — so it also answers "is this one?".
+   *
+   *  The one thing about an imported enum this side could not scrape: the
+   *  members are written in a file the buffer never names, and after `Scale.`
+   *  they are the only thing worth offering. */
+  members: string[];
 }
 
 /** Where the file being edited sits, which is what a `use` resolves against. */

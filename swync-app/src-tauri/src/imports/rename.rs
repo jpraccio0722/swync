@@ -25,6 +25,14 @@ pub struct Scope<'a> {
     /// The head of a qualified name → the prefix that module's definitions
     /// carry. `drums` → `lib::drums`, for `use lib::drums`.
     modules: &'a HashMap<String, String>,
+    /// The filed names that belong to an enum.
+    ///
+    /// `Scale.major` parses as a chain — the same shape as `xs.rev` — so without
+    /// this the walk would treat `major` as a mention and rewrite it to whatever
+    /// the file has under that name. It usually has nothing, which is why this
+    /// only bites when an unrelated `major` is in scope: the enum member would
+    /// silently become a call to it, in a file that reads correctly.
+    enums: &'a HashSet<String>,
     /// Names bound by the code being walked, innermost last. These shadow
     /// everything above: a parameter is not an import.
     locals: Vec<HashSet<String>>,
@@ -38,8 +46,9 @@ impl<'a> Scope<'a> {
     pub fn new(
         names: &'a HashMap<String, String>,
         modules: &'a HashMap<String, String>,
+        enums: &'a HashSet<String>,
     ) -> Scope<'a> {
-        Scope { names, modules, locals: Vec::new(), samples_dir: None }
+        Scope { names, modules, enums, locals: Vec::new(), samples_dir: None }
     }
 
     /// Also rewrite every relative `load` path to `dir`, which is the folder
@@ -120,6 +129,16 @@ impl<'a> Scope<'a> {
                 result
             }
             SwyncItem::Let { value, .. } => self.expr(value),
+            // A member's name is not a mention of anything — it is reached
+            // through the enum and nowhere else — so only the values are walked.
+            SwyncItem::Enum { members, .. } => {
+                for member in members.iter_mut() {
+                    if let Some(value) = &mut member.value {
+                        self.expr(value)?;
+                    }
+                }
+                Ok(())
+            }
             SwyncItem::Expr(e) => self.expr(e),
             SwyncItem::Call { func, args } => {
                 self.ident(func)?;
@@ -149,6 +168,20 @@ impl<'a> Scope<'a> {
         *written = dir.join(written.as_str()).to_string_lossy().into_owned();
     }
 
+    /// Whether the left of a dot is an enum, and so whether the right of it is a
+    /// member rather than a name.
+    ///
+    /// Asked *after* the left side has been resolved, so the name compared here
+    /// is the one the definition is filed under — which is the only spelling
+    /// two files could agree on. A shadowed name resolves to itself and is
+    /// therefore not an enum, which is the right answer: a parameter called
+    /// `Scale` is not the enum, and `Scale.major` inside that function is a
+    /// method call on it.
+    fn names_an_enum(&self, lhs: &Expr) -> bool {
+        let Expr::Var(name) = lhs else { return false };
+        !self.shadowed(&name.0) && self.enums.contains(&name.0)
+    }
+
     fn args(&mut self, args: &mut [Arg]) -> Result<(), String> {
         for arg in args {
             // Only the value. An argument's name is a parameter of the callee
@@ -174,12 +207,24 @@ impl<'a> Scope<'a> {
                 self.args(args)
             }
 
+            // `Scale.major` is this shape, and so is `xs.rev`. The two want
+            // opposite things from the right-hand side: `rev` may be an imported
+            // function and has to be rewritten, while `major` is a member and
+            // must not be. Which one this is can only be told from the left, so
+            // that side is resolved first and the answer decides the other.
+            Expr::Chain { lhs, rhs } => {
+                self.expr(lhs)?;
+                if self.names_an_enum(lhs) {
+                    return Ok(());
+                }
+                self.expr(rhs)
+            }
+
             Expr::Add { lhs, rhs }
             | Expr::Sub { lhs, rhs }
             | Expr::Mul { lhs, rhs }
             | Expr::Div { lhs, rhs }
             | Expr::Rem { lhs, rhs }
-            | Expr::Chain { lhs, rhs }
             | Expr::Cmp { lhs, rhs, .. } => {
                 self.expr(lhs)?;
                 self.expr(rhs)
