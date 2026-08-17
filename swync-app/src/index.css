@@ -7,3 +7,15 @@
 
 @source "../src";
 @source "../index.html";
+
+/* While a row of the project tree is being carried somewhere, nothing under the
+   pointer gets to say what the cursor is or to start selecting itself. Both
+   would otherwise be decided by whichever row is passing beneath, which is not
+   what the hand is doing. The class is put on the body by `projectDrag.ts`,
+   which drags rows with pointer events rather than with HTML5 drag and drop —
+   see the file for why. */
+body.dragging-row,
+body.dragging-row * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}

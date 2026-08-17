@@ -239,6 +239,8 @@ Completion reads the buffer with regexes, because the text being completed is ha
 
 `src/swync/indent.ts` is the third thing the frontend cannot read off the buffer alone: which line breaks end a statement. It mirrors `cont_next` in `parser/lex.rs`, so a line opening with `.` or `>>` is indented one step from the line that began the statement. It applies through `indentOnInput` rather than on Enter — a break after `some()` ends a statement until the `.` is typed, and the `.` is the only moment the answer changes.
 
+**`dragDropEnabled` is on, and that is why `src/projectDrag.ts` exists.** With it on, the webview's drag handling belongs to wry, which claims every drag crossing the window — so the frontend is handed the *paths* of files dropped in from the Finder, and no `dragstart` fires anywhere in the page. With it off, a dropped file arrives as a browser `File` with no path, which is the one thing about it the project tree needs. Only one of the two is available, so the tree moves its own rows with pointer events (`useRowDrag`) and takes dropped files from Tauri's event (`useFileDrop`), both aiming at whatever folder is under the pointer via `folderAt` rather than at whichever row's handler an event reached. The cost of the trade is dragging text out of the editor, which CodeMirror offers over HTML5 drag and drop and which no longer arrives.
+
 Icons are imported as components via `vite-plugin-svgr` (`import Icon from "./icon.svg?react"`), so they take a `className` and inherit `currentColor`. Styling is Tailwind 4 via the Vite plugin.
 
 ## Conventions
