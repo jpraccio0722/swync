@@ -63,6 +63,17 @@ pub struct Settings {
     /// what it falls back to when a remembered device is gone.
     #[serde(default)]
     pub output_device: Option<DeviceInfo>,
+    /// How large the editor's text is, in pixels — what ⌘ and the wheel over
+    /// the editor set.
+    ///
+    /// It is here rather than in a project because it is about a pair of eyes
+    /// and a screen: a size chosen for a laptop on a dark stage would be an
+    /// odd thing to arrive with a piece somebody else opened. `None` is the
+    /// editor's own size, which is where every machine starts and what the
+    /// frontend supplies — the number itself is the editor's business, and a
+    /// default written down twice is one that can disagree with itself.
+    #[serde(default)]
+    pub editor_font_size: Option<f32>,
 }
 
 impl Settings {
@@ -146,6 +157,7 @@ mod tests {
                 id: "coreaudio:BuiltInHeadphoneOutputDevice".to_string(),
                 name: "External Headphones".to_string(),
             }),
+            editor_font_size: Some(18.0),
         };
         write(&path, &settings).expect("should write");
         assert_eq!(read(&path), settings);
