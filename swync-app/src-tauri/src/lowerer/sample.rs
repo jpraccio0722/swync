@@ -250,7 +250,10 @@ fn channel(name: &str, arg: Option<&Value>) -> Result<f64, String> {
 /// How long a buffer plays for, in seconds. Zero for a buffer with no sample
 /// rate to speak of, rather than an infinity that would spread into whatever
 /// the program divides by it.
-fn seconds(wave: &Arc<Wave>) -> f64 {
+///
+/// Shared with `audition`, so the length the project panel's play button plays
+/// a file for is the same number `secs` answers a program with.
+pub(crate) fn seconds(wave: &Arc<Wave>) -> f64 {
     if wave.sample_rate() > 0.0 {
         wave.length() as f64 / wave.sample_rate()
     } else {

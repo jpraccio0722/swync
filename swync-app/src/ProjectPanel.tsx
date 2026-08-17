@@ -16,6 +16,8 @@ import { useFileDrop, useRowDrag, type Selected } from "./projectDrag";
 
 import ChevronRight from './assets/chevron-right.svg?react'
 import FileSVG from './assets/file.svg?react'
+import PlayIcon from './assets/play.svg?react'
+import StopIcon from './assets/stop.svg?react'
 
 export type { Entry } from "./projectTree";
 
@@ -53,6 +55,87 @@ function withExtension(typed: string): string {
   // The dot that decides this is one in the name, not one in a folder the name
   // carries: `lib.old/drums` is still a program in want of an extension.
   return basename(typed).includes(".") ? typed : typed + EXTENSION;
+}
+
+/**
+ * Which files get a play button, as the backend's decoder answers it.
+ *
+ * Asked for once, and empty until it comes back — which means no play buttons
+ * for the moment rather than buttons that might not work. See
+ * `samples::EXTENSIONS` for why the list is the backend's to keep.
+ */
+function useSampleExtensions(): string[] {
+  const [extensions, setExtensions] = useState<string[]>([]);
+
+  useEffect(() => {
+    invoke<string[]>("sample_extensions")
+      .then((found) => setExtensions(found.map((e) => e.toLowerCase())))
+      // Nothing to say to the problems panel: what is lost is a convenience on
+      // rows that are otherwise unaffected, and a project tree that opened with
+      // an error in it would be reporting the wrong thing entirely.
+      .catch((e) => console.error("could not ask which files are samples:", e));
+  }, []);
+
+  return extensions;
+}
+
+/** Whether a name ends in one of those extensions. */
+function isSample(name: string, extensions: string[]): boolean {
+  const dot = name.lastIndexOf(".");
+  // `> 0` rather than `>= 0`: a dotfile is named by its dot, not extended by it.
+  return dot > 0 && extensions.includes(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * The one sample being auditioned, and the two things you can do to it.
+ *
+ * The backend plays one at a time — a second `audition_sample` cuts the first —
+ * so one path is the whole state. What the timer is for is the other end of it:
+ * nothing tells the editor when a sample has finished, so the length the
+ * command answers with is what puts the button back. That is a clock racing a
+ * sound rather than a report of one, and it can be a frame or two out; what it
+ * cannot be is wrong about *which* row is playing, which is what the button is
+ * actually saying.
+ */
+function useAudition(fail: (e: unknown, doing: string) => void) {
+  const [sounding, setSounding] = useState<string | null>(null);
+  const finish = useRef<number | undefined>(undefined);
+
+  const stop = useCallback(() => {
+    window.clearTimeout(finish.current);
+    setSounding(null);
+    invoke("stop_audition").catch((e) => console.error("could not stop the sample:", e));
+  }, []);
+
+  const play = useCallback(
+    (path: string) => {
+      window.clearTimeout(finish.current);
+      // Lit before the answer arrives: a decode of something long takes a
+      // moment, and a button that waits for it looks like one that missed the
+      // click.
+      setSounding(path);
+      invoke<number>("audition_sample", { path })
+        .then((secs) => {
+          finish.current = window.setTimeout(
+            // Only if it is still this one. A second sample started in the
+            // meantime has its own timer, and this one is about a sound that
+            // was cut short by it.
+            () => setSounding((playing) => (playing === path ? null : playing)),
+            secs * 1000,
+          );
+        })
+        .catch((e) => {
+          setSounding(null);
+          fail(e, `could not play ${basename(path)}`);
+        });
+    },
+    [fail],
+  );
+
+  // A timer outliving the panel would set state on something that has gone.
+  useEffect(() => () => window.clearTimeout(finish.current), []);
+
+  return { sounding, play, stop };
 }
 
 /**
@@ -136,6 +219,12 @@ interface Tree {
   /** The one folder a drop would land in, whether the thing being dropped is a
    *  row of the tree or a file from outside the app. */
   dropTarget: string | null;
+  /** Whether this row is an audio file, and so has a sound to play. */
+  isSample: (name: string) => boolean;
+  /** The sample being auditioned, or null when nothing is. */
+  sounding: string | null;
+  /** Play this file, or stop it if it is the one already playing. */
+  toggleAudition: (path: string) => void;
 }
 
 const TreeContext = createContext<Tree | null>(null);
@@ -160,6 +249,47 @@ function Chevron({ open }: { open: boolean }) {
 function FileIcon() {
   return (
     <FileSVG className="h-4 w-4 shrink-0 text-neutral-600 fill-neutral-600"/>
+  );
+}
+
+/**
+ * Hear a sample without writing a program that loads it.
+ *
+ * At the trailing edge of the row, and hidden until the pointer or the keyboard
+ * reaches that row — a column of play buttons down a folder of drums is more
+ * ink than the names, which are what you are actually reading. The one that is
+ * sounding stays visible wherever the pointer has gone, since it is the only
+ * thing on screen that says what you are listening to.
+ *
+ * Every event is stopped here. The row underneath opens files, selects, and
+ * begins a drag on pointer-down, and none of those is what pressing this means.
+ */
+function AuditionButton({
+  playing,
+  onClick,
+}: {
+  playing: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title={playing ? "Stop" : "Play this sample"}
+      aria-label={playing ? "Stop" : "Play this sample"}
+      aria-pressed={playing}
+      className={
+        "ml-auto shrink-0 rounded p-0.5 transition-colors " +
+        (playing
+          ? "text-green-400 hover:text-green-300"
+          : "text-neutral-500 opacity-0 hover:text-neutral-200 group-hover:opacity-100 focus-visible:opacity-100")
+      }
+    >
+      {playing ? <StopIcon className="h-3 w-3" /> : <PlayIcon className="h-3 w-3" />}
+    </button>
   );
 }
 
@@ -423,7 +553,9 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
         }}
         style={{ paddingLeft: 8 + depth * INDENT }}
         className={
-          "flex w-full cursor-pointer items-center gap-1.5 py-0.5 pr-2 text-left text-xs outline-none transition-colors " +
+          // `group` so a sample's play button can appear with the pointer on
+          // any part of the row rather than only on the button itself.
+          "group flex w-full cursor-pointer items-center gap-1.5 py-0.5 pr-2 text-left text-xs outline-none transition-colors " +
           (isDropTarget
             ? "bg-blue-600/30 text-neutral-100"
             : isActive
@@ -437,6 +569,12 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
       >
         {icon}
         <span className="truncate">{entry.name}</span>
+        {!entry.isDir && ctx.isSample(entry.name) && (
+          <AuditionButton
+            playing={ctx.sounding === entry.path}
+            onClick={() => ctx.toggleAudition(entry.path)}
+          />
+        )}
       </div>
       {entry.isDir && open && <Children path={entry.path} depth={depth + 1} />}
     </>
@@ -539,6 +677,9 @@ export function ProjectPanel({
     (e: unknown, doing: string) => onProblems([toDiagnostic(e, doing)]),
     [onProblems],
   );
+
+  const extensions = useSampleExtensions();
+  const audition = useAudition(fail);
 
   /** Imports a move or a copy could not keep pointing at what they pointed at.
    *  Not a failure: it has happened, and the program that will now refuse to
@@ -833,6 +974,12 @@ export function ProjectPanel({
     dragging: rowDrag.row,
     press: rowDrag.press,
     dropTarget,
+    isSample: (name) => isSample(name, extensions),
+    sounding: audition.sounding,
+    // The same button both ways round: pressing the one that is playing is how
+    // a break you have heard enough of is stopped.
+    toggleAudition: (path) =>
+      audition.sounding === path ? audition.stop() : audition.play(path),
   };
 
   const menuEntry = menu?.entry ?? null;
