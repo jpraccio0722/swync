@@ -23,6 +23,11 @@ export interface Settings {
   inputDevice: DeviceInfo | null;
   /** What the graph plays through. Null is the system's own choice. */
   outputDevice: DeviceInfo | null;
+  /** How large the editor's text is, in pixels, as ⌘ and the wheel over it
+   *  left it. Null is the editor's own size — a machine that has never been
+   *  zoomed on. There is no control for it in this panel: the gesture is the
+   *  control, and it is done while reading the thing it changes. */
+  editorFontSize: number | null;
 }
 
 /**

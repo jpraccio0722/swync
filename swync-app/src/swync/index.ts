@@ -7,10 +7,12 @@ import { swyncLanguage } from "./language";
 import { buildIndex, type LanguageMetadata } from "./metadata";
 import { signatureHelp } from "./signature";
 import { Symbols } from "./symbols";
+import { editorZoom } from "./zoom";
 
 export { EMPTY_METADATA, loadMetadata, type LanguageMetadata } from "./metadata";
 export { revealPosition, showErrorLines } from "./errors";
 export { Symbols } from "./symbols";
+export { clampFontSize, DEFAULT_FONT_SIZE } from "./zoom";
 
 /**
  * Signature help is off for now: the hint sits above the cursor, over the line
@@ -36,12 +38,16 @@ const SIGNATURE_HELP = false;
  * `patternNames`: its identity has to hold across renders.
  * @param symbols What the file's imports bring in, kept up to date by whoever
  * owns the workspace — the same rule again, and for the same reason.
+ * @param zoom What ⌘ and the wheel over the editor asks for, in whole sizes.
+ * Held outside the editor because it outlives any one of them; bound by the
+ * same identity rule as the rest.
  */
 export function swyncExtensions(
   meta: LanguageMetadata,
   patternNames: () => string[],
   openDocs: (name: string) => void,
   symbols: Symbols,
+  zoom: (steps: number) => void,
 ): Extension[] {
   const index = buildIndex(meta);
   return [
@@ -58,5 +64,6 @@ export function swyncExtensions(
     // Holds nothing until a run fails; the marks arrive by transaction, which
     // is what keeps this array's identity out of it.
     errorMarks(),
+    editorZoom(zoom),
   ];
 }

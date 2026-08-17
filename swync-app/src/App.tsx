@@ -6,8 +6,10 @@ import CodeMirror from "@uiw/react-codemirror";
 import type { EditorView } from "@codemirror/view";
 import {
   swyncExtensions,
+  clampFontSize,
   revealPosition,
   showErrorLines,
+  DEFAULT_FONT_SIZE,
   EMPTY_METADATA,
   loadMetadata,
   Symbols,
@@ -79,6 +81,10 @@ const PATTERN_SAVE_DELAY = 400;
 /** The same for the project's settings, where the drag is a fader rather than
  *  a row of cells. */
 const PROJECT_SAVE_DELAY = 400;
+/** And for the editor's font size. Longer than the rest: a zoom gesture is
+ *  dozens of sizes long and is usually followed by a few more as the size is
+ *  settled on, and only where it comes to rest is worth a file. */
+const FONT_SIZE_SAVE_DELAY = 800;
 
 /**
  * How long a take goes on recording after the engine has been silenced.
@@ -332,6 +338,12 @@ function App() {
   // else. Null until the backend has answered, which the panel draws as
   // nothing rather than as a folder that may turn out to be wrong.
   const [settings, setSettings] = useState<Settings | null>(null);
+  // How large the editor's text is, which ⌘ and the wheel over it change. Held
+  // here rather than in the editor because one editor is mounted per tab: a
+  // size kept inside would be the front tab's alone, and would go with it.
+  // Starts at the editor's own size and is put where the settings say as soon
+  // as they have been read.
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   // Every format the recorder can write, from its own table. Fetched rather
   // than listed here so the dropdown can never offer one it cannot produce.
   const [formats, setFormats] = useState<RecordingFormat[]>([]);
@@ -464,7 +476,12 @@ function App() {
     let live = true;
     invoke<Settings>("settings")
       .then((s) => {
-        if (live) setSettings(s);
+        if (!live) return;
+        setSettings(s);
+        // Both in the one handler, so the effect that writes the size back sees
+        // the remembered size and the settings it came out of together — and
+        // has nothing to save.
+        if (s.editorFontSize !== null) setFontSize(clampFontSize(s.editorFontSize));
       })
       // Logged rather than shown: what it costs is a panel that opens on the
       // defaults, and a first run has no file to read anyway.
@@ -922,10 +939,35 @@ function App() {
     symbols.setWorkspace({ path: activeTab?.path ?? null, root: projectRoot });
   }, [symbols, activeTab?.path, projectRoot]);
 
+  /**
+   * ⌘ and the wheel over the editor, in whole sizes.
+   *
+   * Identity-stable for the same reason `patternNames` and `openDocs` are, and
+   * written as an updater rather than off `fontSize` so it can be: the gesture
+   * arrives faster than a render, and a handler holding a size from one paint
+   * ago would undo half its own steps.
+   */
+  const zoomEditor = useCallback((steps: number) => {
+    setFontSize((size) => clampFontSize(size + steps));
+  }, []);
+
   const extensions = useMemo(
-    () => swyncExtensions(metadata, patternNames, openDocs, symbols),
-    [metadata, patternNames, openDocs, symbols],
+    () => swyncExtensions(metadata, patternNames, openDocs, symbols, zoomEditor),
+    [metadata, patternNames, openDocs, symbols, zoomEditor],
   );
+
+  // Remember where the zoom came to rest. Debounced like a project's settings,
+  // and against the settings themselves rather than a ref: a size that is
+  // already what the file says — which is every launch — writes nothing.
+  useEffect(() => {
+    if (settings === null) return;
+    if ((settings.editorFontSize ?? DEFAULT_FONT_SIZE) === fontSize) return;
+    const timer = setTimeout(
+      () => changeSettings({ ...settings, editorFontSize: fontSize }),
+      FONT_SIZE_SAVE_DELAY,
+    );
+    return () => clearTimeout(timer);
+  }, [fontSize, settings, changeSettings]);
 
   /**
    * Show a drawn pattern in a composer tab.
@@ -1857,7 +1899,11 @@ function App() {
               height="100%"
               theme="dark"
               extensions={extensions}
-              className="h-full text-sm"
+              // The size is here rather than in a Tailwind class because it is
+              // a number now — ⌘ and the wheel over the editor move it, and it
+              // is the editor's alone: everything around it stays put.
+              style={{ fontSize: `${fontSize}px` }}
+              className="h-full"
             />
           ) : restoring ? (
             // The last session is still being read. Blank rather than "no file
