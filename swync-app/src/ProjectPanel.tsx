@@ -12,6 +12,7 @@ import {
   type Entry,
   type ProjectTree,
 } from "./projectTree";
+import { useFileDrop, useRowDrag, type Selected } from "./projectDrag";
 
 import ChevronRight from './assets/chevron-right.svg?react'
 import FileSVG from './assets/file.svg?react'
@@ -90,18 +91,6 @@ interface Draft {
   kind: "file" | "folder";
 }
 
-/**
- * The row the panel is acting on.
- *
- * Carries whether it is a folder as well as where it is, because that is what
- * decides where a New File goes — into the selection, or beside it — and after
- * a rename or a create there is no `Entry` to ask.
- */
-interface Selected {
-  path: string;
-  isDir: boolean;
-}
-
 /** An open context menu, and what it is about. */
 interface Menu {
   x: number;
@@ -139,13 +128,14 @@ interface Tree {
    *  project folder, which is what the space below the tree means. */
   paste: (into: Entry | null) => void;
   openMenu: (menu: Menu) => void;
-  /** The row being dragged, so a folder can refuse to be dropped into itself
-   *  before the pointer is over it rather than after. */
+  /** The row being dragged, so it can be dimmed on its way somewhere. */
   dragging: Selected | null;
-  setDragging: (row: Selected | null) => void;
+  /** Begin a drag of this row. See [`useRowDrag`] — it becomes one only once
+   *  the pointer has moved far enough to mean it. */
+  press: (row: Selected, e: React.PointerEvent) => void;
+  /** The one folder a drop would land in, whether the thing being dropped is a
+   *  row of the tree or a file from outside the app. */
   dropTarget: string | null;
-  setDropTarget: (path: string | null) => void;
-  move: (from: Selected, intoDir: string) => void;
 }
 
 const TreeContext = createContext<Tree | null>(null);
@@ -271,11 +261,15 @@ function Children({ path, depth }: { path: string; depth: number }) {
       />
     ) : null;
 
+  // The lines that stand in for rows carry the folder they are about, exactly
+  // as a row does. A drag is aimed by asking what is under the pointer, and the
+  // word `empty` sitting where the files would be is the clearest thing in the
+  // tree to aim a first sample at.
   if (listing === undefined || listing.status === "loading") {
     return (
       <>
         {draft}
-        <p style={pad} className="py-1 pr-2 text-xs text-neutral-600">
+        <p data-path={path} data-dir="true" style={pad} className="py-1 pr-2 text-xs text-neutral-600">
           loading…
         </p>
       </>
@@ -296,7 +290,12 @@ function Children({ path, depth }: { path: string; depth: number }) {
       <>
         {draft}
         {draft === null && (
-          <p style={pad} className="py-1 pr-2 text-xs italic text-neutral-600">
+          <p
+            data-path={path}
+            data-dir="true"
+            style={pad}
+            className="py-1 pr-2 text-xs italic text-neutral-600"
+          >
             empty
           </p>
         )}
@@ -338,14 +337,12 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
     );
   }
 
-  // A drop on a folder goes into it; a drop on a file goes beside that file,
-  // which is into the folder holding it.
-  const dropInto = entry.isDir ? entry.path : parentOf(entry.path);
   // Only folders are ever lit up, even though a file is a perfectly good thing
-  // to aim at. Lighting the file would light every one of its siblings too —
-  // they all mean the same destination — and the folder row that means exactly
-  // that destination is right there above them.
-  const isDropTarget = entry.isDir && dropTargetIs(ctx, entry.path);
+  // to aim at — a drop on one lands beside it, in the folder holding it.
+  // Lighting the file would light every one of its siblings too, since they all
+  // mean the same destination, and the folder row that means exactly that
+  // destination is right there above them.
+  const isDropTarget = entry.isDir && ctx.dropTarget === entry.path;
 
   return (
     <>
@@ -355,50 +352,13 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
         aria-expanded={entry.isDir ? open : undefined}
         aria-selected={isSelected}
         title={entry.path}
-        draggable
-        onDragStart={(e) => {
-          ctx.setDragging(entry);
-          e.dataTransfer.effectAllowed = "move";
-          // Set for the platform's sake — a drag with nothing on it is one
-          // some browsers refuse to start.
-          e.dataTransfer.setData("text/plain", entry.path);
-        }}
-        onDragEnd={() => {
-          ctx.setDragging(null);
-          ctx.setDropTarget(null);
-        }}
-        onDragOver={(e) => {
-          if (!canDrop(ctx, dropInto)) {
-            // Over a row nothing can land on — the dragged row itself, or a
-            // folder inside it. Whatever was lit up a moment ago is not where
-            // this would go, so it stops being lit up. The event stops here
-            // rather than reaching the panel behind, which would otherwise
-            // offer the project folder for a drop the pointer is not over.
-            ctx.setDropTarget(null);
-            e.stopPropagation();
-            return;
-          }
-          // Both, and the preventDefault on *over* rather than only on *enter*:
-          // without it the drop never fires, which is the whole of why this
-          // looks like more ceremony than it is.
-          e.preventDefault();
-          e.stopPropagation();
-          e.dataTransfer.dropEffect = "move";
-          ctx.setDropTarget(dropInto);
-        }}
-        onDrop={(e) => {
-          if (!canDrop(ctx, dropInto) || ctx.dragging === null || dropInto === null) {
-            // A drop the row cannot take is a drop that means nothing, not one
-            // for the panel behind it to take as a move to the top level.
-            e.stopPropagation();
-            return;
-          }
-          e.preventDefault();
-          e.stopPropagation();
-          ctx.move(ctx.dragging, dropInto);
-          ctx.setDragging(null);
-          ctx.setDropTarget(null);
-        }}
+        // What a drag aims at. Every drop in this panel — a row being moved, a
+        // sample dropped in from the Finder — finds its destination by asking
+        // the DOM what is under the pointer, so these two are how a row says
+        // where it is and whether things can go inside it. See `projectDrag.ts`.
+        data-path={entry.path}
+        data-dir={entry.isDir ? "true" : "false"}
+        onPointerDown={(e) => ctx.press(entry, e)}
         onClick={(e) => {
           // The panel below clears the selection, which is what a click on
           // nothing means. A click on a row is not a click on nothing.
@@ -483,19 +443,6 @@ function Row({ entry, depth }: { entry: Entry; depth: number }) {
   );
 }
 
-/** Whether the folder under the pointer is one the dragged row can land in. */
-function canDrop(ctx: Tree, into: string | null): boolean {
-  if (ctx.dragging === null || into === null) return false;
-  // Into the folder it is already in, which is a move to where it already is.
-  if (parentOf(ctx.dragging.path) === into) return false;
-  // And into itself, or anywhere below itself, which is not a move at all.
-  return !isWithin(into, ctx.dragging.path);
-}
-
-function dropTargetIs(ctx: Tree, into: string | null): boolean {
-  return into !== null && ctx.dropTarget === into && canDrop(ctx, into);
-}
-
 /** A small button in the panel's heading. */
 function HeaderButton({
   title,
@@ -577,9 +524,9 @@ export function ProjectPanel({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [dragging, setDragging] = useState<Selected | null>(null);
-  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [clipboard, setClipboard] = useState<Clipped | null>(null);
+  /** The tree's own element, which is what a drag is hit tested against. */
+  const treeRef = useRef<HTMLDivElement>(null);
 
   // A different project empties the clipboard. A cut carries a promise to
   // correct the `use` lines it leaves behind, and that promise is bounded by
@@ -712,6 +659,56 @@ export function ProjectPanel({
   );
 
   /**
+   * Take files dropped in from outside the app — samples, mostly.
+   *
+   * They are copied in rather than pointed at. A project is a folder you can
+   * hand to somebody else, and `load("kick.wav")` beside the program is the
+   * only version of that which survives the journey; a path into the Finder
+   * window it was dragged from means nothing on the next machine, and nothing
+   * on this one once the folder is tidied.
+   *
+   * `copy_path` is the tree's own Paste, which is exactly this act: land a copy
+   * somewhere, take the next free name rather than overwrite what is there, and
+   * correct the copy's own `use` lines — a dropped `.swync` file is the one
+   * case where that matters, and it is free for the samples that are the common
+   * one. One at a time rather than all at once, because two files of the same
+   * name landing together would both be told the same name is free.
+   */
+  const importFiles = useCallback(
+    (paths: string[], into: string) => {
+      void (async () => {
+        const failures: Diagnostic[] = [];
+        for (const from of paths) {
+          try {
+            const copied = await invoke<Moved>("copy_path", {
+              from,
+              to: join(into, basename(from)),
+            });
+            reportUnfollowed(copied.unfollowed);
+          } catch (e) {
+            failures.push(toDiagnostic(e, `could not add ${basename(from)}`));
+          }
+        }
+        // Open the folder they went into, whether or not it was open: a drop
+        // you cannot see land is one you have to go looking for. The folder is
+        // watched too, so this is the immediate half of an answer that would
+        // arrive anyway.
+        tree.expand(into);
+        tree.refresh(into);
+        if (failures.length > 0) onProblems(failures);
+      })();
+    },
+    [tree, reportUnfollowed, onProblems],
+  );
+
+  // The two ways something arrives at a folder in this tree: a row dragged from
+  // elsewhere in the tree, and a file dragged in from outside the window. They
+  // are one interaction with two sources, and both light up the same folder.
+  const rowDrag = useRowDrag(treeRef, root, moveInto);
+  const fileDrop = useFileDrop(treeRef, root, importFiles);
+  const dropTarget = rowDrag.dropTarget ?? fileDrop.dropTarget;
+
+  /**
    * Paste whatever is held, into a folder.
    *
    * A cut is the move the tree already does, so it corrects the imports of
@@ -833,11 +830,9 @@ export function ProjectPanel({
     clip: (entry, mode) => setClipboard({ path: entry.path, isDir: entry.isDir, mode }),
     paste,
     openMenu: setMenu,
-    dragging,
-    setDragging,
+    dragging: rowDrag.row,
+    press: rowDrag.press,
     dropTarget,
-    setDropTarget,
-    move: moveInto,
   };
 
   const menuEntry = menu?.entry ?? null;
@@ -880,31 +875,19 @@ export function ProjectPanel({
 
       {/* The tree, and below it the rest of the panel — which is the project
           folder as a drop target, so dragging a file out of a folder and back
-          to the top level does not need a row to aim at. */}
+          to the top level does not need a row to aim at. Nothing here listens
+          for a drag: what is under the pointer is asked of this element, which
+          is why it is the one thing in the panel holding a ref. */}
       <div
+        ref={treeRef}
         role="tree"
         aria-label="Project files"
-        className={
-          "min-h-0 flex-1 py-1 " + (dropTargetIs(context, root) ? "bg-blue-600/10" : "")
-        }
+        className={"min-h-0 flex-1 py-1 " + (dropTarget === root ? "bg-blue-600/10" : "")}
         onClick={() => setSelected(null)}
         onContextMenu={(e) => {
           e.preventDefault();
           setSelected(null);
           setMenu({ x: e.clientX, y: e.clientY, entry: null });
-        }}
-        onDragOver={(e) => {
-          if (!canDrop(context, root)) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          setDropTarget(root);
-        }}
-        onDrop={(e) => {
-          if (!canDrop(context, root) || dragging === null) return;
-          e.preventDefault();
-          moveInto(dragging, root);
-          setDragging(null);
-          setDropTarget(null);
         }}
       >
         <Children path={root} depth={0} />
