@@ -19,6 +19,10 @@ changed.
 
 ## Naming the port
 
+**The editor knows what your ports are called.** Type `midiout("` and it
+offers them, with each one's number beside it — the same way it completes
+everything else. You should never have to go and read a name off a panel.
+
 The device is a port's **name**, matched on any part of it and ignoring case,
 so `"deluge"` finds `Deluge MIDI 1`. Or it is the port's **number**, counted
 from 0 in the list the settings panel shows:
@@ -27,9 +31,10 @@ from 0 in the list the settings panel shows:
 play(drums, midiout(2))
 ```
 
-A name is the better one to write down. Numbers move when something is
-plugged in, and a name that says what the synth is will still say it next
-year. If a name matches more than one port the first is used and the problems
+A name is the better one to write down, which is why the editor offers names
+and mentions numbers rather than the other way round. Numbers move when
+something is plugged in, and a name that says what the synth is will still say
+it next year. If a name matches more than one port the first is used and the problems
 panel says which others it passed over — write more of the name to choose
 between them.
 

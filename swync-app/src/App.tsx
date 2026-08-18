@@ -13,6 +13,7 @@ import {
   EMPTY_METADATA,
   loadMetadata,
   Symbols,
+  Ports,
   type LanguageMetadata,
 } from "./swync";
 import { DocsPanel, type DocsFocus } from "./DocsPanel";
@@ -948,6 +949,11 @@ function App() {
   // extension array it goes into: it is a cache the backend fills, and
   // rebuilding it would throw the answer away on every render.
   const symbols = useRef(new Symbols()).current;
+  // The MIDI ports the editor offers inside `midiout("`. Long-lived beside
+  // `symbols` and for the same reason: completion reads it when a menu opens,
+  // and what fills it is a round trip that finished before that or has not
+  // finished yet.
+  const ports = useRef(new Ports()).current;
   useEffect(() => {
     symbols.setWorkspace({ path: activeTab?.path ?? null, root: projectRoot });
   }, [symbols, activeTab?.path, projectRoot]);
@@ -965,7 +971,7 @@ function App() {
   }, []);
 
   const extensions = useMemo(
-    () => swyncExtensions(metadata, patternNames, openDocs, symbols, zoomEditor),
+    () => swyncExtensions(metadata, patternNames, openDocs, symbols, ports, zoomEditor),
     [metadata, patternNames, openDocs, symbols, zoomEditor],
   );
 

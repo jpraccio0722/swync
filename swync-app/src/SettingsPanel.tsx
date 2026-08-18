@@ -345,9 +345,15 @@ export function SettingsPanel({
       {/* Read, not chosen. Every other list in this panel is a control — you
           pick a device and the app opens it — but a MIDI port is named inside
           the program (`midiout("deluge")`), because which synth a part is
-          written for belongs to the piece rather than to the desk. So what is
-          here is the two things a program cannot tell you: what the ports are
-          called, and what number each one is. See `midi/ports.rs`. */}
+          written for belongs to the piece rather than to the desk. See
+          `midi/ports.rs`.
+
+          This is not how you are meant to *learn* a port's name: the editor
+          offers them inside `midiout("`, which is where you are looking when
+          you need one, and is how every other name in the language is found.
+          What this is for is the questions the editor cannot answer while you
+          are not writing — whether the interface you just plugged in showed
+          up, and what its number is. */}
       <section>
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
           MIDI
@@ -381,7 +387,10 @@ export function SettingsPanel({
             <span className="font-mono text-neutral-400">
               play(bass, midiout("{midi?.outputs[0]?.name.split(" ")[0].toLowerCase() ?? "deluge"}"))
             </span>
-            . Any part of the name will do, and so will the number beside it.
+            . Any part of the name will do, case and all, and so will the number
+            beside it. The editor offers these inside{" "}
+            <span className="font-mono text-neutral-400">midiout("</span> — you
+            should not need to come back here to copy one out.
           </p>
         </div>
 

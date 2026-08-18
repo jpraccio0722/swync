@@ -197,8 +197,15 @@ it is a claim about what belongs to what: which interface is on the desk is a
 fact about the desk, while which synth a part is written for is a fact about
 the piece. So a port is matched by a case-insensitive substring of its name —
 real port names are long and vendor-shaped, and a program is typed live — or by
-its number in the platform's list, which is why the settings panel prints the
-numbers beside the names and does not offer anything to click.
+its number in the platform's list.
+
+Which raises the question the panel alone answers badly: how does anybody know
+what to type? **The editor completes them** — `midiout("` offers this
+machine's ports, with each one's number beside it, exactly as every other name
+in the language is found (`src/swync/ports.ts`, and Frontend shape below). The
+settings panel still lists them, but for the question you ask when you are
+*not* writing: whether the thing you just plugged in showed up. That is also
+why the panel offers nothing to click.
 
 A port that is not connected is a **warning**, not an error. `run_code` returns
 `Result<Vec<Diagnostic>, Diagnostic>` for this and nothing else so far: the
@@ -313,12 +320,13 @@ Three things carry the weight:
 
 `src/swync/` is the CodeMirror extension bundle. `swyncExtensions()` must be called once and memoized — CodeMirror reconfigures when the extension array's identity changes, which would discard completion state on every keystroke. Values that change (drawn pattern names, the docs callback, the `Symbols` cache) are passed as getters or long-lived objects for the same reason.
 
-Completion reads the buffer with regexes, because the text being completed is half-written and the real parser would reject it. Two things it cannot get that way:
+Completion reads the buffer with regexes, because the text being completed is half-written and the real parser would reject it. Three things it cannot get that way:
 
 - **What a `use kit::*` brought in.** Those names live in a file the frontend has never read, so the `module_symbols` command runs the real expander and reports the spellings *this file* would write (`kick`, `kit::kick`, `k::kick`). `src/swync/symbols.ts` asks only when the document's `use` lines change, and answers nothing when the file does not expand — which is most keystrokes, and is the right answer while it is half-typed.
 - **Which argument of a call the cursor is in.** `src/swync/callsite.ts` holds `callAt`, shared with signature help rather than written twice. It is what makes `play(pat, ` offer only playable `fn`s and `play(pat, kick, ` offer that instrument's lanes — both rules live in `lowerer/play.rs` and are otherwise invisible until the program is run.
+- **What this machine's MIDI ports are called.** `src/swync/ports.ts` — and it is the answer to the question the MIDI design otherwise leaves hanging: a port is named in the program, so how does anybody know what to type? `midiout("` offers them. It is `Symbols` for hardware, and differs only in *when* it goes stale: a `use` line changes when the document does, while a port list changes when somebody plugs something in, which no edit reports. So it refreshes on a clock (`STALE_MS`) rather than on an edit, warmed from the update listener whenever the document says `midiout`.
 
-`src/swync/indent.ts` is the third thing the frontend cannot read off the buffer alone: which line breaks end a statement. It mirrors `cont_next` in `parser/lex.rs`, so a line opening with `.` or `>>` is indented one step from the line that began the statement. It applies through `indentOnInput` rather than on Enter — a break after `some()` ends a statement until the `.` is typed, and the `.` is the only moment the answer changes.
+`src/swync/indent.ts` is the last thing the frontend cannot read off the buffer alone: which line breaks end a statement. It mirrors `cont_next` in `parser/lex.rs`, so a line opening with `.` or `>>` is indented one step from the line that began the statement. It applies through `indentOnInput` rather than on Enter — a break after `some()` ends a statement until the `.` is typed, and the `.` is the only moment the answer changes.
 
 **`dragDropEnabled` is on, and that is why `src/projectDrag.ts` exists.** With it on, the webview's drag handling belongs to wry, which claims every drag crossing the window — so the frontend is handed the *paths* of files dropped in from the Finder, and no `dragstart` fires anywhere in the page. With it off, a dropped file arrives as a browser `File` with no path, which is the one thing about it the project tree needs. Only one of the two is available, so the tree moves its own rows with pointer events (`useRowDrag`) and takes dropped files from Tauri's event (`useFileDrop`), both aiming at whatever folder is under the pointer via `folderAt` rather than at whichever row's handler an event reached. The cost of the trade is dragging text out of the editor, which CodeMirror offers over HTML5 drag and drop and which no longer arrives.
 

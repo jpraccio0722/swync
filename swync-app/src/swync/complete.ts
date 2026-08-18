@@ -17,6 +17,7 @@ import {
   type LanguageMetadata,
   type ValueKind,
 } from "./metadata";
+import type { PortInfo, Ports } from "./ports";
 import type { Symbol as ModuleSymbol, Symbols } from "./symbols";
 
 /**
@@ -108,6 +109,12 @@ const PLAYS = new Set(["play", "play_once", "playn"]);
 
 /** Which argument of a `play` names the instrument. */
 const INSTRUMENT_ARG = 1;
+
+/** The name that puts gear where an instrument would go. `lang.rs`'s. */
+const MIDI_OUT = "midiout";
+
+/** Which argument of a `midiout` names the port. */
+const DEVICE_ARG = 0;
 
 /** The two lanes that never reach the instrument, and so are writable whatever
  *  it is. Their meanings are `pattern/patterns.rs`'s. */
@@ -567,7 +574,24 @@ function localMethodCompletion(s: LocalSymbol): Completion {
  * right ones.
  */
 function instrumentOptions(locals: LocalSymbol[], imported: ModuleSymbol[]): Completion[] {
-  const options: Completion[] = [];
+  // Gear is the other thing that can play a pattern, and unlike an instrument
+  // it is not a name anywhere in the document — so nothing else in this menu
+  // would ever mention that the slot takes it. Offered first because it is one
+  // fixed name against however many instruments a program has, so it is the
+  // one that can be found by reading rather than by knowing.
+  const options: Completion[] = [
+    {
+      label: MIDI_OUT,
+      detail: "send this pattern out as MIDI",
+      info:
+        "Play the pattern on gear outside the machine instead of an " +
+        "instrument in this program. The pattern's values are MIDI note " +
+        "numbers, which is what c4, semi and scale already count in.",
+      type: "function",
+      boost: BOOST.builtin,
+      apply: applyCall(MIDI_OUT, true),
+    },
+  ];
   const taken = new Set<string>();
 
   for (const s of locals) {
@@ -596,6 +620,20 @@ function instrumentOptions(locals: LocalSymbol[], imported: ModuleSymbol[]): Com
   return options;
 }
 
+/** The lanes a `midiout` destination takes. There is no instrument for one to
+ *  reach, so unlike an instrument's these are a fixed set — `play.rs` refuses
+ *  anything outside it. Their meanings are `pattern/patterns.rs`'s. */
+const MIDI_LANES: { name: string; info: string }[] = [
+  { name: "vel", info: "How hard the note is struck, 0 to 1. Defaults to 100 on the wire." },
+  { name: "chan", info: "Which MIDI channel this note goes out on, 1 to 16, overriding the destination's." },
+  { name: "legato", info: "Scales how long each note is held, against its step." },
+];
+
+/** Whether a `play`'s instrument argument is gear rather than a named `fn`. */
+function isDestination(instrument: string): boolean {
+  return new RegExp(`^\\s*${MIDI_OUT}\\s*\\(`).test(instrument);
+}
+
 /**
  * The lanes an instrument will take: its own parameters after the first, and
  * the two reserved ones that never reach it.
@@ -611,17 +649,31 @@ function laneOptions(
   locals: Map<string, LocalSymbol>,
   imported: Map<string, ModuleSymbol>,
 ): Completion[] {
-  const local = locals.get(instrument);
-  const symbol = imported.get(instrument);
-  const params = symbol?.params ?? local?.params;
-  if (!params) return [];
-  const optional = symbol?.optional ?? local?.optional;
-
   const already = new Set(
     written
       .map((arg) => arg.match(/^\s*([a-zA-Z_]\w*)\s*:/)?.[1])
       .filter((name): name is string => name !== undefined),
   );
+
+  // Gear has no parameters to read lanes off, so its set is fixed rather than
+  // derived. Answered before the lookup below, which would find nothing for a
+  // `midiout(..)` — it is a call, not a name.
+  if (isDestination(instrument)) {
+    return MIDI_LANES.filter(({ name }) => !already.has(name)).map(({ name, info }) => ({
+      label: name,
+      detail: "lane",
+      info,
+      type: "property",
+      boost: BOOST.builtin,
+      apply: applyLane(name),
+    }));
+  }
+
+  const local = locals.get(instrument);
+  const symbol = imported.get(instrument);
+  const params = symbol?.params ?? local?.params;
+  if (!params) return [];
+  const optional = symbol?.optional ?? local?.optional;
 
   const options: Completion[] = params.slice(1).flatMap((param, i) => {
     if (already.has(param)) return [];
@@ -655,6 +707,38 @@ function laneOptions(
   return options;
 }
 
+/**
+ * The ports this machine has, offered inside `midiout(`.
+ *
+ * The answer to "how would anybody know what to type here". A port's name is
+ * not in the document, not in the project, and not guessable — it is whatever
+ * the vendor and the operating system between them decided to call it, and on
+ * this desk that includes `Euphonix MIDI Euphonix Port 1`. Nobody types that
+ * from memory.
+ *
+ * Written with the quotes when the quotes are not there yet, and without them
+ * when the cursor is already inside a string — CodeMirror replaces the range
+ * it was given, and a name inserted over its own opening quote would leave a
+ * dangling one behind it.
+ *
+ * The number goes in `detail` rather than being offered as a completion of its
+ * own. Both spellings work, but they are not equally good advice: a number
+ * moves when something else is plugged in, and a name does not. Showing it
+ * beside the name is how somebody who wants the short form finds it without
+ * the menu recommending it.
+ */
+function portOptions(ports: PortInfo[], quoted: boolean): Completion[] {
+  return ports.map((port) => ({
+    label: quoted ? port.name : `"${port.name}"`,
+    detail: `port ${port.number}`,
+    info:
+      "A MIDI output on this machine. Any part of the name will do, and case " +
+      "does not matter — `midiout(\"deluge\")` finds `Deluge MIDI 1`.",
+    type: "constant",
+    boost: BOOST.local,
+  }));
+}
+
 /** A lane is written `name: value`, and the value is what comes next. */
 function applyLane(name: string) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
@@ -677,6 +761,8 @@ export const __test = {
   accepts,
   instrumentOptions,
   laneOptions,
+  portOptions,
+  isDestination,
 };
 
 /**
@@ -686,11 +772,15 @@ export const __test = {
  * @param symbols What the file's `use` lines brought in, read the same way and
  * for the same reason — it is filled by a round trip to the backend that
  * finishes long after this source is built.
+ * @param ports The MIDI ports this machine has, by the same rule again — and
+ * for a reason of the same shape as `symbols`: the names are not in the
+ * document, so nothing this side could scrape them from.
  */
 export function swyncCompletions(
   meta: LanguageMetadata,
   patternNames: () => string[],
   symbols: Symbols,
+  ports: Ports,
 ): CompletionSource {
   const builtins = meta.builtins.map(builtinCompletion);
   const keywords: Completion[] = meta.keywords.map((label) => ({
@@ -739,6 +829,33 @@ export function swyncCompletions(
     // of an instrument's name, and there is no method position here.
     const stripped = dot === null ? stripComments(doc) : "";
     const call = dot === null ? callAt(stripped, at) : null;
+    // Inside `midiout(`, which is where a port's name is written and the one
+    // place in the language where the thing being named is not in the document
+    // — see `ports.ts`. Checked before `play`, though the order does not
+    // decide it: `callAt` walks to the *innermost* unclosed paren, so inside
+    // `play(pat, midiout("` the call is already this one.
+    if (call && call.name === MIDI_OUT && call.argIndex === DEVICE_ARG) {
+      ports.refresh();
+      const written = argumentsIn(stripped, call.open, at)[DEVICE_ARG] ?? "";
+      // Where the opening quote is, if the string has been started. Measured
+      // from the call rather than searched backwards from the cursor, so a
+      // quote belonging to something else cannot be mistaken for this one.
+      const quote = written.indexOf('"');
+      const inside = quote !== -1;
+      const options = portOptions(ports.current(), inside);
+      if (options.length > 0) {
+        return {
+          // Replacing from just after the quote rather than from the word:
+          // a port name has spaces in it, and the word regex would leave
+          // everything before the last one behind.
+          from: inside ? call.open + 1 + quote + 1 : from,
+          options,
+          // Anything but the closing quote, since a name is words and spaces.
+          validFor: inside ? /^[^"]*$/ : /^\w*$/,
+        };
+      }
+    }
+
     if (call && PLAYS.has(call.name)) {
       const scraped = scrapeLocals(doc);
 
