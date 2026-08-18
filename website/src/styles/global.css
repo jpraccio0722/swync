@@ -138,12 +138,20 @@ a {
     @apply text-gray-800 dark:text-gray-200;
 }
 
-/* Both halves of `Scale.major`, which is one reference and is coloured as one.
-   Indigo sits between the blue a function takes and the purple of a keyword —
-   the only gap left — and stays out of the pattern colours, which an enum
-   member can never appear among. */
+/* The two halves of `Scale.major`, told apart: the enum names where to look,
+   the member names which one. Indigo sits between the blue a function takes
+   and the purple of a keyword, and stays out of the pattern colours, which an
+   enum can never appear among. */
 .prose-swync .tok-enum {
     @apply text-indigo-700 dark:text-indigo-400;
+}
+
+/* Sky for the member, two steps round from the indigo rather than one —
+   neighbouring hues do not read as different where the two words touch. Deeper
+   in light for the contrast reason the trigger and the quote are: sky-300 is
+   2.0:1 on this background, and a member is the half being scanned for. */
+.prose-swync .tok-enum-member {
+    @apply text-sky-700 dark:text-sky-300;
 }
 
 /* Warm for silence, cool-bright for a hit: the pair has to be separable at a
