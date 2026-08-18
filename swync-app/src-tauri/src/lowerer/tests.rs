@@ -173,7 +173,7 @@ fn for_loop_steps_may_be_given_a_length() {
     let written = bindings_of(&format!(
         "{BASS}play([65;e, 65, 65, 65, 65], bass)\n"));
 
-    assert_eq!(built[0].pattern, written[0].pattern);
+    assert_eq!(built[0].source.pattern().cloned().expect("a written pattern"), written[0].source.pattern().cloned().expect("a written pattern"));
     assert_eq!(built[0].bars, written[0].bars);
 }
 
@@ -186,7 +186,7 @@ fn a_step_may_be_as_long_as_the_element_it_came_from() {
     let written = bindings_of(&format!(
         "{BASS}play([220;1, 440;2, 660;3], bass)\n"));
 
-    assert_eq!(built[0].pattern, written[0].pattern);
+    assert_eq!(built[0].source.pattern().cloned().expect("a written pattern"), written[0].source.pattern().cloned().expect("a written pattern"));
 }
 
 /// The length a `for` gives its steps is read the same way a written one is,
@@ -199,7 +199,7 @@ fn a_for_loop_may_collect_tuplets() {
     let written = bindings_of(&format!(
         "{BASS}play([[60;q, 63, 67];t, [60;q, 63, 67];t], bass)\n"));
 
-    assert_eq!(built[0].pattern, written[0].pattern);
+    assert_eq!(built[0].source.pattern().cloned().expect("a written pattern"), written[0].source.pattern().cloned().expect("a written pattern"));
     assert_eq!(built[0].bars, written[0].bars);
 }
 
@@ -663,7 +663,7 @@ fn play_binds_a_pattern_to_an_instrument() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220, `, 330, `], kick)\n");
     assert_eq!(bs.len(), 1);
     assert_eq!(bs[0].target, "kick");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(220.0), Step::Rest, Step::Value(330.0), Step::Rest,
     ]));
 }
@@ -672,7 +672,7 @@ fn play_binds_a_pattern_to_an_instrument() {
 #[test]
 fn play_rate_wraps_the_pattern() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220, 330], kick, 2)\n");
-    assert_eq!(bs[0].pattern, Pattern::Fast(Rate::Fixed(2.0),
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::Fast(Rate::Fixed(2.0),
         Box::new(Pattern::seq(vec![Step::Value(220.0), Step::Value(330.0)]))));
 }
 
@@ -680,7 +680,7 @@ fn play_rate_wraps_the_pattern() {
 #[test]
 fn play_rate_below_one_slows_down() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220], kick, 0.5)\n");
-    assert_eq!(bs[0].pattern, Pattern::Fast(Rate::Fixed(0.5),
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::Fast(Rate::Fixed(0.5),
         Box::new(Pattern::seq(vec![Step::Value(220.0)]))));
 }
 
@@ -688,14 +688,14 @@ fn play_rate_below_one_slows_down() {
 #[test]
 fn omitted_rate_is_one() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220], kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![Step::Value(220.0)]));
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![Step::Value(220.0)]));
 }
 
 /// Nested lists subdivide their slot.
 #[test]
 fn nested_list_becomes_a_group() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220, [330, 440]], kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(220.0),
         Step::Group(Box::new(Pattern::seq(vec![
             Step::Value(330.0), Step::Value(440.0),
@@ -718,7 +718,7 @@ fn multiple_plays_layer() {
 #[test]
 fn pattern_elements_are_ordinary_expressions() {
     let bs = bindings_of("fn kick(f) = sin(f)\nlet r = 110\nplay([r, r * 2, `], kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(110.0), Step::Value(220.0), Step::Rest,
     ]));
 }
@@ -728,7 +728,7 @@ fn pattern_elements_are_ordinary_expressions() {
 fn play_accepts_a_piped_pattern() {
     let bs = bindings_of("fn kick(f) = sin(f)\n[220, 330] >> play(kick)\n");
     assert_eq!(bs[0].target, "kick");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(220.0), Step::Value(330.0),
     ]));
 }
@@ -736,7 +736,7 @@ fn play_accepts_a_piped_pattern() {
 #[test]
 fn play_pipes_with_a_rate() {
     let bs = bindings_of("fn kick(f) = sin(f)\n[220] >> play(kick, 4)\n");
-    assert_eq!(bs[0].pattern, Pattern::Fast(Rate::Fixed(4.0),
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::Fast(Rate::Fixed(4.0),
         Box::new(Pattern::seq(vec![Step::Value(220.0)]))));
 }
 
@@ -746,7 +746,7 @@ fn play_inside_a_for_makes_several_bindings() {
     let bs = bindings_of(
         "fn kick(f) = sin(f)\nfor i in 1..=3 { play([110 * i], kick, i) }\n");
     assert_eq!(bs.len(), 3);
-    assert_eq!(bs[2].pattern, Pattern::Fast(Rate::Fixed(3.0),
+    assert_eq!(bs[2].source.pattern().cloned().expect("a written pattern"), Pattern::Fast(Rate::Fixed(3.0),
         Box::new(Pattern::seq(vec![Step::Value(330.0)]))));
 }
 
@@ -808,7 +808,7 @@ fn play_rejects_a_signal_rate() {
 fn accel_wraps_the_pattern_as_a_curve() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220], kick, accel(1, 3, 4))\n");
     assert_eq!(
-        bs[0].pattern,
+        bs[0].source.pattern().cloned().expect("a written pattern"),
         Pattern::Fast(
             Rate::accel(1.0, 3.0, 4.0),
             Box::new(Pattern::seq(vec![Step::Value(220.0)]))
@@ -859,7 +859,7 @@ fn play_once_under_a_curve_is_still_one_pass() {
 fn an_accel_between_equal_rates_is_a_plain_rate() {
     let curved = bindings_of("fn kick(f) = sin(f)\nplay([220], kick, accel(2, 2, 4))\n");
     let plain = bindings_of("fn kick(f) = sin(f)\nplay([220], kick, 2)\n");
-    assert_eq!(curved[0].pattern, plain[0].pattern);
+    assert_eq!(curved[0].source.pattern().cloned().expect("a written pattern"), plain[0].source.pattern().cloned().expect("a written pattern"));
 }
 
 /// `accel(1, 1, ...)` is rate 1, which needs no wrapper at all — the same
@@ -867,7 +867,7 @@ fn an_accel_between_equal_rates_is_a_plain_rate() {
 #[test]
 fn an_accel_that_is_no_change_at_all_adds_no_wrapper() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220], kick, accel(1, 1, 8))\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![Step::Value(220.0)]));
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![Step::Value(220.0)]));
 }
 
 /// A pattern written in note values is already wrapped once — it is as long as
@@ -925,7 +925,7 @@ fn play_loops_forever() {
 fn play_once_bounds_the_binding_to_one_bar() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay_once([220, 330], kick)\n");
     assert_eq!(bs[0].target, "kick");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(220.0), Step::Value(330.0),
     ]));
     assert_eq!(bs[0].bars, Some(1.0));
@@ -935,7 +935,7 @@ fn play_once_bounds_the_binding_to_one_bar() {
 fn playn_bounds_the_binding_to_its_count() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplayn([220], kick, 4)\n");
     assert_eq!(bs[0].bars, Some(4.0));
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![Step::Value(220.0)]));
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![Step::Value(220.0)]));
 }
 
 /// Repeats count passes of the pattern, so a rate that packs two passes into
@@ -944,7 +944,7 @@ fn playn_bounds_the_binding_to_its_count() {
 fn a_rate_shortens_the_window_it_speeds_up() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplayn([220], kick, 4, 2)\n");
     assert_eq!(bs[0].bars, Some(2.0));
-    assert_eq!(bs[0].pattern, Pattern::Fast(Rate::Fixed(2.0),
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::Fast(Rate::Fixed(2.0),
         Box::new(Pattern::seq(vec![Step::Value(220.0)]))));
 
     let bs = bindings_of("fn kick(f) = sin(f)\nplay_once([220], kick, 0.5)\n");
@@ -1140,7 +1140,7 @@ fn lanes_survive_the_pipe_form() {
 fn rate_speeds_the_pattern_and_not_the_lanes() {
     let bs = bindings_of(&format!("{BASS}play([220, 330], bass, 2, cut: [400, 2000])\n"));
 
-    assert_eq!(bs[0].pattern, Pattern::Fast(Rate::Fixed(2.0), Box::new(
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::Fast(Rate::Fixed(2.0), Box::new(
         Pattern::seq(vec![Step::Value(220.0), Step::Value(330.0)]))));
     assert_eq!(*bs[0].lanes[0].steps(),
         Pattern::seq(vec![Step::Value(400.0), Step::Value(2000.0)]));
@@ -1541,7 +1541,7 @@ fn list_builtins_feed_patterns() {
         "fn kick(f) = sin(f)\nplay(rotl(rev([110, 220, `, 330])), kick)\n");
     assert_eq!(bs.len(), 1);
     // rev -> [330, `, 220, 110]; rotl 1 -> [`, 220, 110, 330]
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Rest, Step::Value(220.0), Step::Value(110.0), Step::Value(330.0),
     ]));
 }
@@ -1552,7 +1552,7 @@ fn list_builtins_feed_patterns() {
 fn random_lists_feed_patterns() {
     let bs = bindings_of("fn lead(n) = sin(n.m2h)\nplay(randis(4, 60, 72), lead)\n");
     assert_eq!(bs.len(), 1);
-    let Pattern::Steps(slots) = &bs[0].pattern else { panic!("expected a sequence") };
+    let Pattern::Steps(slots) = &bs[0].source.pattern().cloned().expect("a written pattern") else { panic!("expected a sequence") };
     assert_eq!(slots.len(), 4);
     for slot in slots {
         let Step::Value(n) = slot.step else { panic!("expected a plain value") };
@@ -1566,7 +1566,7 @@ fn random_lists_feed_patterns() {
 #[test]
 fn a_random_pattern_is_settled_at_eval() {
     let bs = bindings_of("fn lead(n) = sin(n)\nplay(rands(6, 100, 900), lead)\n");
-    let Pattern::Steps(slots) = &bs[0].pattern else { panic!("expected a sequence") };
+    let Pattern::Steps(slots) = &bs[0].source.pattern().cloned().expect("a written pattern") else { panic!("expected a sequence") };
     // Every step is already a number, not a thunk to be evaluated later.
     assert!(slots.iter().all(|s| matches!(s.step, Step::Value(_))));
     assert_eq!(slots.len(), 6);
@@ -1576,9 +1576,9 @@ fn a_random_pattern_is_settled_at_eval() {
 #[test]
 fn a_seeded_pattern_binds_the_same_notes_twice() {
     let src = "fn lead(n) = sin(n)\nseed(1234)\nplay(randis(8, 48, 72), lead)\n";
-    assert_eq!(bindings_of(src)[0].pattern, bindings_of(src)[0].pattern);
+    assert_eq!(bindings_of(src)[0].source.pattern().cloned().expect("a written pattern"), bindings_of(src)[0].source.pattern().cloned().expect("a written pattern"));
     let other = src.replace("seed(1234)", "seed(1235)");
-    assert_ne!(bindings_of(src)[0].pattern, bindings_of(&other)[0].pattern);
+    assert_ne!(bindings_of(src)[0].source.pattern().cloned().expect("a written pattern"), bindings_of(&other)[0].source.pattern().cloned().expect("a written pattern"));
 }
 
 // ---- triggers and zero-parameter instruments ----
@@ -1587,7 +1587,7 @@ fn a_seeded_pattern_binds_the_same_notes_twice() {
 #[test]
 fn trigger_is_a_sounding_step() {
     let bs = bindings_of("fn kick() = sin(50)\nplay([\\, `, \\, \\], kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(1.0), Step::Rest, Step::Value(1.0), Step::Value(1.0),
     ]));
 }
@@ -1596,7 +1596,7 @@ fn trigger_is_a_sounding_step() {
 #[test]
 fn triggers_nest() {
     let bs = bindings_of("fn kick() = sin(50)\nplay([\\, [\\, \\]], kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(1.0),
         Step::Group(Box::new(Pattern::seq(vec![
             Step::Value(1.0), Step::Value(1.0),
@@ -1608,7 +1608,7 @@ fn triggers_nest() {
 #[test]
 fn triggers_and_numbers_mix() {
     let bs = bindings_of("fn k(f) = sin(f)\nplay([220, \\, `, 330], k)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(220.0), Step::Value(1.0), Step::Rest, Step::Value(330.0),
     ]));
 }
@@ -1624,7 +1624,7 @@ fn trigger_used_as_a_signal_is_an_error() {
 #[test]
 fn triggers_survive_list_builtins() {
     let bs = bindings_of("fn kick() = sin(50)\nplay(rotl([\\, `, `, `]), kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Rest, Step::Rest, Step::Rest, Step::Value(1.0),
     ]));
 }
@@ -1633,7 +1633,7 @@ fn triggers_survive_list_builtins() {
 #[test]
 fn trigger_across_a_newline() {
     let bs = bindings_of("fn kick() = sin(50)\nplay([\n  \\,\n  `\n], kick)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![Step::Value(1.0), Step::Rest]));
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![Step::Value(1.0), Step::Rest]));
 }
 
 // ---- note names ----
@@ -1851,7 +1851,7 @@ fn note_names_compose_with_methods_and_patterns() {
     assert_eq!(num("[c4, e4, g4][1]"), 64.0);
 
     let bs = bindings_of("fn lead(n) = sin(n.m2h)\nplay([c4, ef4, `, g4], lead)\n");
-    assert_eq!(bs[0].pattern, Pattern::seq(vec![
+    assert_eq!(bs[0].source.pattern().cloned().expect("a written pattern"), Pattern::seq(vec![
         Step::Value(60.0), Step::Value(63.0), Step::Rest, Step::Value(67.0),
     ]));
 }
@@ -2917,7 +2917,7 @@ mod length_tests {
     const TONE: &str = "fn tone(n, cut = 800) = saw(n)\n";
 
     fn pattern_of(src: &str) -> Pattern {
-        bindings_of(src).into_iter().next().expect("a binding").pattern
+        bindings_of(src).into_iter().next().expect("a binding").source.pattern().cloned().expect("a written pattern")
     }
 
     fn slots(p: &Pattern) -> Vec<Slot> {
@@ -3117,7 +3117,7 @@ mod stack_tests {
     const TONE: &str = "fn tone(n, cut = 800) = saw(n)\n";
 
     fn pattern_of(src: &str) -> Pattern {
-        bindings_of(src).into_iter().next().expect("a binding").pattern
+        bindings_of(src).into_iter().next().expect("a binding").source.pattern().cloned().expect("a written pattern")
     }
 
     fn onsets(p: &Pattern, span: Span) -> Vec<f64> {
@@ -3329,7 +3329,7 @@ fn then_fill_inherits_the_instrument_and_its_lanes() {
     assert_eq!(bs[1].start, 4.0);
     assert_eq!(bs[1].bars, Some(1.0), "one pass");
     assert_eq!(bs[1].lanes, bs[0].lanes, "the lanes came with it");
-    assert_ne!(bs[1].pattern, bs[0].pattern, "only the pattern is new");
+    assert_ne!(bs[1].source.pattern().cloned().expect("a written pattern"), bs[0].source.pattern().cloned().expect("a written pattern"), "only the pattern is new");
 }
 
 #[test]
@@ -3358,8 +3358,8 @@ fn loop_repeats_the_whole_chain_and_not_just_the_last_link() {
     let starts: Vec<f64> = bs.iter().map(|b| b.start).collect();
     assert_eq!(starts, vec![0.0, 3.0, 4.0, 7.0, 8.0, 11.0]);
     assert_eq!(bs[2].target, "bass", "a copy plays what it copied");
-    assert_eq!(bs[2].pattern, bs[0].pattern);
-    assert_eq!(bs[3].pattern, bs[1].pattern);
+    assert_eq!(bs[2].source.pattern().cloned().expect("a written pattern"), bs[0].source.pattern().cloned().expect("a written pattern"));
+    assert_eq!(bs[3].source.pattern().cloned().expect("a written pattern"), bs[1].source.pattern().cloned().expect("a written pattern"));
     assert_eq!(bs[2].bars, Some(3.0), "and for as long");
 }
 
@@ -3380,7 +3380,7 @@ fn loop_copies_lanes_and_rate() {
     assert_eq!(bs.len(), 2);
     assert_eq!(bs[1].start, 1.5, "1.5 bars at rate 2");
     assert_eq!(bs[1].lanes, bs[0].lanes);
-    assert_eq!(bs[1].pattern, bs[0].pattern);
+    assert_eq!(bs[1].source.pattern().cloned().expect("a written pattern"), bs[0].source.pattern().cloned().expect("a written pattern"));
 }
 
 /// A `with` is part of the chain too, so both parts come round together.
@@ -3769,7 +3769,7 @@ mod metrical_tests {
     const TONE: &str = "fn tone(n, cut = 800) = saw(n)\n";
 
     fn pattern_of(src: &str) -> Pattern {
-        bindings_of(src).into_iter().next().expect("a binding").pattern
+        bindings_of(src).into_iter().next().expect("a binding").source.pattern().cloned().expect("a written pattern")
     }
 
     /// Onsets and durations in bars, which is the only thing about a pattern
@@ -4197,7 +4197,7 @@ mod metrical_tests {
             .into_iter()
             .next()
             .expect("a binding")
-            .pattern
+            .source.pattern().cloned().expect("a written pattern")
     }
 
     fn binding_bars_in(src: &str, meter: Meter) -> Option<f64> {
@@ -4679,4 +4679,224 @@ fn a_note_written_silent_is_still_sent_as_a_note() {
 fn a_chan_lane_overrides_the_destinations_channel_for_that_note() {
     assert_eq!(note_of(60.0, &[]).channel, 1);
     assert_eq!(note_of(60.0, &[("chan", 10.0)]).channel, 10);
+}
+
+// ---- reading a controller, and playing a keyboard ----
+
+use crate::midi::input::{self as midi_in, Control};
+use crate::pattern::patterns::SourceOf;
+
+/// The one node a program of a single `cc`/`bend`/`aftertouch` builds, with
+/// its constant inputs — which is where the device, the channel and the range
+/// all end up.
+fn control_node(src: &str) -> (NodeKind, Vec<f64>) {
+    let graph = lower_src(src).expect("should lower");
+    let node = graph.nodes.last().expect("a node");
+    let consts = node
+        .inputs
+        .iter()
+        .map(|i| match i {
+            NodeInput::Const(n) => *n,
+            NodeInput::Node(_) => panic!("a control reads no signals"),
+        })
+        .collect();
+    (node.kind, consts)
+}
+
+#[test]
+fn a_controller_lowers_to_a_node_holding_its_slot_channel_and_number() {
+    let _bus = midi_in::exclusive();
+    let (kind, consts) = control_node("cc(\"push\", 74)\n");
+    assert_eq!(kind, NodeKind::Cc);
+    // slot, number, channel, lo, hi.
+    assert_eq!(consts, vec![0.0, 74.0, 1.0, 0.0, 1.0]);
+}
+
+/// The controller number comes before the channel, because which knob is the
+/// question and which channel is a detail most rigs never answer.
+#[test]
+fn a_controllers_channel_is_written_after_its_number() {
+    let _bus = midi_in::exclusive();
+    let (_, consts) = control_node("cc(\"push\", 74, 10)\n");
+    assert_eq!(consts[1], 74.0, "the number");
+    assert_eq!(consts[2], 10.0, "the channel");
+}
+
+#[test]
+fn a_controller_can_be_mapped_onto_a_range_at_the_call() {
+    let _bus = midi_in::exclusive();
+    let (_, consts) = control_node("cc(\"push\", 74, 1, 200, 5000)\n");
+    assert_eq!(&consts[3..], &[200.0, 5000.0]);
+}
+
+/// A wheel rests in the middle of its travel, so its range has to put zero
+/// there — otherwise every program adding one to a note would have to subtract
+/// a centre it should never have had to know about.
+#[test]
+fn a_pitch_wheels_range_is_centred_where_the_others_start() {
+    let _bus = midi_in::exclusive();
+    let (kind, consts) = control_node("bend(\"keys\")\n");
+    assert_eq!(kind, NodeKind::Bend);
+    assert_eq!(&consts[2..], &[-1.0, 1.0]);
+
+    let (kind, consts) = control_node("aftertouch(\"keys\")\n");
+    assert_eq!(kind, NodeKind::Aftertouch);
+    assert_eq!(&consts[2..], &[0.0, 1.0], "pressure starts at nothing and goes up");
+}
+
+/// Two reads of the same port share a slot, and a different port does not —
+/// which is what makes the slot a small integer a node can hold at all.
+#[test]
+fn two_reads_of_one_port_share_its_slot() {
+    let _bus = midi_in::exclusive();
+    let graph = lower_src("cc(\"push\", 74) + cc(\"push\", 75) + cc(\"other\", 1)\n")
+        .expect("should lower");
+    let slots: Vec<f64> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Cc)
+        .map(|n| match n.inputs[0] {
+            NodeInput::Const(slot) => slot,
+            _ => panic!("a slot is a number"),
+        })
+        .collect();
+    assert_eq!(slots, vec![0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn a_range_has_to_be_both_ends_or_neither() {
+    let _bus = midi_in::exclusive();
+    assert!(lower_src("cc(\"push\", 74, 1, 200)\n").is_err());
+}
+
+#[test]
+fn a_controller_number_outside_seven_bits_is_refused() {
+    let _bus = midi_in::exclusive();
+    assert!(lower_src("cc(\"push\", 128)\n").is_err());
+    assert!(lower_src("cc(\"push\", 74, 17)\n").is_err(), "channel 17 does not exist");
+}
+
+/// The same rule `midiout` follows, and the same reason: a string is not a
+/// value in this language, so a port's name is read off the syntax.
+#[test]
+fn a_controllers_port_has_to_be_written_out_at_the_call() {
+    let _bus = midi_in::exclusive();
+    assert!(lower_src("cc(1 + 1, 74)\n").is_err());
+}
+
+// ---- the keyboard ----
+
+/// The keyboard a program's one binding is playing.
+fn live_source(src: &str) -> crate::swync_graph::environment::Source {
+    bindings_of(src)[0].source.live().expect("expected a keyboard")
+}
+
+#[test]
+fn a_keyboard_can_be_played_where_a_pattern_would_go() {
+    let _bus = midi_in::exclusive();
+    let source = live_source("fn lead(n) = sin(n.m2h)\nplay(midiin(\"keys\"), lead)\n");
+    assert_eq!(source.slot, 0);
+}
+
+/// `a.f(b)` is `f(a, b)`, so putting the source in `play`'s first slot gives
+/// the chained spelling for nothing. Both have to mean the same thing.
+#[test]
+fn a_keyboard_reads_the_same_chained_as_it_does_written_out() {
+    let _bus = midi_in::exclusive();
+    let written = bindings_of("fn lead(n) = sin(n.m2h)\nplay(midiin(\"keys\"), lead)\n");
+    let chained = bindings_of("fn lead(n) = sin(n.m2h)\nmidiin(\"keys\").play(lead)\n");
+    assert_eq!(written[0].source, chained[0].source);
+    assert_eq!(written[0].target, chained[0].target);
+}
+
+/// Every channel, which is what a keyboard on its own means — a player who has
+/// never thought about MIDI channels should not have to guess which one theirs
+/// is set to.
+#[test]
+fn a_keyboard_listens_to_every_channel_until_it_is_told_one() {
+    let _bus = midi_in::exclusive();
+    assert_eq!(live_source("fn l(n) = sin(n)\nplay(midiin(\"keys\"), l)\n").channel, None);
+    assert_eq!(live_source("fn l(n) = sin(n)\nplay(midiin(\"keys\", 2), l)\n").channel, Some(2));
+}
+
+#[test]
+fn a_keyboard_takes_lanes_like_any_other_binding() {
+    let _bus = midi_in::exclusive();
+    let bindings = bindings_of(
+        "fn lead(n, cut = 800) = lowpass(saw(n.m2h), cut, 1)\n\
+         play(midiin(\"keys\"), lead, cut: [400, 2000])\n");
+    assert_eq!(bindings[0].lanes[0].name, "cut");
+}
+
+/// A keyboard has no passes to count — there is no first note to start one and
+/// none to end it — so a section written round it would have no length.
+#[test]
+fn a_keyboard_cannot_be_given_a_number_of_passes() {
+    let _bus = midi_in::exclusive();
+    let err = play_err("fn l(n) = sin(n)\nplayn(midiin(\"keys\"), l, 4)\n");
+    assert!(err.contains("passes"), "got: {err}");
+    assert!(play_err("fn l(n) = sin(n)\nplay_once(midiin(\"keys\"), l)\n").contains("passes"));
+}
+
+/// Same argument. A rate speeds a pattern up against the bar, and the notes
+/// here arrive when they are played — so a rate would be a claim the program
+/// makes and the music ignores.
+#[test]
+fn a_keyboard_cannot_be_given_a_rate() {
+    let _bus = midi_in::exclusive();
+    let err = play_err("fn l(n) = sin(n)\nplay(midiin(\"keys\"), l, 2)\n");
+    assert!(err.contains("rate"), "got: {err}");
+}
+
+/// It is a `Binding` like any other, which is what keeps the rest of the
+/// language working around it — but one with nothing to query, since the notes
+/// have not happened yet.
+#[test]
+fn a_keyboard_binding_answers_no_events_to_a_query() {
+    let _bus = midi_in::exclusive();
+    let bindings = bindings_of("fn l(n) = sin(n)\nplay(midiin(\"keys\"), l)\n");
+    let patterns = crate::pattern::patterns::Patterns {
+        bindings,
+        ..Default::default()
+    };
+    let events = patterns.query(crate::pattern::pattern::Span::new(0.0, 16.0));
+    assert!(events.is_empty(), "a keyboard cannot be asked about the future");
+}
+
+#[test]
+fn a_keyboard_is_not_a_step_inside_a_pattern() {
+    let _bus = midi_in::exclusive();
+    let err = play_err("fn l(n) = sin(n)\nplay([midiin(\"keys\"), 60], l)\n");
+    assert!(err.contains("midiin"), "got: {err}");
+}
+
+#[test]
+fn a_keyboard_is_not_a_signal() {
+    let _bus = midi_in::exclusive();
+    assert!(lower_src("midiin(\"keys\") * 2\n").is_err());
+}
+
+/// Notes in and notes straight back out is a thru, which nothing here does
+/// yet. It lowers — both halves are ordinary — and the scheduler drops it,
+/// which is worth pinning so that the day it *is* built, this test is what
+/// changes.
+#[test]
+fn a_keyboard_cannot_yet_be_sent_straight_back_out() {
+    let _bus = midi_in::exclusive();
+    let bindings = bindings_of("play(midiin(\"keys\"), midiout(\"deluge\"))\n");
+    assert!(bindings[0].source.live().is_some());
+    assert!(bindings[0].target.instrument().is_none());
+}
+
+/// An instrument gets the velocity only if it asked for it by name, which is
+/// what lets one written long before any of this still play from a keyboard.
+#[test]
+fn an_instrument_is_given_velocity_only_when_it_declares_it() {
+    let _bus = midi_in::exclusive();
+    let items = parse(
+        "fn plain(n) = sin(n)\nfn touched(n, vel = 0.5) = sin(n) * vel\n".to_string(),
+    ).expect("parse failed");
+    let instruments = crate::scheduler::voice::Instruments::from_program(&items);
+    assert!(instruments.declares("touched", "vel"));
+    assert!(!instruments.declares("plain", "vel"));
 }

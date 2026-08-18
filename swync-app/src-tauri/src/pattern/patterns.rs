@@ -1,4 +1,5 @@
 use crate::midi::out::Destination;
+use crate::swync_graph::environment::Source;
 use crate::pattern::pattern::{Event, Pattern, Span};
 use crate::pattern::rate::Rate;
 
@@ -51,6 +52,50 @@ pub const MIDI_LANES: [(&str, &str); 3] = [
     (VELOCITY, "sets how hard the note is struck, 0 to 1"),
     (CHANNEL, "sets which MIDI channel the note goes out on"),
 ];
+
+/// Where a binding's notes come from.
+///
+/// The mirror of [`Target`], and the two are what `play` is now written
+/// between: `play(source, target)`. A pattern is decided ahead of time and
+/// queried over a span of bars; a keyboard is not decided at all until
+/// somebody presses a key, so it cannot be queried — the scheduler works a
+/// fifth of a second ahead of the audio clock, and a key pressed now would be
+/// asked about for a window that has already gone past.
+///
+/// So they leave by different roads in `schedule_pass`, and everything above
+/// them — the target, the lanes, the arrangement — does not know which it has.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourceOf {
+    /// Notes written down, in bars.
+    Pattern(Pattern),
+    /// Notes as they are played, from `midiin`.
+    Live(Source),
+}
+
+impl SourceOf {
+    /// The written pattern, when there is one. `None` for a keyboard, which is
+    /// what most of the pattern machinery has to skip rather than answer.
+    pub fn pattern(&self) -> Option<&Pattern> {
+        match self {
+            SourceOf::Pattern(p) => Some(p),
+            SourceOf::Live(_) => None,
+        }
+    }
+
+    /// The keyboard, when it is one.
+    pub fn live(&self) -> Option<Source> {
+        match self {
+            SourceOf::Live(source) => Some(*source),
+            SourceOf::Pattern(_) => None,
+        }
+    }
+}
+
+impl From<Pattern> for SourceOf {
+    fn from(pattern: Pattern) -> SourceOf {
+        SourceOf::Pattern(pattern)
+    }
+}
 
 /// What plays a pattern.
 ///
@@ -202,8 +247,8 @@ impl LaneArg {
 pub struct Binding {
     /// The instrument, or the gear. See [`Target`].
     pub target: Target,
-    /// Structure, and — for an instrument — its first parameter.
-    pub pattern: Pattern,
+    /// Where the notes come from: written down, or played. See [`SourceOf`].
+    pub source: SourceOf,
     pub lanes: Vec<Lane>,
     /// Bars to wait after the origin's downbeat before this binding starts.
     /// Zero for everything `play` writes directly; `.then` sets it so what
@@ -379,6 +424,14 @@ impl Patterns {
 
     pub fn query(&self, span: Span) -> Vec<BoundEvent> {
         self.bindings.iter().flat_map(|b| {
+            // A keyboard has nothing to be queried. It is not silence and it is
+            // not empty — it is simply not answerable ahead of time, which is
+            // the whole difference between the two kinds of source. The
+            // scheduler picks these up by a different road; see
+            // `schedule_pass`.
+            let Some(pattern) = b.source.pattern() else {
+                return Vec::new();
+            };
             // Before it opens, past where it closed, or — for a binding under
             // a choice — in a repetition where a different arm was drawn.
             let windows = self.windows(b, span);
@@ -407,12 +460,12 @@ impl Patterns {
             // its fourteenth note and wrap round to its first.
             let span = Span::new(span.begin - grid, span.end - grid);
             let anchor = anchor - grid;
-            b.pattern.query_from(span, anchor).into_iter().map(|mut event| {
+            pattern.query_from(span, anchor).into_iter().map(|mut event| {
                 // Which note this is, counted from where the binding opened —
                 // the lane's position, not a time to look up. Counted against
                 // the same clock it was played on, or a rate curve would number
                 // the notes differently than it placed them.
-                let nth = b.pattern.onsets_before_from(event.begin, anchor);
+                let nth = pattern.onsets_before_from(event.begin, anchor);
                 let mut args = Vec::with_capacity(lanes.len());
                 for (name, values) in &lanes {
                     if values.is_empty() { continue }
@@ -571,13 +624,13 @@ mod tests {
             bindings: vec![
                 Binding {
                     target: "kick".into(),
-                    pattern: Pattern::steps([Some(1.0), None]),
+                    source: Pattern::steps([Some(1.0), None]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
                     bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
                 Binding {
                     target: "hat".into(),
-                    pattern: Pattern::steps([Some(1.0), Some(1.0)]),
+                    source: Pattern::steps([Some(1.0), Some(1.0)]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
                     bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
@@ -602,7 +655,7 @@ mod tests {
 
     fn bound(pattern: Pattern, lanes: Vec<Lane>) -> Vec<super::BoundEvent> {
         Patterns {
-            bindings: vec![Binding { target: "i".into(), pattern, lanes, start: 0.0, bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+            bindings: vec![Binding { target: "i".into(), source: pattern.into(), lanes, start: 0.0, bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         }
         .query(Span::new(0.0, 1.0))
@@ -664,7 +717,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::steps([Some(1.0), Some(2.0)]),
+                source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: vec![lane("cut", (1..=6).map(|i| Some(i as f64 * 100.0)).collect())],
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -691,7 +744,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::steps([Some(1.0), Some(2.0), Some(3.0), Some(4.0)]),
+                source: Pattern::steps([Some(1.0), Some(2.0), Some(3.0), Some(4.0)]).into(),
                 lanes: vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -716,7 +769,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::fast(2.0, Pattern::steps([Some(1.0), Some(2.0)])),
+                source: Pattern::fast(2.0, Pattern::steps([Some(1.0), Some(2.0)])).into(),
                 lanes: vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -810,7 +863,7 @@ mod tests {
         Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::steps([Some(1.0), Some(2.0)]),
+                source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -885,13 +938,13 @@ mod tests {
             bindings: vec![
                 Binding {
                     target: "once".into(),
-                    pattern: Pattern::steps([Some(1.0)]),
+                    source: Pattern::steps([Some(1.0)]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
                     bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) },
                 Binding {
                     target: "loop".into(),
-                    pattern: Pattern::steps([Some(1.0)]),
+                    source: Pattern::steps([Some(1.0)]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
                     bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
@@ -922,7 +975,7 @@ mod tests {
         Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::steps([Some(1.0), Some(2.0)]),
+                source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start,
                 bars, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -971,7 +1024,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::steps([Some(1.0)]),
+                source: Pattern::steps([Some(1.0)]).into(),
                 lanes: Vec::new(),
                 start: 2.0,
                 bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -994,7 +1047,7 @@ mod tests {
         Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::fast(Rate::accel(1.0, 3.0, 4.0), Pattern::steps([Some(1.0)])),
+                source: Pattern::fast(Rate::accel(1.0, 3.0, 4.0), Pattern::steps([Some(1.0)])).into(),
                 lanes: Vec::new(),
                 start,
                 bars: Some(4.0),
@@ -1075,10 +1128,10 @@ mod tests {
         Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::fast(
+                source: Pattern::fast(
                     Rate::Fixed(1.0 / 2.5),
                     Pattern::steps([Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0)]),
-                ),
+                ).into(),
                 lanes: vec![lane("cut", (1..=5).map(|i| Some(i as f64 * 10.0)).collect())],
                 start,
                 bars: Some(2.5),
@@ -1128,7 +1181,7 @@ mod tests {
         let running = |origin: f64| Patterns {
             bindings: vec![Binding {
                 target: "i".into(),
-                pattern: Pattern::fast(1.5, Pattern::steps([Some(1.0), Some(2.0)])),
+                source: Pattern::fast(1.5, Pattern::steps([Some(1.0), Some(2.0)])).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: None,
@@ -1198,7 +1251,7 @@ mod tests {
     #[test]
     fn a_fixed_rate_reaches_every_event_unchanged() {
         let mut pats = accelerating(0.0, 0.0, None);
-        pats.bindings[0].pattern = Pattern::fast(2.0, Pattern::steps([Some(1.0)]));
+        pats.bindings[0].source = Pattern::fast(2.0, Pattern::steps([Some(1.0)])).into();
         pats.bindings[0].rate = Rate::Fixed(2.0);
 
         let rates: Vec<f64> = pats.query(Span::new(0.0, 4.0)).iter().map(|e| e.rate).collect();
@@ -1212,7 +1265,7 @@ mod tests {
     fn arm(instrument: &str, group: usize, index: usize, period: f64) -> Binding {
         Binding {
             target: instrument.into(),
-            pattern: Pattern::steps([Some(1.0)]),
+            source: Pattern::steps([Some(1.0)]).into(),
             lanes: Vec::new(),
             start: 0.0,
             bars: Some(1.0),
@@ -1339,7 +1392,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "a".into(),
-                pattern: Pattern::steps([Some(1.0)]),
+                source: Pattern::steps([Some(1.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 // Sounds for one bar in every four.
@@ -1365,7 +1418,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "a".into(),
-                pattern: Pattern::steps([Some(1.0)]),
+                source: Pattern::steps([Some(1.0)]).into(),
                 lanes: Vec::new(),
                 start: 3.0,
                 bars: Some(1.0),

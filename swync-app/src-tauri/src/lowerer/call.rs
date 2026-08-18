@@ -18,9 +18,16 @@ impl Lowerer {
             return self.load(args, piped);
         }
         // And `midiout`, which reads a port's name off the syntax for exactly
-        // the reason `load` reads a path off it.
+        // the reason `load` reads a path off it — as do the three MIDI-in
+        // readers and `midiin` itself.
         if Lowerer::is_midiout(&func.0) {
             return self.midiout(args, piped);
+        }
+        if Lowerer::is_midiin(&func.0) {
+            return self.midiin(args, piped);
+        }
+        if Lowerer::is_midi_control(&func.0) {
+            return self.midi_control(&func.0, args, piped);
         }
 
         // And the arrangement combinators, for a reason of the same shape: a

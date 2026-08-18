@@ -120,11 +120,21 @@ fn run_code(
 
     let lowered = lower_at_tempo(&ast, loaded.clone(), beat_secs, meter)
         .map_err(|e| Diagnostic::message(Stage::Lower, e))?;
-    let warnings: Vec<Diagnostic> = lowered
+    // Now that lowering has said which MIDI inputs the program names, go and
+    // find them. Deliberately not done while lowering: interning a port is
+    // pure, and opening one is not — see `midi::input`, which is why a
+    // thousand tests can lower a `cc` without touching the platform. This is
+    // the one caller that both knows a program compiled and may talk to it.
+    let mut warnings: Vec<Diagnostic> = lowered
         .warnings
         .iter()
         .map(|w| Diagnostic::warning(Stage::Lower, w))
         .collect();
+    warnings.extend(
+        midi::input::ensure_open()
+            .into_iter()
+            .map(|w| Diagnostic::warning(Stage::Lower, w)),
+    );
     let audio_graph = realize(&lowered.graph)
         .map_err(|e| Diagnostic::message(Stage::Realize, e))?;
 

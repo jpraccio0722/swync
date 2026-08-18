@@ -1,0 +1,22 @@
+---
+name: aftertouch
+params: [device, channel, lo, hi]
+arities: [1, 2, 4]
+variadic: false
+receives: number
+returns: signal
+---
+
+Channel pressure — how hard the keys are being leant on after they are down —
+as a signal from 0 to 1:
+
+```swync
+fn pad(n) = saw(n.m2h) * (0.4 + aftertouch("keys") * 0.6)
+```
+
+Give it a range to map it somewhere directly, as `cc` takes one:
+`aftertouch("keys", 1, 200, 4000)`.
+
+Smoothed like `cc`. Zero on a keyboard that does not send it, which is many of
+them — so a program written around it still runs, quietly, on a keyboard that
+has no pressure sensor.

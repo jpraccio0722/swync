@@ -13,9 +13,12 @@ use fundsp::sequencer::{EventId, Fade, Sequencer};
 
 use crate::audition::Audition;
 use crate::diagnostic::{Diagnostic, Stage};
+use crate::midi::input::HELD_SECS;
 use crate::midi::out as midi;
 use crate::pattern::pattern::Span;
-use crate::pattern::patterns::{BoundEvent, Patterns, Target};
+use crate::pattern::patterns::{
+    Binding, BoundEvent, LaneArg, LaneValues, Patterns, Target, VELOCITY,
+};
 use crate::scheduler::clock::{Clock, Meter};
 use crate::scheduler::voice::{Instruments, build_voice};
 
@@ -25,6 +28,29 @@ const LOOKAHEAD_SECS: f64 = 0.2;
 /// under the clock's `START_LEAD_SECS` — a pass a tick behind an eval still has
 /// to find bar 0 ahead of it.
 pub(crate) const TICK: Duration = Duration::from_millis(25);
+
+/// How often it wakes while a keyboard is being played.
+///
+/// A written pattern does not care when this thread runs: it is handed to the
+/// sequencer with a start time a fifth of a second out, and placed to the
+/// sample. A *key press* is the opposite — it has already happened, and every
+/// millisecond between the press and the push is latency somebody can feel
+/// under their fingers. At 25 ms this thread would be adding up to a full tick
+/// of slop to an instrument that is supposed to feel connected to the hand
+/// playing it, which is the difference between a keyboard and a lag.
+///
+/// Two milliseconds is under the point anybody detects and above the point
+/// where the wake itself costs anything. It is used only while a live binding
+/// exists, so the ordinary session — every program that plays no keyboard —
+/// wakes as rarely as it always did.
+const LIVE_TICK: Duration = Duration::from_millis(2);
+
+/// How far ahead of the audio clock a live note is pushed.
+///
+/// Not the lookahead a pattern gets, which would be a fifth of a second of
+/// latency. Just enough to clear the block the callback is rendering now, so
+/// that a start time is never one the sequencer has already gone past.
+const LIVE_LEAD_SECS: f64 = 0.005;
 /// Per-voice fades, clamped against short notes before pushing.
 const FADE_IN_SECS: f64 = 0.005;
 const FADE_OUT_SECS: f64 = 0.02;
@@ -162,6 +188,17 @@ impl SchedulerState {
         self.stop.load(Ordering::Acquire)
     }
 
+    /// Whether anything currently bound is a keyboard, which is what decides
+    /// how often the thread wakes. A poisoned lock answers no: the pass that
+    /// reads it properly will fail loudly a moment later, and waking fast on
+    /// the way there helps nobody.
+    fn has_live_source(&self) -> bool {
+        self.patterns
+            .lock()
+            .map(|p| p.bindings.iter().any(|b| b.source.live().is_some()))
+            .unwrap_or(false)
+    }
+
     fn take_stop(&self) -> bool {
         self.stop.swap(false, Ordering::Acquire)
     }
@@ -209,6 +246,21 @@ struct Live {
     end_secs: f64,
 }
 
+/// A voice a key is holding open.
+///
+/// Kept apart from [`Live`] because it ends by a different means. A pattern's
+/// voice knows how long it is when it is pushed; this one does not — the key
+/// is still down — so it goes in with [`HELD_SECS`] on it and is cut short
+/// when the release arrives. What identifies it is the three numbers the
+/// release will carry, since that is all the wire says about which key came
+/// up.
+struct HeldKey {
+    slot: usize,
+    channel: u8,
+    note: u8,
+    id: EventId,
+}
+
 /// How far the scheduler has pushed, in bars, tagged with the clock epoch it
 /// was measured against.
 ///
@@ -236,9 +288,17 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
     // What `wire` stamped the sequencer with is right until a device switch
     // says otherwise, and zero here means nothing has.
     let mut rate = 0.0;
+    // Keys currently down, and how many have been pressed. Both outlive a
+    // pass: a key held across one is still down, and a lane read by note has
+    // to go on counting.
+    let mut held: Vec<HeldKey> = Vec::new();
+    let mut played = 0usize;
+    // How long to sleep, which is not fixed — see `LIVE_TICK`. Starts at the
+    // idle rate, since nothing is bound before the first eval.
+    let mut tick = TICK;
 
     loop {
-        std::thread::sleep(TICK);
+        std::thread::sleep(tick);
 
         // Before anything is pushed, so no voice is ever built against a rate
         // the graph has already stopped rendering at.
@@ -250,6 +310,11 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
 
         if state.take_stop() {
             silence(&mut seq, &mut live);
+            // A key held when the transport stopped is a voice like any other
+            // in the room, and the release for it may never come — the player
+            // has taken their hand off a keyboard that is no longer playing
+            // anything.
+            release_all(&mut seq, &mut held);
             // The room going quiet has to include the gear in it. Nothing else
             // would release those notes: a MIDI note is held until something
             // says otherwise, so a stop that only cut the sequencer would
@@ -268,13 +333,189 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
         // somebody is waiting on.
         take_audition(&mut seq, &clock, &state, &mut auditioning);
 
+        // Before the bar pass, because it is the one with somebody waiting on
+        // it: a key pressed a millisecond ago should not queue behind a
+        // lookahead window's worth of pattern voices.
+        play_live_notes(&mut seq, &clock, &state, &mut held, &mut played);
+
         scheduled_through = schedule_pass(&mut seq, &clock, &state, scheduled_through, &mut live);
+        // Wake fast only while something is actually being played by hand.
+        // Read after the pass rather than before, so an eval that has just
+        // bound a keyboard is answered at the fast rate from the next tick
+        // rather than the one after.
+        tick = if state.has_live_source() { LIVE_TICK } else { TICK };
         let now = clock.now_secs();
         retire(&mut live, now);
         if auditioning.as_ref().is_some_and(|voice| voice.end_secs <= now) {
             auditioning = None;
         }
     }
+}
+
+/// Turn the keys that have been pressed since the last pass into voices, and
+/// end the ones that have been let go.
+///
+/// The counterpart of [`schedule_pass`], and the shape of it is the whole
+/// difference between the two kinds of source. That one asks "what happens
+/// between here and the horizon?" and can, because a written pattern is
+/// already decided. This one asks "what has happened?" — a key press is in the
+/// past by the time anything here hears about it, so there is no horizon to
+/// work against and nothing to place: the note is pushed as close to now as
+/// the sequencer will take it.
+///
+/// `played` counts note-ons since the app started, and is what a lane is read
+/// by. A lane is "the nth note takes the nth value" everywhere else, and a
+/// keyboard has an nth note like anything else does — so `vel: [1, .6]` on a
+/// keyboard alternates, which is the same rule and a usable one.
+fn play_live_notes(
+    seq: &mut Sequencer,
+    clock: &Clock,
+    state: &SchedulerState,
+    held: &mut Vec<HeldKey>,
+    played: &mut usize,
+) -> Option<()> {
+    let notes = crate::midi::input::bus().take_notes();
+    if notes.is_empty() {
+        return Some(());
+    }
+
+    // Read once for the whole batch rather than per note. Both locks are taken
+    // by `schedule_pass` too, and neither is held across building a voice.
+    let bindings: Vec<Binding> = match state.patterns.lock() {
+        Ok(p) => p.bindings.iter().filter(|b| b.source.live().is_some()).cloned().collect(),
+        Err(e) => {
+            state.fail(format!("patterns lock poisoned: {e}"));
+            return None;
+        }
+    };
+    if bindings.is_empty() {
+        // Notes arriving with nothing bound to them are dropped, which is the
+        // right answer for a keyboard left plugged in: a program that does not
+        // name it is a program that does not want it.
+        return Some(());
+    }
+    let instruments = match state.instruments.lock() {
+        Ok(i) => i.clone(),
+        Err(e) => {
+            state.fail(format!("instruments lock poisoned: {e}"));
+            return None;
+        }
+    };
+
+    for note in notes {
+        if !note.on {
+            release(seq, held, &note);
+            continue;
+        }
+        for binding in &bindings {
+            let source = binding.source.live().expect("filtered to live bindings");
+            if source.slot != note.slot {
+                continue;
+            }
+            // `None` is every channel, which is what a keyboard on its own
+            // means — see `Source`.
+            if source.channel.is_some_and(|only| only != note.channel) {
+                continue;
+            }
+
+            // A key already down retriggers rather than layering. The wire
+            // sends one release per key, so a second voice on the same key
+            // would have nothing to end it — the same argument `midi::out`
+            // makes from the other side.
+            release(seq, held, &note);
+
+            let mut args = live_args(binding, *played);
+            // Velocity reaches an instrument that asked for it, under the name
+            // it would have asked for a lane by. An instrument with no `vel`
+            // parameter simply never sees it, which is how an instrument
+            // written before any of this still plays from a keyboard.
+            if instruments.declares(binding.target.instrument().unwrap_or(""), VELOCITY)
+                && !args.iter().any(|(name, _)| name == VELOCITY)
+            {
+                args.push((VELOCITY.to_string(), LaneArg::Num(note.velocity as f64)));
+            }
+
+            let Some(instrument) = binding.target.instrument() else {
+                // A keyboard playing `midiout` is notes in and notes out, which
+                // is a thru rather than an instrument. Nothing here does that
+                // yet, and dropping it silently is better than the alternative
+                // — see `a_keyboard_cannot_yet_be_sent_straight_back_out`.
+                continue;
+            };
+
+            let start_secs = clock.now_secs() + LIVE_LEAD_SECS;
+            match build_voice(
+                &instruments, instrument, note.note as f64, &args,
+                HELD_SECS, clock.beat_secs(), clock.meter(),
+            ) {
+                Err(e) => {
+                    state.fail(format!("{instrument}: {e}"));
+                    return None;
+                }
+                Ok(voice) => {
+                    if let Some(id) = push_voice(seq, start_secs, HELD_SECS, voice.net) {
+                        held.push(HeldKey {
+                            slot: note.slot,
+                            channel: note.channel,
+                            note: note.note,
+                            id,
+                        });
+                    }
+                }
+            }
+        }
+        *played = played.wrapping_add(1);
+    }
+
+    Some(())
+}
+
+/// The lane values one live note takes, by the same rule a written note does.
+fn live_args(binding: &Binding, played: usize) -> Vec<(String, LaneArg)> {
+    binding
+        .lanes
+        .iter()
+        .filter_map(|lane| {
+            let value = match &lane.values {
+                LaneValues::Steps(p) => {
+                    let values = p.values();
+                    if values.is_empty() { return None }
+                    values[played % values.len()].map(LaneArg::Num)?
+                }
+                LaneValues::Lists(vs) => {
+                    if vs.is_empty() { return None }
+                    vs[played % vs.len()].clone().map(LaneArg::List)?
+                }
+            };
+            Some((lane.name.clone(), value))
+        })
+        .collect()
+}
+
+/// End every voice this key is holding open.
+///
+/// Every one rather than the last, because two bindings may both be reading
+/// the same keyboard, and one release has to end both — the wire sends one
+/// message per key, not one per thing listening.
+fn release(seq: &mut Sequencer, held: &mut Vec<HeldKey>, note: &crate::midi::input::LiveNote) {
+    held.retain(|key| {
+        let same = key.slot == note.slot && key.channel == note.channel && key.note == note.note;
+        if same {
+            seq.edit_relative(key.id, FADE_OUT_SECS, FADE_OUT_SECS);
+        }
+        !same
+    });
+}
+
+/// Cut every held key and forget them, for a stop.
+fn release_all(seq: &mut Sequencer, held: &mut Vec<HeldKey>) {
+    for key in held.drain(..) {
+        seq.edit_relative(key.id, FADE_OUT_SECS, FADE_OUT_SECS);
+    }
+    // What has arrived and not been dealt with goes too. A release queued
+    // behind a stop would otherwise arrive after the next press and cut a
+    // voice that has only just started.
+    crate::midi::input::bus().forget_notes();
 }
 
 /// Play, or stop playing, whatever the project panel's button last asked for.
@@ -724,7 +965,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![Binding {
                 target: "kick".into(),
-                pattern: Pattern::steps([Some(1.0), Some(2.0)]),
+                source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -758,7 +999,7 @@ mod pass_tests {
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
                 target: "kick".into(),
-                pattern: Pattern::steps(steps),
+                source: Pattern::steps(steps).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -780,7 +1021,7 @@ mod pass_tests {
                     selector: crate::midi::ports::Selector::Name("deluge".into()),
                     channel: 1,
                 }),
-                pattern: Pattern::steps(steps),
+                source: Pattern::steps(steps).into(),
                 lanes,
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -1358,7 +1599,7 @@ mod pass_tests {
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
                 target: "kick808".into(),
-                pattern: Pattern::steps(vec![Some(50.0), Some(50.0)]),
+                source: Pattern::steps(vec![Some(50.0), Some(50.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -1425,7 +1666,7 @@ mod pass_tests {
         *state.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
                 target: "ghost".into(),
-                pattern: Pattern::steps(vec![Some(1.0)]),
+                source: Pattern::steps(vec![Some(1.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -1568,7 +1809,7 @@ mod start_position_tests {
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
                 target: "k".into(),
-                pattern: Pattern::steps(steps),
+                source: Pattern::steps(steps).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
@@ -1674,7 +1915,7 @@ mod start_position_tests {
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
                 target: "k".into(),
-                pattern: Pattern::steps([Some(1.0), Some(2.0)]),
+                source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) }],

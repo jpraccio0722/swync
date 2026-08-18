@@ -612,6 +612,10 @@ impl Lowerer {
             Value::Destination(_) => Err(
                 "cannot use a MIDI destination as a signal — `midiout(..)` names gear \
                  to send notes to, and nothing comes back from it".into()),
+            Value::Source(_) => Err(
+                "cannot use a MIDI source as a signal — `midiin(..)` is notes to play, \
+                 not a level. For a knob or a wheel, `cc`, `bend` and `aftertouch` \
+                 answer with signals".into()),
             Value::Rest => Err("cannot use a rest as a signal (rests belong in patterns)".into()),
             Value::Trigger => Err("cannot use a trigger as a signal (triggers belong in patterns)".into()),
             Value::Duration(b) => Err(format!(
@@ -721,6 +725,7 @@ pub(crate) fn describe(v: &Value) -> &'static str {
         Value::Quoted(_) => "a quoted list",
         Value::Buffer(_) => "a buffer",
         Value::Destination(_) => "a MIDI destination",
+        Value::Source(_) => "a MIDI source",
         Value::EnumType(_) => "an enum",
         Value::Enum { .. } => "an enum member",
         Value::Rest => "a rest",

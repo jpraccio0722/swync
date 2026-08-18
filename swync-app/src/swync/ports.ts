@@ -17,6 +17,11 @@ import { invoke } from "@tauri-apps/api/core";
  * does, so `Symbols` can refresh on an edit. A port list changes when somebody
  * plugs something in, which no edit reports — so this refreshes on a clock
  * instead, and [`STALE_MS`] is how long a cable takes to appear in a menu.
+ *
+ * Inputs and outputs are kept apart because they are apart: a desk with a
+ * keyboard coming in and a synth going out has different names in each list,
+ * and offering one where the other is meant would be a menu full of ports that
+ * cannot work.
  */
 
 /** One MIDI port, as `midi_ports` reports it. Mirrors `PortInfo` in
@@ -45,7 +50,7 @@ const STALE_MS = 2000;
 
 /** Cheap enough to run on every keystroke: what makes a document worth asking
  *  the platform about at all. */
-const MENTIONS_MIDI = /\bmidiout\b/;
+const MENTIONS_MIDI = /\b(midiout|midiin|cc|bend|aftertouch)\b/;
 
 /**
  * A live list of ports for one editor.
@@ -56,15 +61,23 @@ const MENTIONS_MIDI = /\bmidiout\b/;
  */
 export class Ports {
   private outputs: PortInfo[] = [];
+  private inputs: PortInfo[] = [];
   /** When the current answer arrived. Zero before the first one. */
   private fetchedAt = 0;
   private fetching = false;
   /** Bumped per request, so a slow answer cannot overwrite a newer one. */
   private generation = 0;
 
-  /** Every MIDI output, as of the last answer. */
+  /** Every MIDI output, as of the last answer — where `midiout` sends. */
   current(): PortInfo[] {
     return this.outputs;
+  }
+
+  /** Every MIDI input: what `midiin`, `cc`, `bend` and `aftertouch` read.
+   *  A separate list because they really are separate ports, and a machine
+   *  with a keyboard in and a synth out has different names in each. */
+  currentInputs(): PortInfo[] {
+    return this.inputs;
   }
 
   /**
@@ -88,6 +101,7 @@ export class Ports {
       .then((ports) => {
         if (generation !== this.generation) return;
         this.outputs = ports.outputs;
+        this.inputs = ports.inputs;
         this.fetchedAt = Date.now();
       })
       .catch(() => {
@@ -95,7 +109,10 @@ export class Ports {
         // is a perfectly ordinary machine. The backend already answers with an
         // empty list rather than failing, so reaching here means the command
         // itself did not land — and the right thing to offer is nothing.
-        if (generation === this.generation) this.outputs = [];
+        if (generation === this.generation) {
+          this.outputs = [];
+          this.inputs = [];
+        }
       })
       .finally(() => {
         if (generation === this.generation) {

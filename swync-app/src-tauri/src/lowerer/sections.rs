@@ -838,7 +838,7 @@ impl Lowerer {
         let source = &self.bindings[template];
         let fill = Binding {
             target: source.target.clone(),
-            pattern,
+            source: pattern.into(),
             lanes: source.lanes.clone(),
             start: at,
             bars: Some(span),

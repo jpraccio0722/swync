@@ -51,6 +51,21 @@ impl Instruments {
         self.param_count(name).is_some()
     }
 
+    /// Whether an instrument declares a parameter of this name.
+    ///
+    /// Asked of `vel` by a live note, which has a velocity whether or not
+    /// anybody wanted one. Passing it to an instrument that never named it
+    /// would be an argument with nowhere to go; asking first is what lets an
+    /// instrument written long before any of this still play from a keyboard.
+    pub fn declares(&self, instrument: &str, param: &str) -> bool {
+        self.defs.iter().any(|i| match i {
+            SwyncItem::Function { name, params, .. } => {
+                name.0 == instrument && params.iter().any(|p| p.name.0 == param)
+            }
+            _ => false,
+        })
+    }
+
     /// How many parameters an instrument declares, or `None` if there is no
     /// such instrument. A zero-parameter instrument is called with no
     /// arguments, so a fixed drum needs no placeholder parameter.

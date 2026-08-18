@@ -16,11 +16,13 @@
 //! that `.then` can chain from.
 
 use crate::lang::Beats;
-use crate::swync_graph::environment::{Item, Length, Value};
+use crate::swync_graph::environment::{Item, Length, Source, Value};
 use crate::lowerer::lower::Lowerer;
 use crate::parser::parser::{Arg, Expr, Ident};
 use crate::pattern::pattern::{Pattern, Slot, Step, UNIT};
-use crate::pattern::patterns::{Binding, Lane, LaneValues, Target, MIDI_LANES, RESERVED};
+use crate::pattern::patterns::{
+    Binding, Lane, LaneValues, SourceOf, Target, MIDI_LANES, RESERVED,
+};
 use crate::pattern::rate::Rate;
 use crate::scheduler::clock::Meter;
 
@@ -277,6 +279,14 @@ impl Lowerer {
             }
         }
 
+        // A keyboard, rather than notes written down. Everything above this
+        // point applied to it unchanged — the target, the lanes, the checks —
+        // and everything below it is about laying notes on a grid, which is
+        // the one thing a keyboard has no use for.
+        if let Value::Source(source) = &pattern_value {
+            return self.play_live(name, *source, target, lanes, repeats, rate);
+        }
+
         let (mut pattern, pass_bars) = to_pattern_timed(&pattern_value, self.meter)?;
         if !rate.is_unit() {
             // Only the pattern. A lane is read by position — the nth note takes
@@ -304,7 +314,7 @@ impl Lowerer {
         let first = self.bindings.len();
         self.bindings.push(Binding {
             target,
-            pattern,
+            source: pattern.into(),
             lanes,
             start,
             bars,
@@ -328,6 +338,70 @@ impl Lowerer {
             chain_first: first,
             // A single play, so `.then_fill` has exactly one instrument to
             // inherit — the only place a template is ever set.
+            template: Some(first),
+        })
+    }
+
+    /// `play(midiin("keys"), lead)` — a binding whose notes have not happened
+    /// yet.
+    ///
+    /// It is a `Binding` like any other, and deliberately: the target, the
+    /// lanes and the handle all mean what they mean for a written pattern, so
+    /// `.then` and the rest go on working. What it cannot have is anything
+    /// measured in bars, because a keyboard has no length — which is what the
+    /// two refusals here are about.
+    fn play_live(
+        &mut self,
+        name: &str,
+        source: Source,
+        target: Target,
+        lanes: Vec<Lane>,
+        repeats: Option<f64>,
+        rate: Rate,
+    ) -> Result<Value, String> {
+        // `play_once` and `playn` count passes, and a keyboard has no passes:
+        // there is no first note to start one and none to end it. Refused
+        // rather than treated as `play`, since what somebody wrote is a
+        // section with a length and there is no honest length to give it.
+        if repeats.is_some() {
+            return Err(format!(
+                "{name}: a keyboard has no passes to count — it plays until it is \
+                 stopped, so `play` is the only one of these it can take"));
+        }
+        // Same argument: a rate speeds a pattern up against the bar, and there
+        // is no pattern here to speed up. Silently ignoring it would be worse
+        // than saying so — the notes would come out at the speed they were
+        // played, which is right, while the program says otherwise.
+        if !rate.is_unit() {
+            return Err(format!(
+                "{name}: a keyboard has no rate — the notes arrive when they are \
+                 played"));
+        }
+
+        let start = self.play_start;
+        let first = self.bindings.len();
+        self.bindings.push(Binding {
+            target,
+            source: SourceOf::Live(source),
+            lanes,
+            start,
+            // Never ends on its own. A keyboard is not a section: what stops it
+            // is the transport, or the next eval not naming it.
+            bars: None,
+            repeat: None,
+            choice: None,
+            rate: Rate::Fixed(1.0),
+        });
+
+        Ok(Value::Play {
+            starts_at: start,
+            // No end, so nothing can be chained *after* it — `.then` would
+            // wait for a moment that never comes. `.with` still works, which
+            // is the one that makes sense: playing over a keyboard.
+            ends_at: None,
+            first,
+            last: self.bindings.len(),
+            chain_first: first,
             template: Some(first),
         })
     }
@@ -616,6 +690,14 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
             "a pattern cannot contain a MIDI destination — `midiout(..)` says where the \
              notes go, so it belongs where the instrument goes rather than among the \
              steps".to_string()),
+        // A source *is* a pattern's worth of notes, so it is refused only as a
+        // step *inside* one: `play(midiin("keys"), lead)` is where it goes,
+        // and `[midiin("keys"), 60]` is a keyboard nested in a rhythm, which
+        // is not a thing that could be played.
+        Value::Source(_) => Err(
+            "a pattern cannot contain a MIDI source — `midiin(..)` is the whole of what \
+             is played, so it goes where the pattern goes rather than among its \
+             steps".to_string()),
         Value::EnumType(def) => Err(format!(
             "`{}` is an enum rather than a step. Name one of its members — \
              `{}.{}` — if one of them is what should sound here",
@@ -765,6 +847,9 @@ fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
         Value::Destination(_) => Err(
             "a MIDI destination is not a step — `midiout(..)` goes where the \
              instrument goes, not in the pattern".into()),
+        Value::Source(_) => Err(
+            "a MIDI source is not a step — `midiin(..)` is the whole pattern, not one \
+             note of one".into()),
         Value::Rest => Ok(Step::Rest),
         // A trigger sounds but carries nothing; instruments that take an
         // argument see 1.

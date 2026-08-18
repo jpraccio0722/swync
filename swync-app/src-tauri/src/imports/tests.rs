@@ -537,7 +537,7 @@ fn the_projects_patterns_need_no_use() {
     let items = expand_in(PLAYS_HATS, &project.running("song.swync"));
 
     let lowered = lower(&items).expect("should lower");
-    assert_eq!(lowered.bindings[0].pattern.values().len(), 4);
+    assert_eq!(lowered.bindings[0].source.pattern().cloned().expect("a written pattern").values().len(), 4);
 }
 
 /// And is reachable qualified, which is what makes it possible to say which
@@ -563,7 +563,7 @@ fn a_file_may_shadow_a_drawn_pattern() {
 
     let lowered = lower(&items).expect("should lower");
     assert_eq!(
-        lowered.bindings[0].pattern.values().len(),
+        lowered.bindings[0].source.pattern().cloned().expect("a written pattern").values().len(),
         2,
         "the file's own two-step pattern, not the panel's four"
     );
@@ -635,7 +635,7 @@ fn the_patterns_file_plays_on_its_own() {
     let items = expand_in(PLAYS_HATS, &project.running("song.swync"));
 
     assert_eq!(
-        lower(&items).expect("should lower").bindings[0].pattern.values().len(),
+        lower(&items).expect("should lower").bindings[0].source.pattern().cloned().expect("a written pattern").values().len(),
         4
     );
 }
@@ -651,7 +651,7 @@ fn the_panels_rows_are_the_patterns_file() {
 
     let items = expand_in(PLAYS_HATS, &ws);
     assert_eq!(
-        lower(&items).expect("should lower").bindings[0].pattern.values().len(),
+        lower(&items).expect("should lower").bindings[0].source.pattern().cloned().expect("a written pattern").values().len(),
         4,
         "the panel's four steps, not the three last written"
     );

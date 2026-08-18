@@ -113,7 +113,14 @@ const INSTRUMENT_ARG = 1;
 /** The name that puts gear where an instrument would go. `lang.rs`'s. */
 const MIDI_OUT = "midiout";
 
-/** Which argument of a `midiout` names the port. */
+/** The names that read a port rather than write one: a keyboard to play, and
+ *  the three continuous readers. They complete from the *input* list, which is
+ *  a different set of ports from the outputs — a desk with a keyboard coming in
+ *  and a synth going out has different names in each. */
+const MIDI_READERS = new Set(["midiin", "cc", "bend", "aftertouch"]);
+
+/** Which argument of any of them names the port. All five agree on this: the
+ *  device comes first, because it is the thing you have to say. */
 const DEVICE_ARG = 0;
 
 /** The two lanes that never reach the instrument, and so are writable whatever
@@ -308,10 +315,10 @@ function accepts(receives: ValueKind, receiver: ValueKind): boolean {
       // Only `dot`, and only a written note value can be dotted.
       return receiver === "duration";
     default:
-      // "nothing" takes no argument at all; "any", "rate", "lane" and
-      // "destination" are only ever results; and "text" is written out at the
-      // call, never produced, so nothing can stand to the left of a name that
-      // wants one.
+      // "nothing" takes no argument at all; "any", "rate", "lane",
+      // "destination" and "source" are only ever results; and "text" is
+      // written out at the call, never produced, so nothing can stand to the
+      // left of a name that wants one.
       return false;
   }
 }
@@ -727,13 +734,19 @@ function laneOptions(
  * beside the name is how somebody who wants the short form finds it without
  * the menu recommending it.
  */
-function portOptions(ports: PortInfo[], quoted: boolean): Completion[] {
+function portOptions(
+  ports: PortInfo[],
+  quoted: boolean,
+  reading: boolean,
+): Completion[] {
   return ports.map((port) => ({
     label: quoted ? port.name : `"${port.name}"`,
     detail: `port ${port.number}`,
-    info:
-      "A MIDI output on this machine. Any part of the name will do, and case " +
-      "does not matter — `midiout(\"deluge\")` finds `Deluge MIDI 1`.",
+    info: reading
+      ? "A MIDI input on this machine. Any part of the name will do, and case " +
+        "does not matter — `midiin(\"keys\")` finds `Keystation 49 MK3`."
+      : "A MIDI output on this machine. Any part of the name will do, and case " +
+        "does not matter — `midiout(\"deluge\")` finds `Deluge MIDI 1`.",
     type: "constant",
     boost: BOOST.local,
   }));
@@ -834,7 +847,12 @@ export function swyncCompletions(
     // — see `ports.ts`. Checked before `play`, though the order does not
     // decide it: `callAt` walks to the *innermost* unclosed paren, so inside
     // `play(pat, midiout("` the call is already this one.
-    if (call && call.name === MIDI_OUT && call.argIndex === DEVICE_ARG) {
+    const reading = call !== null && MIDI_READERS.has(call.name);
+    if (
+      call &&
+      (call.name === MIDI_OUT || reading) &&
+      call.argIndex === DEVICE_ARG
+    ) {
       ports.refresh();
       const written = argumentsIn(stripped, call.open, at)[DEVICE_ARG] ?? "";
       // Where the opening quote is, if the string has been started. Measured
@@ -842,7 +860,11 @@ export function swyncCompletions(
       // quote belonging to something else cannot be mistaken for this one.
       const quote = written.indexOf('"');
       const inside = quote !== -1;
-      const options = portOptions(ports.current(), inside);
+      const options = portOptions(
+        reading ? ports.currentInputs() : ports.current(),
+        inside,
+        reading,
+      );
       if (options.length > 0) {
         return {
           // Replacing from just after the quote rather than from the word:
@@ -859,6 +881,10 @@ export function swyncCompletions(
     if (call && PLAYS.has(call.name)) {
       const scraped = scrapeLocals(doc);
 
+      // There is deliberately no case for the pattern slot. Unlike the
+      // instrument slot below, it does not narrow the menu — so `midiin`,
+      // which is an ordinary name in `lang.rs`, is already offered there along
+      // with everything else.
       if (call.argIndex === INSTRUMENT_ARG) {
         // A qualified name is one name, so the `::` in `kit::kick` has to be
         // inside what is being matched — the plain word regex would restart

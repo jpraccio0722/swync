@@ -1,6 +1,7 @@
 use fundsp::prelude64::*;
 
 use crate::audio_in::InputNode;
+use crate::midi::input::{Control, ControlNode};
 use crate::swync_graph::{
     graph::SwyncGraph,
     sample_reader::SampleReader,
@@ -184,6 +185,38 @@ pub fn tail_secs(graph: &SwyncGraph, dur_secs: f64) -> f64 {
 /// Pull input `idx` as a construction-time constant. Parameters like ADSR
 /// times are baked into the unit when it is built — they are not ports, so a
 /// signal wired here has nothing to connect to.
+/// The slot a MIDI reader was given, as the lowerer wrote it.
+///
+/// Not validated against what exists: a slot is handed out by
+/// `midi::input::slot_for` without touching hardware, and `NO_SLOT` — which is
+/// a program naming a ninth port — reads as silence rather than failing here.
+/// What this refuses is only what could not have come from the lowerer at all.
+fn slot(n: &UGenNode, at: usize) -> Result<usize, String> {
+    let raw = const_param(n, at, "midi slot")?;
+    if raw < 0.0 || raw.fract() != 0.0 {
+        return Err(format!("midi: slot must be a whole number, got {raw}"));
+    }
+    Ok(raw as usize)
+}
+
+/// A MIDI channel, 1-16 as it is written.
+fn channel(n: &UGenNode, at: usize) -> Result<u8, String> {
+    let raw = const_param(n, at, "midi channel")?;
+    if raw.fract() != 0.0 || !(1.0..=16.0).contains(&raw) {
+        return Err(format!("midi: channel must be a whole number from 1 to 16, got {raw}"));
+    }
+    Ok(raw as u8)
+}
+
+/// A controller number, which is seven bits.
+fn seven_bit(n: &UGenNode, at: usize, what: &str) -> Result<u8, String> {
+    let raw = const_param(n, at, what)?;
+    if raw.fract() != 0.0 || !(0.0..=127.0).contains(&raw) {
+        return Err(format!("{what} must be a whole number from 0 to 127, got {raw}"));
+    }
+    Ok(raw as u8)
+}
+
 fn const_param(n: &UGenNode, idx: usize, name: &str) -> Result<f32, String> {
     match n.inputs.get(idx) {
         Some(NodeInput::Const(v)) => Ok(*v as f32),
@@ -325,6 +358,40 @@ pub fn realize(graph: &SwyncGraph) -> Result<Net, String> {
             // there. What is checked is what a program can get wrong on its
             // own — a channel that is negative, fractional, or past anything
             // the bus could ever carry.
+            // The three MIDI-in readers. Their device has already been
+            // resolved to a slot by the lowerer — see `lowerer/midi.rs` — so
+            // what arrives here is numbers, and every one of them was written
+            // at the call rather than computed.
+            NodeKind::Cc => (
+                Box::new(An(ControlNode::new(
+                    slot(n, 0)?,
+                    channel(n, 2)?,
+                    Control::Controller(seven_bit(n, 1, "cc number")?),
+                    const_param(n, 3, "cc low")? as f32,
+                    const_param(n, 4, "cc high")? as f32,
+                ))),
+                0,
+            ),
+            NodeKind::Bend => (
+                Box::new(An(ControlNode::new(
+                    slot(n, 0)?,
+                    channel(n, 1)?,
+                    Control::Bend,
+                    const_param(n, 2, "bend low")? as f32,
+                    const_param(n, 3, "bend high")? as f32,
+                ))),
+                0,
+            ),
+            NodeKind::Aftertouch => (
+                Box::new(An(ControlNode::new(
+                    slot(n, 0)?,
+                    channel(n, 1)?,
+                    Control::Pressure,
+                    const_param(n, 2, "aftertouch low")? as f32,
+                    const_param(n, 3, "aftertouch high")? as f32,
+                ))),
+                0,
+            ),
             NodeKind::Input => {
                 let channel = const_param(n, 0, "input channel")?;
                 if channel < 0.0 || channel.fract() != 0.0 {

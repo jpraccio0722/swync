@@ -260,15 +260,81 @@ left on is a drone that outlives the process, on gear that has no idea the
 thing playing it has quit. A note retriggered while still sounding is released
 first, because the wire has no way to say *which* middle C to stop.
 
-Two tests are `#[ignore]`d because they ask the platform rather than a fixture:
-`what_this_machine_actually_reports` prints the ports, and
+Three tests are `#[ignore]`d because they ask the platform rather than a
+fixture: `what_this_machine_actually_reports` prints the ports,
 `a_note_reaches_a_real_port` sends a note through a loopback bus (the IAC
-Driver on a Mac, loopMIDI on Windows) and reads the bytes back. Everything else
-about MIDI runs against a made-up port list, because the suite has to pass on a
-machine with no MIDI on it.
+Driver on a Mac, loopMIDI on Windows) and reads the bytes back, and
+`the_bus_hears_a_real_port` does the same in reverse — it opens the loopback as
+an output, sends, and checks the input bus heard it. Everything else about MIDI
+runs against a made-up port list or calls `receive` directly, because the suite
+has to pass on a machine with no MIDI on it.
 
-MIDI **in** is not built yet — `ports::inputs()` exists and the settings panel
-lists them, and that is all.
+## MIDI in
+
+`src-tauri/src/midi/input.rs`. Two quite different things arrive down one wire
+and leave by different roads, and the split is the whole design.
+
+**A controller is a value that is always there.** `cc("push", 74)`,
+`bend("keys")` and `aftertouch("keys")` are graph nodes, read at audio rate —
+so they live in atomics and are never locked against, exactly as `audio_in`
+does. **A note is a thing that happened at a moment.** It cannot be read, only
+delivered, once, to the one thread allowed to push a voice — so notes queue
+behind a mutex, which is safe precisely because the audio callback never
+touches them.
+
+**A port is interned, not looked up.** A node reads its controller on the audio
+callback and cannot hash a port name, so what it holds is a **slot**: a small
+integer, fixed for the process, indexing a table allocated at startup.
+`slot_for` hands them out keyed on the selector *as written* and **touches no
+hardware** — which is what lets a thousand tests lower a `cc` without opening
+anything, and lets a program compile the same on a laptop as on the rig.
+Opening is a separate step, `ensure_open`, taken only by `run_code`.
+
+Slots are finite (`MAX_PORTS`) and never released, which is right for a program
+and wrong for a suite — so `midi::input::exclusive()` clears the table as well
+as taking the lock. That is why the guard and the reset are one function.
+
+**Smoothing is in the node, not the bus.** The bus holds what arrived, which is
+the truth; each read site decides what to do between arrivals. Ten
+milliseconds, because seven bits arriving a few hundred times a second is a
+staircase and a staircase on a cutoff zippers. `ControlNode` is therefore *not*
+stateless the way `InputNode` is — and that matters, because the scheduler
+builds one per note, so a `cc` inside an instrument starts each note where the
+knob is rather than sliding up to it.
+
+### Playing a keyboard
+
+`play(midiin("keys"), lead)` — the mirror of `midiout`, in `play`'s other slot,
+which is why `midiin("keys").play(lead)` works without anything being added for
+it (`a.f(b)` is `f(a, b)`). `Binding.source` is a `SourceOf`: notes written
+down, or notes as they are played.
+
+They leave `schedule_pass` by different roads because **a keyboard cannot be
+queried**. The scheduler works a fifth of a second ahead; a key pressed now
+would be asked about for a window already gone past. So `Patterns::query`
+skips live bindings and `play_live_notes` picks them up instead, pushing each
+note as close to now as the sequencer will take it.
+
+That is also why the scheduler's tick is no longer fixed. A pattern does not
+care when the thread runs — it is placed to the sample — but every millisecond
+between a key press and the push is latency under somebody's fingers. So
+`LIVE_TICK` is 2 ms and applies only while a live binding exists; every session
+that plays no keyboard wakes as rarely as it always did.
+
+A held note is pushed with `HELD_SECS` on it and cut short by `edit_relative`
+when the release arrives — the same mechanism an audition uses. The cap is a
+safety net, not a limit: a note-off can be lost to a pulled cable, and what
+that would otherwise leave is a voice droning until the app is quit.
+
+Velocity reaches an instrument **only if it declares a `vel` parameter**
+(`Instruments::declares`). An instrument that never named it never sees it,
+which is what lets one written long before any of this play from a keyboard.
+
+A keyboard takes no rate and no `playn`: it has no passes to count, and both
+would be a claim the program makes and the music does not keep. Both are
+refused rather than ignored.
+
+MIDI **clock** is not built — neither in nor out.
 
 ## Bars, passes, and the one place "cycle" survives
 

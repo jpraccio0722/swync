@@ -1,0 +1,51 @@
+---
+name: cc
+params: [device, number, channel, lo, hi]
+arities: [2, 3, 5]
+variadic: false
+receives: number
+returns: signal
+---
+
+A knob, a wheel or a pedal, as a signal you can use anywhere:
+
+```swync
+fn lead(n) = lowpass(saw(n.m2h), cc("push", 74), 1)
+```
+
+`cc("push", 74)` is controller 74 on channel 1, reading 0 to 1. The device is
+a port's name — matched on any part of it, ignoring case — or its number. The
+editor offers the ports this machine has as you type inside the quotes.
+
+## A range at the call
+
+A cutoff wants hertz, not a fraction, so say so once where the knob is named
+rather than doing the arithmetic at every use:
+
+```swync
+cc("push", 74, 1, 200, 5000)
+```
+
+That is `device, number, channel, lo, hi`. The channel comes after the
+controller number because which knob is the question you are answering, and
+which channel is a detail most rigs never have to think about.
+
+The range runs the other way round quite happily — `cc("push", 74, 1, 1, 0)`
+gives you a knob that turns down.
+
+## Why it is smoothed
+
+A controller is seven bits arriving a few hundred times a second: a staircase.
+Wired straight to a filter cutoff it zippers, and the zipper is the *steps*
+rather than the speed. So the value slews to each new one over about ten
+milliseconds — under the point where a knob stops feeling connected to the
+hand turning it, and well over the point where the steps stop being audible.
+
+A knob nobody has touched yet reads zero, which is the bottom of its range. A
+port that is not connected reads zero too, and the program still runs.
+
+## Related
+
+`bend` is the pitch wheel, which rests in the middle rather than at the
+bottom. `aftertouch` is how hard the keys are being leant on. `midiin` plays
+the notes rather than reading the knobs.

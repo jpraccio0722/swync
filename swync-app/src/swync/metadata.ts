@@ -50,7 +50,10 @@ export type ValueKind =
   /** Gear to send notes to, from `midiout`. Only `play`'s instrument slot
    *  accepts one, and it accepts a `fn` there too — so like `rate` and `lane`,
    *  this is only ever a result and a dot after one has nothing to offer. */
-  | "destination";
+  | "destination"
+  /** A keyboard to play, from `midiin`. The mirror of `destination`, in
+   *  `play`'s other slot, and only ever a result for the same reason. */
+  | "source";
 
 export interface Builtin {
   name: string;
