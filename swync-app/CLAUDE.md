@@ -182,6 +182,87 @@ a missing one has to use. `src-tauri/Info.plist` carries
 `NSMicrophoneUsageDescription` and is not optional — macOS *terminates* a
 process that opens an input stream without one.
 
+## MIDI out
+
+`src-tauri/src/midi/` — a pattern played by gear outside the machine, written
+where an instrument would go:
+
+```
+play(bass, midiout("deluge", 1), vel: [1, .6, .8], chan: [1, 1, 10])
+```
+
+**A MIDI port is named in the program; an audio device is chosen in the
+panel.** That is the whole reason `ports.rs` is not a copy of `devices.rs`, and
+it is a claim about what belongs to what: which interface is on the desk is a
+fact about the desk, while which synth a part is written for is a fact about
+the piece. So a port is matched by a case-insensitive substring of its name —
+real port names are long and vendor-shaped, and a program is typed live — or by
+its number in the platform's list, which is why the settings panel prints the
+numbers beside the names and does not offer anything to click.
+
+A port that is not connected is a **warning**, not an error. `run_code` returns
+`Result<Vec<Diagnostic>, Diagnostic>` for this and nothing else so far: the
+`Ok` is what a run that happened had to say about itself. `Diagnostic` grew a
+`Severity` to carry it, and the problems panel draws a warning amber and does
+not call the run a failure. The trade is the same one `input(channel)` already
+settled — a piece written for a rack has to stay editable on a train.
+
+`Binding.target` is a `Target`, which is either an instrument's name or a
+`Destination`. Putting it there rather than making MIDI a second kind of
+binding is what makes `playn(riff, midiout("deluge"), 4).then(chorus)` mean
+what it looks like: every arrangement combinator, every lane, and `rate` sit
+above the target and learn nothing about it.
+
+**Timing is the part with a design in it.** The scheduler still decides the
+notes on its 25 ms pass, a fifth of a second early, but it hands them to
+`out.rs`'s own thread with the audio time each is due at. That thread wakes
+every millisecond and does nothing else, because unlike a voice — which is
+handed to the sequencer with a start time and placed to the sample — a MIDI
+message is only ever sent *now*, and 25 ms of jitter on a snare is audibly
+loose playing.
+
+It cannot wait on the audio clock directly, either: that advances a whole
+buffer at a time, so reading it in a loop gives a staircase whose step is the
+device's buffer. So the thread keeps an **anchor** — one pairing of an audio
+time with an `Instant` — predicts audio time from elapsed wall time between the
+callback's steps, and reconciles the two slowly (`CORRECTION`) rather than
+snapping, since a sound card's clock really does run at a different rate from
+the system's. A disagreement past `RESYNC_SECS` is a device switch or a stall
+rather than drift, and rebuilds the anchor outright.
+
+The correction pulls *towards* the audio clock, which has a consequence that
+bites in tests and never in the app: against a clock that is not advancing, it
+cancels wall time out and the prediction settles short rather than climbing, so
+later messages never come due. A running app cannot do that — the audio
+callback is what advances the clock — but a test must play the callback's part,
+and `a_note_reaches_a_real_port` says so.
+
+The **send offset** (settings panel, `midi_offset_ms`) is not a fudge factor:
+audio time counts frames *rendered*, and a rendered frame is still in the
+device's buffers, then a converter, then whatever is at the far end of the
+cable. None of it is knowable from here. It is in `settings.rs` rather than the
+project for the reason the audio devices are, and `set_settings` applies it as
+well as writing it because it is dragged while notes are playing.
+
+**Held notes are tracked and released individually**, never with an
+all-notes-off: what that would also silence is everything else using the port.
+Both ends of a note are queued together at note-on time, so a note whose off
+was still to be decided cannot exist. A stop clears the queue and releases
+exactly what is sounding, and so does the MIDI thread's own disconnect — a note
+left on is a drone that outlives the process, on gear that has no idea the
+thing playing it has quit. A note retriggered while still sounding is released
+first, because the wire has no way to say *which* middle C to stop.
+
+Two tests are `#[ignore]`d because they ask the platform rather than a fixture:
+`what_this_machine_actually_reports` prints the ports, and
+`a_note_reaches_a_real_port` sends a note through a loopback bus (the IAC
+Driver on a Mac, loopMIDI on Windows) and reads the bytes back. Everything else
+about MIDI runs against a made-up port list, because the suite has to pass on a
+machine with no MIDI on it.
+
+MIDI **in** is not built yet — `ports::inputs()` exists and the settings panel
+lists them, and that is all.
+
 ## Bars, passes, and the one place "cycle" survives
 
 Musical time is counted in **bars**. A **pass** is one trip through a pattern: a list of shares is one pass and fills the bar in any signature, while a pass written in note values is as long as its values add up to and rotates against the bar when they disagree. The two words are not interchangeable, and the tests say which they mean — `a_three_beat_pass_fills_a_three_four_bar` against `a_three_beat_pass_takes_three_quarters_of_a_four_four_bar` is the whole distinction in two cases.

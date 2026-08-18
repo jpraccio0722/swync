@@ -1,0 +1,84 @@
+---
+name: midiout
+params: [device, channel]
+arities: [1, 2]
+variadic: false
+receives: number
+returns: destination
+---
+
+Gear to send a pattern to, written where an instrument would go:
+
+```swync
+play(bass, midiout("deluge"), vel: [1, .6, .8])
+```
+
+Everything a `play` can do still applies — lanes, `rate`, `play_once`,
+`playn`, and every arrangement combinator. Only what the notes arrive at has
+changed.
+
+## Naming the port
+
+The device is a port's **name**, matched on any part of it and ignoring case,
+so `"deluge"` finds `Deluge MIDI 1`. Or it is the port's **number**, counted
+from 0 in the list the settings panel shows:
+
+```swync
+play(drums, midiout(2))
+```
+
+A name is the better one to write down. Numbers move when something is
+plugged in, and a name that says what the synth is will still say it next
+year. If a name matches more than one port the first is used and the problems
+panel says which others it passed over — write more of the name to choose
+between them.
+
+A port that is not connected tonight is a **warning**, not an error. The
+program still compiles and still runs, and everything else in it still sounds.
+A piece written for a rack has to stay editable on the train.
+
+## What the notes are
+
+A pattern's values are MIDI note numbers, which is already what pitch is
+counted in everywhere else — `c4` is 60, `semi` moves by one, `scale` snaps to
+a grid of them. So a line written for an instrument plays the same notes when
+it is pointed at a synth:
+
+```swync
+let riff = [c4;q, e4, g4, e4]
+
+play(riff, lead)              -- an instrument in this program
+play(riff, midiout("prophet")) -- the same notes, out of the machine
+```
+
+## Channels
+
+`channel` is 1 to 16 and defaults to 1. One pattern can spread across several
+with the `chan` lane, which is how a part on a multitimbral box gets its drums
+onto channel 10:
+
+```swync
+play(pat, midiout("digitakt", 1), chan: [1, 1, 10])
+```
+
+## Lanes
+
+| | |
+|---|---|
+| `vel` | How hard the note is struck, 0 to 1 — the same scale as everything else in the language. Defaults to a middling 100 on the wire. |
+| `chan` | The MIDI channel for this note, overriding the destination's. |
+| `legato` | How long the note is held, as a share of its step, exactly as it is for an instrument. |
+
+No other lane means anything here: there is no instrument for one to reach, so
+a name outside this table is refused rather than quietly dropped.
+
+## Lining it up
+
+What you hear from swync has been through a converter and a driver, and the
+gear at the other end of the cable has its own delay before it makes a sound.
+None of that is knowable from inside the app, so the settings panel has a
+**send offset** in milliseconds. Set it by ear, against a sound swync is
+making itself.
+
+Notes still sounding when you stop are released — exactly the ones swync
+turned on, and nothing else that happens to be using the port.

@@ -837,7 +837,7 @@ impl Lowerer {
         // and the same lanes, playing something else for one pass.
         let source = &self.bindings[template];
         let fill = Binding {
-            instrument: source.instrument.clone(),
+            target: source.target.clone(),
             pattern,
             lanes: source.lanes.clone(),
             start: at,

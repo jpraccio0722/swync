@@ -17,8 +17,19 @@ export type Stage =
   | "scheduler"
   | "engine";
 
+/**
+ * Whether a diagnostic stopped the program.
+ *
+ * Everything the backend returns as an error is `"error"`; a `"warning"` came
+ * back from a run that *succeeded* and is here to say something about it —
+ * `midiout("deluge")` naming a port that is not plugged in tonight is the
+ * case this exists for. Mirrors `Severity` in `diagnostic.rs`.
+ */
+export type Severity = "error" | "warning";
+
 export interface Diagnostic {
   stage: Stage;
+  severity: Severity;
   message: string;
   /** 1-based, or null when the failing pass had no position to give. */
   line: number | null;
@@ -97,6 +108,10 @@ export function toDiagnostic(error: unknown, fallback?: string): Diagnostic {
   if (raw && typeof raw === "object" && typeof raw.message === "string") {
     return {
       stage: isStage(raw.stage) ? raw.stage : "engine",
+      // Anything that arrived without saying is a failure: this function's
+      // callers are catch blocks, and a rejection nobody shaped is not good
+      // news about a run that worked.
+      severity: raw.severity === "warning" ? "warning" : "error",
       message: raw.message,
       // A position is only ever a matched pair; half of one would put the
       // panel's "line 4" link somewhere the error never claimed to be.
@@ -118,6 +133,7 @@ export function toDiagnostic(error: unknown, fallback?: string): Diagnostic {
 
   return {
     stage: "engine",
+    severity: "error",
     message: fallback ? `${fallback}: ${text}` : text,
     line: null,
     column: null,

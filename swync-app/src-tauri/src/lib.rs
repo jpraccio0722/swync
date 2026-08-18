@@ -37,6 +37,7 @@ mod lowerer;
 // editor reads out to the website's reference so the two cannot disagree.
 pub mod lang;
 mod library;
+mod midi;
 mod project;
 mod recorder;
 mod samples;
@@ -83,7 +84,7 @@ fn run_code(
     engine: tauri::State<Mutex<AudioEngine>>,
     sched: tauri::State<SchedulerState>,
     samples: tauri::State<samples::Cache>,
-) -> Result<(), Diagnostic> {
+) -> Result<Vec<Diagnostic>, Diagnostic> {
     let mut workspace = workspace;
     if let Some(patterns) = &patterns {
         graphical::check_names(patterns)?;
@@ -119,6 +120,11 @@ fn run_code(
 
     let lowered = lower_at_tempo(&ast, loaded.clone(), beat_secs, meter)
         .map_err(|e| Diagnostic::message(Stage::Lower, e))?;
+    let warnings: Vec<Diagnostic> = lowered
+        .warnings
+        .iter()
+        .map(|w| Diagnostic::warning(Stage::Lower, w))
+        .collect();
     let audio_graph = realize(&lowered.graph)
         .map_err(|e| Diagnostic::message(Stage::Realize, e))?;
 
@@ -165,7 +171,12 @@ fn run_code(
         .map_err(|_| Diagnostic::message(Stage::Engine, "audio engine poisoned"))?;
     swap_program(&mut eng, audio_graph);
 
-    Ok(())
+    // What lowering had to say about a program it did not refuse. Returned on
+    // the *success* path, which is the whole point: this eval published its
+    // graph and its patterns, and the problems panel is being told something
+    // about a run that happened rather than about one that did not. `midiout`
+    // naming a port nobody has plugged in is so far the only thing here.
+    Ok(warnings)
 }
 
 /// Backend hook for the editor's "stop" button.
@@ -499,9 +510,39 @@ fn settings(app: tauri::AppHandle) -> Result<settings::Settings, String> {
 
 /// Remember them. Called as the settings panel is changed, the same way a
 /// project's file is written as the transport moves.
+///
+/// The MIDI offset is *applied* here as well as written, because it is dragged
+/// on a control while notes are playing and the point of it is to be heard
+/// moving. Everything else in this file is read once, at startup, by whatever
+/// it configures.
 #[tauri::command]
-fn set_settings(app: tauri::AppHandle, settings: settings::Settings) -> Result<(), String> {
+fn set_settings(
+    app: tauri::AppHandle,
+    settings: settings::Settings,
+    midi: tauri::State<midi::out::Out>,
+) -> Result<(), String> {
+    midi.set_offset_ms(settings.midi_offset_ms);
     settings::write(&config_file(&app, settings::FILE)?, &settings)
+}
+
+/// Every MIDI port on this machine, with the number a program may name it by.
+///
+/// The numbers are the whole reason this reaches the panel. A MIDI port is
+/// chosen *in the program* rather than here — see `midi::ports` — so unlike
+/// the audio devices there is nothing to pick, and what the panel is for is
+/// telling somebody what there is to write. `midiout(2)` is unusable without
+/// somewhere to read the 2 off, and a name is easier to type correctly when
+/// the full one is on screen beside it.
+#[tauri::command]
+fn midi_ports() -> MidiPorts {
+    MidiPorts { outputs: midi::ports::outputs(), inputs: midi::ports::inputs() }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MidiPorts {
+    outputs: Vec<midi::ports::PortInfo>,
+    inputs: Vec<midi::ports::PortInfo>,
 }
 
 /// Every audio device on this machine, and which of them are open.
@@ -1412,6 +1453,7 @@ pub fn run() {
             stop_recording,
             recording_state,
             audio_devices,
+            midi_ports,
             audio_levels,
             set_input_device,
             set_output_device,
@@ -1437,6 +1479,15 @@ pub fn run() {
                 let _ = handle.emit(SCHEDULER_ERROR, diagnostic);
             });
 
+            // Started before the scheduler, because the scheduler is handed
+            // the handle. Free-running like the scheduler and for the same
+            // reason: what it costs while nothing plays MIDI is a thread
+            // finding an empty queue, and what starting it on demand would
+            // cost is the first note of the first `midiout` in a set.
+            let midi = midi::out::start(clock.clone());
+            midi.set_offset_ms(remembered.midi_offset_ms);
+            let sched = sched.with_midi(midi.clone());
+
             // Free-runs for the life of the app; evals only swap what it reads.
             scheduler::scheduler::start(seq, clock, sched.clone());
 
@@ -1457,6 +1508,7 @@ pub fn run() {
             }
             app.manage(input);
             app.manage(output);
+            app.manage(midi);
 
             app.manage(Mutex::new(engine));
             app.manage(sched);

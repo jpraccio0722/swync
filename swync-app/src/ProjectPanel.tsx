@@ -690,6 +690,10 @@ export function ProjectPanel({
       onProblems(
         unfollowed.map((u) => ({
           stage: "import" as const,
+          // An error rather than a warning: the move itself worked, but the
+          // program whose `use` no longer points anywhere will refuse to run,
+          // and that is what the panel is saying.
+          severity: "error" as const,
           message: u.detail,
           line: null,
           column: null,

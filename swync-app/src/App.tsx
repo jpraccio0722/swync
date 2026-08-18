@@ -25,6 +25,7 @@ import { RightPanel, type RightTab } from "./RightPanel";
 import {
   SettingsPanel,
   type AudioDevices,
+  type MidiPorts,
   type FinishedRecording,
   type RecordingFormat,
   type RecordingState,
@@ -264,6 +265,11 @@ function App() {
   const [sideWidth, setSideWidth] = useState(DEFAULT_SIDE_PANEL);
   const [sideTab, setSideTab] = useState<SideTab>("project");
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  /** Whether anything in the panel actually stopped a run, which is what
+   *  decides the badge's colour: a program that compiled and merely had
+   *  something said about it should not wear the same red as one that did
+   *  not compile at all. */
+  const problemsAreErrors = diagnostics.some((d) => d.severity !== "warning");
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   // Whether the engine is holding a program, which is what lights the play
   // button. Not the same question as `runStatus`, which is about the last
@@ -352,6 +358,11 @@ function App() {
   // after launch is the ordinary case, and a list fetched at startup would
   // still be showing what was on the desk an hour ago.
   const [devices, setDevices] = useState<AudioDevices | null>(null);
+  // The MIDI ports, re-read on the same occasions and for the same reason: a
+  // cable plugged in after launch is the ordinary case. Unlike the audio
+  // devices nothing is chosen from this — a port is named in the program — so
+  // it is only ever displayed.
+  const [midiPorts, setMidiPorts] = useState<MidiPorts | null>(null);
   // What the two meters in the title bar draw, and what the settings panel
   // says about the devices keeping step. Polled while there is anything to
   // meter; see the effect below.
@@ -519,12 +530,14 @@ function App() {
    */
   const resyncAudio = useCallback(async () => {
     try {
-      const [next, open] = await Promise.all([
+      const [next, open, ports] = await Promise.all([
         invoke<Settings>("settings"),
         invoke<AudioDevices>("audio_devices"),
+        invoke<MidiPorts>("midi_ports"),
       ]);
       setSettings(next);
       setDevices(open);
+      setMidiPorts(ports);
     } catch (e) {
       console.error("could not read the audio devices:", e);
     }
@@ -1280,7 +1293,10 @@ function App() {
       // So does the workspace, for the same reason: a `use` resolves against
       // the folder this tab is saved in. What it finds there is what is on
       // disk, so a module edited in another tab is heard once it is saved.
-      await invoke("run_code", {
+      // A successful run may still have something to say — a `midiout` naming
+      // a port that is not plugged in tonight. Those come back on this path
+      // rather than as a rejection, because the program did run.
+      const warnings = await invoke<Diagnostic[]>("run_code", {
         code: codeTab.content,
         // Null while the panel has nothing to say about this project — before
         // its file has been read, or after a read that failed. An empty panel
@@ -1289,7 +1305,7 @@ function App() {
         patterns: patternsFrom.current === projectRoot ? toWire(patterns) : null,
         workspace: { path: codeTab.path, root: projectRoot },
       });
-      setDiagnostics([]);
+      setDiagnostics(warnings);
       setRunStatus("ok");
       setSourceTabId(tabId);
       // The engine is holding this program until something stops it, which is
@@ -1695,16 +1711,22 @@ function App() {
               "relative rounded-md p-1.5 transition-colors " +
               (sideOpen
                 ? "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
-                : diagnostics.length > 0
+                : problemsAreErrors
                   ? "text-red-400 hover:bg-neutral-800 hover:text-red-300"
-                  : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100")
+                  : diagnostics.length > 0
+                    ? "text-amber-400 hover:bg-neutral-800 hover:text-amber-300"
+                    : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100")
             }
           >
             <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
               <path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z" />
             </svg>
             {diagnostics.length > 0 && (
-              <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-red-600 px-1 text-center text-[10px] font-semibold leading-4 text-white">
+              <span
+                className={`absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-[10px] font-semibold leading-4 text-white ${
+                  problemsAreErrors ? "bg-red-600" : "bg-amber-600"
+                }`}
+              >
                 {diagnostics.length}
               </span>
             )}
@@ -1948,6 +1970,7 @@ function App() {
               onChange={changeSettings}
               formats={formats}
               devices={devices}
+              midi={midiPorts}
               levels={levels}
               onInputDevice={changeInputDevice}
               onOutputDevice={changeOutputDevice}

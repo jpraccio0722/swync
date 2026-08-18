@@ -609,6 +609,9 @@ impl Lowerer {
             Value::Buffer(_) => Err(
                 "cannot use a buffer as a signal — read it at a position with \
                  `sample(buffer, position)`".into()),
+            Value::Destination(_) => Err(
+                "cannot use a MIDI destination as a signal — `midiout(..)` names gear \
+                 to send notes to, and nothing comes back from it".into()),
             Value::Rest => Err("cannot use a rest as a signal (rests belong in patterns)".into()),
             Value::Trigger => Err("cannot use a trigger as a signal (triggers belong in patterns)".into()),
             Value::Duration(b) => Err(format!(
@@ -717,6 +720,7 @@ pub(crate) fn describe(v: &Value) -> &'static str {
         Value::Stack(_) => "a stack",
         Value::Quoted(_) => "a quoted list",
         Value::Buffer(_) => "a buffer",
+        Value::Destination(_) => "a MIDI destination",
         Value::EnumType(_) => "an enum",
         Value::Enum { .. } => "an enum member",
         Value::Rest => "a rest",

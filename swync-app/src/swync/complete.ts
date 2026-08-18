@@ -301,9 +301,10 @@ function accepts(receives: ValueKind, receiver: ValueKind): boolean {
       // Only `dot`, and only a written note value can be dotted.
       return receiver === "duration";
     default:
-      // "nothing" takes no argument at all; "any", "rate" and "lane" are only
-      // ever results; and "text" is written out at the call, never produced,
-      // so nothing can stand to the left of a name that wants one.
+      // "nothing" takes no argument at all; "any", "rate", "lane" and
+      // "destination" are only ever results; and "text" is written out at the
+      // call, never produced, so nothing can stand to the left of a name that
+      // wants one.
       return false;
   }
 }

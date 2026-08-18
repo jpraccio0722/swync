@@ -28,6 +28,24 @@ export interface Settings {
    *  zoomed on. There is no control for it in this panel: the gesture is the
    *  control, and it is done while reading the thing it changes. */
   editorFontSize: number | null;
+  /** How far behind the audio a MIDI message is sent, in milliseconds. Zero
+   *  on a machine nobody has lined up by ear. See `midi/out.rs` for what it
+   *  is correcting — none of which is knowable from here, which is why it is
+   *  a control rather than a calculation. */
+  midiOffsetMs: number;
+}
+
+/** One MIDI port, as `midi_ports` reports it. */
+export interface PortInfo {
+  /** Its place in the platform's list, which is what `midiout(0)` means. */
+  number: number;
+  name: string;
+}
+
+/** Every MIDI port on this machine, as `midi_ports` answers. */
+export interface MidiPorts {
+  outputs: PortInfo[];
+  inputs: PortInfo[];
 }
 
 /**
@@ -90,6 +108,10 @@ interface SettingsPanelProps {
   formats: RecordingFormat[];
   /** What can be opened, and what is. Null until the backend has answered. */
   devices: AudioDevices | null;
+  /** What MIDI there is to write to. Null until the backend has answered.
+   *  Unlike the audio devices there is nothing here to *choose* — a port is
+   *  named in the program — so this list is read rather than picked from. */
+  midi: MidiPorts | null;
   /** The same poll the title bar's meters are drawn from. Nothing here draws
    *  a level — the meters are in the header, where you are looking while you
    *  play — but the counts that come with them belong beside the devices they
@@ -109,6 +131,12 @@ interface SettingsPanelProps {
   last: FinishedRecording | null;
   onError: (message: string) => void;
 }
+
+/** How far the send offset can be dragged, either way. Mirrors
+ *  `MAX_OFFSET_MS` in `midi/out.rs`, which is what actually binds — a quarter
+ *  second in each direction covers every converter and every piece of gear
+ *  anybody is lining up by ear. */
+const MAX_MIDI_OFFSET_MS = 250;
 
 /** A length as a performer counts it. */
 export function elapsed(seconds: number): string {
@@ -148,6 +176,7 @@ function basename(path: string): string {
 export function SettingsPanel({
   settings,
   onChange,
+  midi,
   formats,
   devices,
   levels,
@@ -310,6 +339,80 @@ export function SettingsPanel({
               </p>
             )
           )}
+        </div>
+      </section>
+
+      {/* Read, not chosen. Every other list in this panel is a control — you
+          pick a device and the app opens it — but a MIDI port is named inside
+          the program (`midiout("deluge")`), because which synth a part is
+          written for belongs to the piece rather than to the desk. So what is
+          here is the two things a program cannot tell you: what the ports are
+          called, and what number each one is. See `midi/ports.rs`. */}
+      <section>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+          MIDI
+        </h3>
+
+        <div className="mt-2">
+          <label className="text-xs text-neutral-400">Outputs</label>
+          {midi === null ? (
+            <p className="mt-1 text-[11px] text-neutral-600">Looking…</p>
+          ) : midi.outputs.length === 0 ? (
+            <p className="mt-1 text-[11px] leading-snug text-neutral-500">
+              Nothing to send to. Plug in an interface, or turn on a virtual
+              bus — the IAC Driver on a Mac, loopMIDI on Windows.
+            </p>
+          ) : (
+            <ul className="mt-1 space-y-0.5">
+              {midi.outputs.map((port) => (
+                <li key={port.number} className="flex items-baseline gap-2">
+                  <span className="w-4 shrink-0 text-right font-mono text-[11px] text-neutral-500">
+                    {port.number}
+                  </span>
+                  <span className="break-all font-mono text-[11px] leading-snug text-neutral-300">
+                    {port.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+            Name one in a program to play it:{" "}
+            <span className="font-mono text-neutral-400">
+              play(bass, midiout("{midi?.outputs[0]?.name.split(" ")[0].toLowerCase() ?? "deluge"}"))
+            </span>
+            . Any part of the name will do, and so will the number beside it.
+          </p>
+        </div>
+
+        <div className="mt-4">
+          <label htmlFor="midi-offset" className="text-xs text-neutral-400">
+            Send offset
+          </label>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              id="midi-offset"
+              type="range"
+              min={-MAX_MIDI_OFFSET_MS}
+              max={MAX_MIDI_OFFSET_MS}
+              step={1}
+              value={settings.midiOffsetMs}
+              onChange={(e) =>
+                onChange({ ...settings, midiOffsetMs: Number(e.target.value) })
+              }
+              className="flex-1"
+            />
+            <span className="w-14 shrink-0 text-right font-mono text-[11px] text-neutral-300">
+              {settings.midiOffsetMs > 0 ? "+" : ""}
+              {settings.midiOffsetMs} ms
+            </span>
+          </div>
+          <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+            Lines external gear up with what you hear. Nothing can work this
+            out for you — it is the converter, the driver and whatever is at
+            the far end of the cable — so set it by ear against a sound the app
+            is making itself.
+          </p>
         </div>
       </section>
 

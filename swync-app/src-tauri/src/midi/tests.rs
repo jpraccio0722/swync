@@ -1,0 +1,182 @@
+//! What a program means when it names a port.
+
+use crate::midi::ports::{find, Match, PortInfo, Selector};
+
+/// The list a real desk looks like: two interfaces whose names share a word,
+/// a virtual bus, and a synth. Enough that every rule below has something to
+/// get wrong.
+fn desk() -> Vec<PortInfo> {
+    ["IAC Driver Bus 1", "Deluge MIDI 1", "Scarlett 2i2 USB MIDI 1", "Deluge MIDI 2"]
+        .iter()
+        .enumerate()
+        .map(|(number, name)| PortInfo { number, name: name.to_string() })
+        .collect()
+}
+
+fn name(selector: &str) -> Selector {
+    Selector::Name(selector.to_string())
+}
+
+#[test]
+fn a_name_matches_any_part_of_a_ports_name() {
+    assert_eq!(find(&desk(), &name("scarlett")), Match::One(desk()[2].clone()));
+}
+
+#[test]
+fn a_name_is_matched_without_regard_to_case() {
+    assert_eq!(find(&desk(), &name("SCARLETT")), find(&desk(), &name("scarlett")));
+}
+
+#[test]
+fn a_name_matching_several_ports_takes_the_first_and_names_the_rest() {
+    let Match::Ambiguous(port, others) = find(&desk(), &name("deluge")) else {
+        panic!("two ports are called Deluge, so this cannot be unambiguous");
+    };
+    assert_eq!(port, desk()[1]);
+    assert_eq!(others, vec!["Deluge MIDI 2".to_string()]);
+}
+
+#[test]
+fn a_name_specific_enough_to_pick_one_of_two_similar_ports_is_unambiguous() {
+    assert_eq!(find(&desk(), &name("deluge midi 2")), Match::One(desk()[3].clone()));
+}
+
+#[test]
+fn a_name_matching_nothing_is_missing_rather_than_a_failure() {
+    assert_eq!(find(&desk(), &name("prophet")), Match::Missing);
+}
+
+#[test]
+fn a_number_indexes_the_list_the_platform_reports() {
+    assert_eq!(find(&desk(), &Selector::Number(1)), Match::One(desk()[1].clone()));
+}
+
+#[test]
+fn a_number_past_the_end_of_the_list_is_missing() {
+    assert_eq!(find(&desk(), &Selector::Number(9)), Match::Missing);
+}
+
+#[test]
+fn nothing_matches_when_the_machine_has_no_midi_ports_at_all() {
+    assert_eq!(find(&[], &name("deluge")), Match::Missing);
+    assert_eq!(find(&[], &Selector::Number(0)), Match::Missing);
+}
+
+/// The empty name is what a half-typed `midiout("")` is, and it is a substring
+/// of everything. Taking the first port is the same rule as any other
+/// ambiguous name — what matters is that it does not panic or take the last.
+#[test]
+fn an_empty_name_is_ambiguous_rather_than_special() {
+    let Match::Ambiguous(port, others) = find(&desk(), &name("")) else {
+        panic!("every port contains the empty string");
+    };
+    assert_eq!(port, desk()[0]);
+    assert_eq!(others.len(), 3);
+}
+
+/// A name is quoted where a number is not, so that the sentence a diagnostic
+/// builds around it says which of the two was written.
+#[test]
+fn a_selector_says_whether_it_was_written_as_a_name_or_a_number() {
+    assert_eq!(name("deluge").to_string(), "\"deluge\"");
+    assert_eq!(Selector::Number(3).to_string(), "3");
+}
+
+/// What this machine has, for when something is not working and the question
+/// is whether the platform is answering at all.
+///
+/// Ignored, like the loopback below and for the same reason: the suite has to
+/// pass on a machine with no MIDI on it, and both of these ask the platform
+/// rather than a fixture.
+///
+///     cargo test what_this_machine_actually_reports -- --ignored --nocapture
+#[test]
+#[ignore = "talks to the platform; the suite must pass on a machine with no MIDI"]
+fn what_this_machine_actually_reports() {
+    println!("outputs: {:?}", crate::midi::ports::outputs());
+    println!("inputs:  {:?}", crate::midi::ports::inputs());
+}
+
+/// The one thing no other test here can show: that a note decided by the
+/// scheduler actually leaves the machine, as the right bytes, at about the
+/// right time.
+///
+/// Everything else about MIDI out is tested against a fixture — `Player`
+/// queues and releases without a port, `Note::from_event` converts without a
+/// wire — because a test suite that needed hardware would not run. This is the
+/// seam those cannot cover, so it exists and is ignored:
+///
+///     cargo test a_note_reaches_a_real_port -- --ignored --nocapture
+///
+/// It needs a **loopback port**, which is a virtual MIDI bus wired to itself —
+/// the IAC Driver on a Mac (enable it in Audio MIDI Setup), loopMIDI on
+/// Windows. Skipped rather than failed when there is none: a machine without
+/// one has not told us anything about the code.
+#[test]
+#[ignore = "needs a loopback MIDI port; run it by name when the wire is in doubt"]
+fn a_note_reaches_a_real_port() {
+    use std::sync::mpsc::channel;
+    use crate::midi::out::{start, Destination, Note};
+    use crate::scheduler::clock::Clock;
+    use midir::{Ignore, MidiInput};
+
+    const LOOPBACK: &str = "IAC Driver Bus 1";
+
+    let mut input = MidiInput::new("swync test").expect("a MIDI client");
+    input.ignore(Ignore::None);
+    let Some(port) = input.ports().into_iter().find(|p| {
+        input.port_name(p).is_ok_and(|n| n == LOOPBACK)
+    }) else {
+        println!("no {LOOPBACK} on this machine — nothing was tested");
+        return;
+    };
+
+    let (tx, rx) = channel();
+    let _listening = input
+        .connect(&port, "swync test", move |_, bytes, _| { let _ = tx.send(bytes.to_vec()); }, ())
+        .expect("the loopback should open");
+
+    // The audio callback, which is what this whole thread is chasing. It has
+    // to be here rather than left at a standstill: the anchor is corrected
+    // *towards* the audio clock, so a clock frozen at zero pulls the
+    // prediction back as fast as wall time pushes it forward and it settles
+    // short of ever reaching a note due later on. That is not a bug in a
+    // running app — a stopped audio clock is a stopped app — but it is the
+    // first thing anybody writing a test here will hit.
+    let clock = Clock::new(44100.0);
+    let ticking = clock.clone();
+    std::thread::spawn(move || {
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            ticking.advance(44100 / 200);
+        }
+    });
+
+    let out = start(clock);
+    out.play(vec![Note {
+        destination: Destination {
+            // Named the way a program would name it — part of it, in the
+            // wrong case — so that what is exercised is the matching too.
+            selector: Selector::Name("iac driver bus 1".to_string()),
+            channel: 1,
+        },
+        channel: 1,
+        note: 60,
+        velocity: 100,
+        on_secs: 0.05,
+        off_secs: 0.15,
+    }]);
+
+    let mut got: Vec<Vec<u8>> = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while got.len() < 2 && std::time::Instant::now() < deadline {
+        if let Ok(bytes) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            got.push(bytes);
+        }
+    }
+
+    println!("received: {got:?}");
+    assert_eq!(got.len(), 2, "expected a note on and a note off, got {got:?}");
+    assert_eq!(got[0], vec![0x90, 60, 100], "note on, channel 1");
+    assert_eq!(got[1], vec![0x80, 60, 0], "note off, channel 1");
+}

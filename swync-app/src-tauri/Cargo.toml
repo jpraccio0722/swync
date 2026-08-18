@@ -59,4 +59,5 @@ notify = "8.2.0"
 # Already in the tree behind `trash`, so this costs nothing to build.
 chrono = "0.4"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+midir = "0.11"
 

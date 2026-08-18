@@ -13,9 +13,10 @@ use fundsp::sequencer::{EventId, Fade, Sequencer};
 
 use crate::audition::Audition;
 use crate::diagnostic::{Diagnostic, Stage};
+use crate::midi::out as midi;
 use crate::pattern::pattern::Span;
-use crate::pattern::patterns::Patterns;
-use crate::scheduler::clock::Clock;
+use crate::pattern::patterns::{BoundEvent, Patterns, Target};
+use crate::scheduler::clock::{Clock, Meter};
 use crate::scheduler::voice::{Instruments, build_voice};
 
 /// How far ahead of the audio clock we schedule.
@@ -70,6 +71,16 @@ pub struct SchedulerState {
     /// one. Here for the same reason `sample_rate` is: the sequencer belongs to
     /// the scheduler thread outright, and the button is pressed on another.
     asked: Arc<Mutex<Option<Asked>>>,
+    /// Where the notes of a binding that plays gear rather than an instrument
+    /// go. See [`crate::midi::out`] for why they leave on their own thread
+    /// instead of being pushed into the sequencer like everything else.
+    ///
+    /// A field here rather than an argument to `start` because `schedule_pass`
+    /// is called directly by a great many tests, and threading a handle
+    /// through every one of them would be asking tests about rhythm to have an
+    /// opinion about MIDI. [`crate::midi::out::Out::detached`] is what they
+    /// get, and it swallows what it is sent.
+    pub midi: midi::Out,
 }
 
 impl SchedulerState {
@@ -81,7 +92,15 @@ impl SchedulerState {
             report: Arc::new(OnceLock::new()),
             sample_rate: Arc::new(AtomicU64::new(0)),
             asked: Arc::new(Mutex::new(None)),
+            midi: midi::Out::detached(),
         }
+    }
+
+    /// The same state, sending its MIDI somewhere real. Called once, at
+    /// startup, by the only caller that has a MIDI thread to point at.
+    pub fn with_midi(mut self, midi: midi::Out) -> SchedulerState {
+        self.midi = midi;
+        self
     }
 
     /// Play a sample file, as soon as the next pass can push it.
@@ -231,6 +250,11 @@ fn run(mut seq: Sequencer, clock: Clock, state: SchedulerState) {
 
         if state.take_stop() {
             silence(&mut seq, &mut live);
+            // The room going quiet has to include the gear in it. Nothing else
+            // would release those notes: a MIDI note is held until something
+            // says otherwise, so a stop that only cut the sequencer would
+            // leave whatever was sounding droning after the silence.
+            state.midi.stop();
             // Stop means the room goes quiet, and a sample being auditioned is
             // a sound in the room like any other.
             cut(&mut seq, &mut auditioning);
@@ -382,28 +406,75 @@ fn schedule_pass(
         return None;
     }
 
+    // Gathered across the whole pass and sent in one go, rather than a message
+    // per note: the MIDI thread asks the platform for its port list once per
+    // batch, and a pass carries every note of the next fifth of a second.
+    let mut midi: Vec<midi::Note> = Vec::new();
+
     for bound in events {
         let begin_secs = clock.secs_at(bound.event.begin);
         let dur_secs = clock.secs_at(bound.event.end) - begin_secs;
 
-        // The beat of the clock *this note* is played on, which is the
-        // transport's divided by the speed its binding runs at: a pattern at
-        // rate 2 fits two of its own beats into one of the transport's, and an
-        // instrument syncing to it should hear the faster one. Read per note
-        // rather than per pass, because under an `accel` it is a different
-        // number for every note.
-        let beat_secs = clock.beat_secs() / bound.rate;
+        // Sending MIDI takes none of what follows. There is no voice to build,
+        // so no instrument to fail to build it and no tail to hold the note
+        // open past its end — how long the note lasts is the whole of what the
+        // gear at the other end is told, and `legato` has already scaled that
+        // in `query`.
+        let destination = match &bound.target {
+            Target::Midi(destination) => destination,
+            Target::Instrument(_) => {
+                // The beat of the clock *this note* is played on, which is the
+                // transport's divided by the speed its binding runs at: a
+                // pattern at rate 2 fits two of its own beats into one of the
+                // transport's, and an instrument syncing to it should hear the
+                // faster one. Read per note rather than per pass, because under
+                // an `accel` it is a different number for every note.
+                let beat_secs = clock.beat_secs() / bound.rate;
+                let instrument = bound.target.instrument().expect("matched as an instrument");
+                schedule_voice(seq, state, live, &instruments, &bound, instrument,
+                               begin_secs, dur_secs, beat_secs, clock.meter())?;
+                continue;
+            }
+        };
+        midi.push(midi::Note::from_event(
+            destination, bound.event.value, &bound.args, begin_secs, begin_secs + dur_secs,
+        ));
+    }
 
+    state.midi.play(midi);
+
+    next
+}
+
+/// Build one voice and push it, or halt the scheduler saying why.
+///
+/// `None` is the same "this pass was abandoned" its caller returns — split out
+/// only so that the two things a bound event can be do not have to be one
+/// forty-line arm each inside the loop.
+#[allow(clippy::too_many_arguments)]
+fn schedule_voice(
+    seq: &mut Sequencer,
+    state: &SchedulerState,
+    live: &mut Vec<Live>,
+    instruments: &Instruments,
+    bound: &BoundEvent,
+    instrument: &str,
+    begin_secs: f64,
+    dur_secs: f64,
+    beat_secs: f64,
+    meter: Meter,
+) -> Option<()> {
+    {
         match build_voice(
-            &instruments, &bound.instrument, bound.event.value, &bound.args, dur_secs,
-            beat_secs, clock.meter(),
+            instruments, instrument, bound.event.value, &bound.args, dur_secs,
+            beat_secs, meter,
         ) {
             // An instrument that will not build is a broken program, and it
             // will not build for the next event either — the same failure once
             // per step, forever. Halting on the first one puts it in front of
             // the person who can fix it instead.
             Err(e) => {
-                state.fail(format!("{}: {e}", bound.instrument));
+                state.fail(format!("{instrument}: {e}"));
                 return None;
             }
             // An instrument's envelopes may outlast the note the pattern gave
@@ -420,8 +491,7 @@ fn schedule_pass(
             }
         }
     }
-
-    next
+    Some(())
 }
 
 /// Push one voice, defending against every case `Sequencer::push` asserts on.
@@ -653,7 +723,7 @@ mod tests {
         let clock = Clock::with_cps(44100.0, 0.5);
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "kick".into(),
+                target: "kick".into(),
                 pattern: Pattern::steps([Some(1.0), Some(2.0)]),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -676,7 +746,7 @@ mod tests {
 mod pass_tests {
     use super::*;
     use crate::pattern::pattern::Pattern;
-    use crate::pattern::patterns::Binding;
+    use crate::pattern::patterns::{Binding, Lane, LaneValues, LEGATO};
     use crate::pattern::rate::Rate;
     use crate::parser::parser::parse;
     use fundsp::sequencer::ReplayMode;
@@ -687,7 +757,7 @@ mod pass_tests {
         *s.instruments.lock().unwrap() = Instruments::from_program(&ast);
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
-                instrument: "kick".into(),
+                target: "kick".into(),
                 pattern: Pattern::steps(steps),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -695,6 +765,111 @@ mod pass_tests {
             ..Default::default()
         };
         s
+    }
+
+    /// The same, playing gear instead of an instrument — and holding the
+    /// receiving end, so a test can see what the pass decided to send.
+    fn state_playing_midi(steps: Vec<Option<f64>>, lanes: Vec<Lane>)
+        -> (SchedulerState, std::sync::mpsc::Receiver<midi::Command>)
+    {
+        let (out, rx) = midi::Out::collecting();
+        let s = SchedulerState::new().with_midi(out);
+        *s.patterns.lock().unwrap() = Patterns {
+            bindings: vec![Binding {
+                target: Target::Midi(midi::Destination {
+                    selector: crate::midi::ports::Selector::Name("deluge".into()),
+                    channel: 1,
+                }),
+                pattern: Pattern::steps(steps),
+                lanes,
+                start: 0.0,
+                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+            ..Default::default()
+        };
+        (s, rx)
+    }
+
+    /// Everything the pass sent, flattened out of however many batches it took.
+    fn sent(rx: &std::sync::mpsc::Receiver<midi::Command>) -> Vec<midi::Note> {
+        rx.try_iter()
+            .flat_map(|c| match c {
+                midi::Command::Play(notes) => notes,
+                midi::Command::Stop => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// The whole point of the second kind of `Target`: a binding that names
+    /// gear leaves by a different road, and nothing about the pattern, the
+    /// clock or the lookahead changes because of it.
+    #[test]
+    fn a_binding_that_names_gear_is_sent_rather_than_pushed() {
+        let clock = Clock::with_cps(44100.0, 1.0);
+        let (state, rx) = state_playing_midi(vec![Some(60.0), Some(64.0)], Vec::new());
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(44100.0);
+        let mut live = Vec::new();
+
+        // Two passes with the bar moving under them, because one pass only
+        // ever reaches the lookahead — a fifth of a second, which at a bar a
+        // second is the first of these two steps and not the second.
+        let mut mark = schedule_pass(&mut seq, &clock, &state, None, &mut live);
+        clock.advance(44100 / 2);
+        mark = schedule_pass(&mut seq, &clock, &state, mark, &mut live);
+        assert!(mark.is_some(), "neither pass should have been abandoned");
+
+        let notes = sent(&rx);
+        assert_eq!(notes.iter().map(|n| n.note).collect::<Vec<_>>(), vec![60, 64]);
+        assert!(live.is_empty(), "nothing should have been pushed into the sequencer");
+    }
+
+    /// A note's two ends are decided together, here, and travel together — a
+    /// note whose off was still to be worked out is one that hangs if anything
+    /// goes wrong in between.
+    #[test]
+    fn a_sent_note_carries_both_of_its_ends() {
+        let clock = Clock::with_cps(44100.0, 1.0);
+        let (state, rx) = state_playing_midi(vec![Some(60.0)], Vec::new());
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(44100.0);
+
+        schedule_pass(&mut seq, &clock, &state, None, &mut Vec::new());
+
+        let note = sent(&rx).remove(0);
+        assert!(note.off_secs > note.on_secs, "got {note:?}");
+    }
+
+    /// `legato` scales the event in `query`, above both kinds of target, so
+    /// there is nothing MIDI-specific about it — which is exactly what this
+    /// pins.
+    #[test]
+    fn legato_shortens_a_sent_note_as_it_shortens_a_voice() {
+        let clock = Clock::with_cps(44100.0, 1.0);
+        let staccato = Lane {
+            name: LEGATO.to_string(),
+            values: LaneValues::Steps(Pattern::steps(vec![Some(0.25)])),
+        };
+        let (long, long_rx) = state_playing_midi(vec![Some(60.0)], Vec::new());
+        let (short, short_rx) = state_playing_midi(vec![Some(60.0)], vec![staccato]);
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(44100.0);
+
+        schedule_pass(&mut seq, &clock, &long, None, &mut Vec::new());
+        schedule_pass(&mut seq, &clock, &short, None, &mut Vec::new());
+
+        let held = |notes: Vec<midi::Note>| notes[0].off_secs - notes[0].on_secs;
+        assert!(held(sent(&short_rx)) < held(sent(&long_rx)) / 2.0);
+    }
+
+    /// The room going quiet has to include the gear in it. Nothing else would
+    /// release those notes — a MIDI note is held until something says
+    /// otherwise, so a stop that only cut the sequencer would leave whatever
+    /// was sounding droning on after the silence.
+    #[test]
+    fn a_stop_reaches_the_gear_as_well_as_the_sequencer() {
+        let (out, rx) = midi::Out::collecting();
+        out.stop();
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![midi::Command::Stop]);
     }
 
     fn peak_over(seq: &mut Sequencer, frames: usize) -> f32 {
@@ -1182,7 +1357,7 @@ mod pass_tests {
         *s.instruments.lock().unwrap() = Instruments::from_program(&ast);
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
-                instrument: "kick808".into(),
+                target: "kick808".into(),
                 pattern: Pattern::steps(vec![Some(50.0), Some(50.0)]),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -1249,7 +1424,7 @@ mod pass_tests {
         let seen = recording(&state);
         *state.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
-                instrument: "ghost".into(),
+                target: "ghost".into(),
                 pattern: Pattern::steps(vec![Some(1.0)]),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -1392,7 +1567,7 @@ mod start_position_tests {
         *s.instruments.lock().unwrap() = Instruments::from_program(&ast);
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
-                instrument: "k".into(),
+                target: "k".into(),
                 pattern: Pattern::steps(steps),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -1498,7 +1673,7 @@ mod start_position_tests {
         *s.instruments.lock().unwrap() = Instruments::from_program(&ast);
         *s.patterns.lock().unwrap() = Patterns {
             bindings: vec![Binding {
-                instrument: "k".into(),
+                target: "k".into(),
                 pattern: Pattern::steps([Some(1.0), Some(2.0)]),
                 lanes: Vec::new(),
                 start: 0.0,

@@ -421,6 +421,7 @@ mod tests {
             choices: Vec::new(),
             meter: Default::default(),
             octave: None,
+            warnings: Vec::new(),
         }
     }
 
