@@ -368,6 +368,18 @@ function App() {
   const startResize = usePanelResize("right", setPanelWidth);
   const startSideResize = usePanelResize("left", setSideWidth);
 
+  // The tabs as they are right now, for everything below that has to ask about
+  // them after an `await`.
+  //
+  // A callback built during a render holds that render's list, and by the time
+  // a read of a file comes back that list is at least one render old — so an
+  // "is this already open?" asked against it is answering about a tab bar that
+  // has since moved. Two clicks on one row inside that window both found the
+  // file unopened and opened it twice; a close computed from it put back a tab
+  // that had just been added.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
   // Null when every tab has been closed, which the editor is built to show.
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
   if (activeTab && isCode(activeTab)) lastCodeId.current = activeTab.id;
@@ -610,11 +622,29 @@ function App() {
       }
       if (!live) return;
 
-      // A first run, or a session whose files have all gone: open on an empty
-      // buffer, which is what the app has always started with.
-      const opened = restored.length > 0 ? restored : [makeTab({ content: STARTER_CONTENT })];
+      // Whatever was opened while this was reading stays open, ahead of what
+      // is being restored under it.
+      //
+      // The app is live for the whole of the read above — the tree is drawn,
+      // the tab bar takes clicks, ⌘N works — and one `read_file` per remembered
+      // tab is long enough to click in. Replacing the list wholesale answered
+      // those clicks with a tab that appeared and then vanished, which is the
+      // app taking work back.
+      const meanwhile = tabsRef.current;
+      const already = new Set(
+        meanwhile.map((t) => t.path).filter((path): path is string => path !== null),
+      );
+      const restoredNow = restored.filter((t) => t.path === null || !already.has(t.path));
+      const opened =
+        restoredNow.length + meanwhile.length > 0
+          ? [...restoredNow, ...meanwhile]
+          : // A first run, or a session whose files have all gone: open on an
+            // empty buffer, which is what the app has always started with.
+            [makeTab({ content: STARTER_CONTENT })];
       setTabs(opened);
-      setActiveId(active ?? opened[0].id);
+      // A tab opened by hand is the one being looked at, so it keeps the
+      // editor; the remembered one only takes it when nothing else has.
+      if (meanwhile.length === 0) setActiveId(active ?? opened[0].id);
       setRestoring(false);
     })();
 
@@ -725,6 +755,15 @@ function App() {
   // What the session file already says, so an app that is only being clicked
   // around in does not rewrite it.
   const sessionOnDisk = useRef<string | null>(null);
+  // The write that is waiting out the delay, and what it is going to say.
+  //
+  // The timer is held here rather than in the effect below because the effect
+  // re-runs far more often than the session changes — `tabs` is a new array on
+  // every keystroke, since a buffer lives in it — and a timer cancelled by its
+  // own cleanup on each of those never fires at all. Close a tab and carry on
+  // typing and the session was never written: the tab came back on the next
+  // launch, having been closed a hundred keystrokes ago.
+  const sessionPending = useRef<{ json: string; timer: number } | null>(null);
 
   // And back out again as tabs are opened, closed, switched and saved, so the
   // next launch opens on this. Debounced for the same reason the patterns file
@@ -749,9 +788,24 @@ function App() {
 
     const session: Session = { project: projectRoot, tabs: records, active };
     const json = JSON.stringify(session);
-    if (json === sessionOnDisk.current) return;
 
-    const timer = setTimeout(() => {
+    if (json === sessionOnDisk.current) {
+      // Back to what the file already says — a tab closed and reopened, say. A
+      // write still waiting would put it wrong, so it goes.
+      if (sessionPending.current !== null) {
+        clearTimeout(sessionPending.current.timer);
+        sessionPending.current = null;
+      }
+      return;
+    }
+    // Already on its way. Rescheduling here is what starved the write: this
+    // effect runs on every keystroke, and each run would push the deadline out
+    // again.
+    if (json === sessionPending.current?.json) return;
+
+    if (sessionPending.current !== null) clearTimeout(sessionPending.current.timer);
+    const timer = window.setTimeout(() => {
+      sessionPending.current = null;
       invoke("set_recent_session", { session })
         .then(() => {
           sessionOnDisk.current = json;
@@ -760,8 +814,7 @@ function App() {
         // rather than shown — and left un-synced, so the next change retries.
         .catch((e) => console.error("could not remember this session:", e));
     }, SESSION_SAVE_DELAY);
-
-    return () => clearTimeout(timer);
+    sessionPending.current = { json, timer };
   }, [tabs, activeId, projectRoot, patterns, restoring]);
 
   /**
@@ -982,7 +1035,7 @@ function App() {
       // An updater has to be pure — StrictMode runs it twice — and this one
       // both bumped a counter and set the active id, so the tab that survived
       // the second run was never the one that got focus.
-      const existing = tabs.find((t) => t.patternId === patternId);
+      const existing = tabsRef.current.find((t) => t.patternId === patternId);
       if (existing) {
         setActiveId(existing.id);
         return;
@@ -991,7 +1044,7 @@ function App() {
       setTabs((prev) => [...prev, tab]);
       setActiveId(tab.id);
     },
-    [tabs],
+    [],
   );
 
   const newTab = useCallback(() => {
@@ -1000,22 +1053,24 @@ function App() {
     setActiveId(tab.id);
   }, []);
 
-  const closeTab = useCallback(
-    (id: string) => {
-      const idx = tabs.findIndex((t) => t.id === id);
-      if (idx === -1) return;
+  const closeTab = useCallback((id: string) => {
+    const idx = tabsRef.current.findIndex((t) => t.id === id);
+    if (idx === -1) return;
 
-      const next = tabs.filter((t) => t.id !== id);
-      setTabs(next);
+    // Both of these say what to take away rather than what the list is now, so
+    // a tab that arrived between this render and this click — a file still
+    // being read when it was clicked — is not swept up with the one being
+    // closed.
+    setTabs((prev) => prev.filter((t) => t.id !== id));
 
-      // Closing the active tab hands the editor to a neighbour; closing the
-      // last one leaves nothing to hand it to, and the empty state shows.
-      if (id === activeId) {
-        setActiveId(next.length === 0 ? null : next[Math.min(idx, next.length - 1)].id);
-      }
-    },
-    [tabs, activeId],
-  );
+    // Closing the active tab hands the editor to a neighbour; closing the
+    // last one leaves nothing to hand it to, and the empty state shows.
+    setActiveId((current) => {
+      if (current !== id) return current;
+      const next = tabsRef.current.filter((t) => t.id !== id);
+      return next.length === 0 ? null : next[Math.min(idx, next.length - 1)].id;
+    });
+  }, []);
 
   const updateContent = useCallback((id: string, content: string) => {
     setTabs((prev) =>
@@ -1025,33 +1080,52 @@ function App() {
     );
   }, []);
 
+  /** The files a read is already out for, so the same one is never fetched —
+   *  or opened — twice. Cleared as each read lands. */
+  const opening = useRef(new Map<string, Promise<boolean>>());
+
   /** Open a file by path, wherever the path came from — the open dialog, or a
    *  click in the project tree. Answers whether there is now a tab in front for
    *  it, so a caller with something to do in that tab knows not to do it in
    *  someone else's. */
   const openPath = useCallback(
-    async (path: string): Promise<boolean> => {
+    (path: string): Promise<boolean> => {
       // If the file is already open, just focus its tab.
-      const existing = tabs.find((t) => t.path === path);
+      const existing = tabsRef.current.find((t) => t.path === path);
       if (existing) {
         setActiveId(existing.id);
-        return true;
+        return Promise.resolve(true);
       }
 
-      try {
-        const content = await invoke<string>("read_file", { path });
-        const tab = makeTab({ title: basename(path), path, content, dirty: false });
-        setTabs((prev) => [...prev, tab]);
-        setActiveId(tab.id);
-        return true;
-      } catch (e) {
-        // Anything that isn't text lands here, which is the honest answer: the
-        // editor has nothing to show for a binary file.
-        report(toDiagnostic(e, `could not open ${basename(path)}`), null);
-        return false;
-      }
+      // And if it is already being read, wait for that read rather than
+      // starting a second one. A row answers a click by fetching the file, and
+      // nothing about the tab bar changes until the fetch is back — so two
+      // clicks inside that window each found nothing open and each opened a
+      // tab, leaving two buffers over one file, one of which you could close
+      // without anything appearing to happen.
+      const inFlight = opening.current.get(path);
+      if (inFlight) return inFlight;
+
+      const open = (async () => {
+        try {
+          const content = await invoke<string>("read_file", { path });
+          const tab = makeTab({ title: basename(path), path, content, dirty: false });
+          setTabs((prev) => [...prev, tab]);
+          setActiveId(tab.id);
+          return true;
+        } catch (e) {
+          // Anything that isn't text lands here, which is the honest answer: the
+          // editor has nothing to show for a binary file.
+          report(toDiagnostic(e, `could not open ${basename(path)}`), null);
+          return false;
+        } finally {
+          opening.current.delete(path);
+        }
+      })();
+      opening.current.set(path, open);
+      return open;
     },
-    [tabs, report],
+    [report],
   );
 
   /** Set when a click has opened a file meaning to work in it, and cleared once
