@@ -76,6 +76,11 @@ pub enum ValueKind {
     /// takes one, and it takes plain numbers there too — so like `Rate`, this
     /// is what a name answers with rather than something anything receives.
     Lane,
+    /// Gear to send notes to, from `midiout`. Only `play`'s instrument slot
+    /// accepts one, and it accepts a `fn` there too — so like `Rate` and
+    /// `Lane`, this is what a name answers with rather than something anything
+    /// receives.
+    Destination,
 }
 
 /// A UGen builtin: a name that lowers to a graph node.
@@ -1414,6 +1419,18 @@ pub static SPECIALS: &[ListBuiltin] = &[
         doc: "Read an audio file into a buffer: `let amen = load(\"breaks/amen.wav\")`. The path is relative to the file it is written in. Any format symphonia reads: wav, mp3, flac, ogg.",
     },
     ListBuiltin {
+        name: "midiout",
+        params: &["device", "channel"],
+        arities: &[1, 2],
+        variadic: false,
+        // A port may be named with text, but nothing in the language ever
+        // *answers* with text, so a number is the whole truth about what can
+        // stand to the left of this dot.
+        receives: ValueKind::Number,
+        returns: ValueKind::Destination,
+        doc: "Gear to send a pattern to, in place of an instrument: `play(bass, midiout(\"deluge\"), vel: [1, .6])`. The device is a port's name — matched on any part of it, ignoring case — or its number in the settings panel's list. `channel` is 1-16 and defaults to 1. A pattern's values are MIDI note numbers, which is what `c4`, `semi` and `scale` already count in. Lanes: `vel` is 0 to 1, `chan` overrides the channel per note, and `legato` sets how long the note is held. A port that is not connected is a warning rather than an error, so a piece written for a rack still runs on the laptop it is edited on.",
+    },
+    ListBuiltin {
         name: "sample",
         params: &["buffer", "position", "channel"],
         arities: &[2, 3],
@@ -2023,12 +2040,13 @@ mod tests {
         const BOUND: [&str; 3] = ["dur", "qvs", "qvh"];
         for b in SPECIALS {
             // Everything else is intercepted somewhere: the `play` family,
-            // `then`, `play_all`, `load`, `accel`, and the three that begin
-            // from a buffer.
+            // `then`, `play_all`, `load`, `midiout`, `accel`, and the three
+            // that begin from a buffer.
             let intercepted = Lowerer::is_play(b.name)
                 || Lowerer::is_section(b.name)
                 || Lowerer::is_play_all(b.name)
                 || Lowerer::is_load(b.name)
+                || Lowerer::is_midiout(b.name)
                 || Lowerer::is_buffer_builtin(b.name)
                 || Lowerer::is_rate(b.name);
             assert_eq!(
@@ -2222,6 +2240,9 @@ mod receives_tests {
             // The same, for the same reason: a lane value is written into a
             // `play` and read nowhere else, so nothing chains off one.
             ValueKind::Lane => false,
+            // And the same again: a destination is written into a `play`'s
+            // instrument slot, which is not the receiver position.
+            ValueKind::Destination => false,
             ValueKind::Nothing => false,
         }
     }
@@ -2433,12 +2454,12 @@ mod receives_tests {
                     Ok(l) => crate::swync_graph::realizer::realize(&l.graph).is_ok(),
                 }
             });
-            // A rate is where a chain stops, and so is a lane value. `play`
-            // takes both as arguments rather than as receivers, so no probe
-            // could name either — and that is the property worth pinning:
-            // nothing at all may follow one, so the editor offering anything
-            // after the dot would be wrong.
-            if matches!(returns, ValueKind::Rate | ValueKind::Lane) {
+            // A rate is where a chain stops, and so is a lane value and a MIDI
+            // destination. `play` takes all three as arguments rather than as
+            // receivers, so no probe could name any of them — and that is the
+            // property worth pinning: nothing at all may follow one, so the
+            // editor offering anything after the dot would be wrong.
+            if matches!(returns, ValueKind::Rate | ValueKind::Lane | ValueKind::Destination) {
                 assert!(
                     found.is_none(),
                     "{name} answers with a {returns:?}, so nothing should chain off \

@@ -129,7 +129,7 @@ fn a_module_is_reached_through_its_name() {
 
     let lowered = lower(&items).expect("should lower");
     assert_eq!(lowered.bindings.len(), 1);
-    assert_eq!(lowered.bindings[0].instrument, "drums::kick");
+    assert_eq!(lowered.bindings[0].target, "drums::kick");
     // And the scheduler can build the voice that binding names.
     assert!(Instruments::from_program(&items).has("drums::kick"));
 }
@@ -143,7 +143,7 @@ fn a_single_name_arrives_unqualified() {
     );
 
     let lowered = lower(&items).expect("should lower");
-    assert_eq!(lowered.bindings[0].instrument, "drums::kick");
+    assert_eq!(lowered.bindings[0].target, "drums::kick");
 }
 
 /// The rest of the module stays where it is: importing one name is not
@@ -174,10 +174,10 @@ fn a_braced_list_takes_several_names() {
     );
 
     let lowered = lower(&items).expect("should lower");
-    let played: Vec<&str> = lowered
+    let played: Vec<String> = lowered
         .bindings
         .iter()
-        .map(|b| b.instrument.as_str())
+        .map(|b| b.target.label())
         .collect();
     assert_eq!(played, vec!["drums::kick", "drums::snare"]);
 }
@@ -198,7 +198,7 @@ fn a_module_can_be_renamed() {
         &[("/p/drums.swync", DRUMS)],
     );
     assert_eq!(
-        lower(&items).expect("should lower").bindings[0].instrument,
+        lower(&items).expect("should lower").bindings[0].target,
         "drums::kick"
     );
 }
@@ -213,7 +213,7 @@ fn a_path_walks_into_folders() {
     );
     assert!(defined(&items).contains(&"lib::drums::kick".to_string()));
     assert_eq!(
-        lower(&items).expect("should lower").bindings[0].instrument,
+        lower(&items).expect("should lower").bindings[0].target,
         "lib::drums::kick"
     );
 }
@@ -230,7 +230,7 @@ fn a_last_segment_is_a_file_before_it_is_a_name() {
         ],
     );
     assert_eq!(
-        lower(&module).expect("should lower").bindings[0].instrument,
+        lower(&module).expect("should lower").bindings[0].target,
         "lib::drums::kick"
     );
 
@@ -239,7 +239,7 @@ fn a_last_segment_is_a_file_before_it_is_a_name() {
         &[("/p/lib.swync", "fn drums(f) = sin(f)\n")],
     );
     assert_eq!(
-        lower(&item).expect("should lower").bindings[0].instrument,
+        lower(&item).expect("should lower").bindings[0].target,
         "lib::drums"
     );
 }
@@ -742,7 +742,7 @@ fn modules_are_read_from_the_disk() {
     std::fs::remove_dir_all(&dir).ok();
 
     assert_eq!(
-        lower(&items).expect("should lower").bindings[0].instrument,
+        lower(&items).expect("should lower").bindings[0].target,
         "lib::drums::kick"
     );
 }
@@ -771,9 +771,9 @@ fn the_example_project_compiles() {
     let instruments = Instruments::from_program(&items);
     for binding in &lowered.bindings {
         assert!(
-            instruments.has(&binding.instrument),
+            binding.target.instrument().is_some_and(|i| instruments.has(i)),
             "no instrument for {}",
-            binding.instrument
+            binding.target
         );
     }
 }
@@ -934,7 +934,7 @@ fn a_library_is_found_when_the_project_has_no_such_file() {
 
     assert!(defined(&items).contains(&"kit::kick".to_string()));
     let lowered = lower(&items).expect("should lower");
-    assert_eq!(lowered.bindings[0].instrument, "kit::kick");
+    assert_eq!(lowered.bindings[0].target, "kit::kick");
     assert!(Instruments::from_program(&items).has("kit::kick"));
 }
 

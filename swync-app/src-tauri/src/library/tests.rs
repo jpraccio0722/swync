@@ -594,7 +594,7 @@ fn a_library_can_be_packed_installed_and_played() {
     let lowered = crate::lowerer::lower::lower_with_samples(&items, samples.clone())
         .unwrap_or_else(|e| panic!("should lower: {e}"));
     assert_eq!(lowered.bindings.len(), 1);
-    assert_eq!(lowered.bindings[0].instrument, "kit::hit");
+    assert_eq!(lowered.bindings[0].target, "kit::hit");
 
     // And the scheduler can build the voice that binding names, which is the
     // last thing between this and a sound.

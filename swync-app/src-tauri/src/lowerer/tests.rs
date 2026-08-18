@@ -662,7 +662,7 @@ fn play_err(src: &str) -> String {
 fn play_binds_a_pattern_to_an_instrument() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay([220, `, 330, `], kick)\n");
     assert_eq!(bs.len(), 1);
-    assert_eq!(bs[0].instrument, "kick");
+    assert_eq!(bs[0].target, "kick");
     assert_eq!(bs[0].pattern, Pattern::seq(vec![
         Step::Value(220.0), Step::Rest, Step::Value(330.0), Step::Rest,
     ]));
@@ -710,8 +710,8 @@ fn multiple_plays_layer() {
         "fn kick(f) = sin(f)\nfn hat(f) = saw(f)\n\
          play([220, `], kick)\nplay([880, 880, 880], hat)\n");
     assert_eq!(bs.len(), 2);
-    assert_eq!(bs[0].instrument, "kick");
-    assert_eq!(bs[1].instrument, "hat");
+    assert_eq!(bs[0].target, "kick");
+    assert_eq!(bs[1].target, "hat");
 }
 
 /// Patterns compose with the rest of the language.
@@ -727,7 +727,7 @@ fn pattern_elements_are_ordinary_expressions() {
 #[test]
 fn play_accepts_a_piped_pattern() {
     let bs = bindings_of("fn kick(f) = sin(f)\n[220, 330] >> play(kick)\n");
-    assert_eq!(bs[0].instrument, "kick");
+    assert_eq!(bs[0].target, "kick");
     assert_eq!(bs[0].pattern, Pattern::seq(vec![
         Step::Value(220.0), Step::Value(330.0),
     ]));
@@ -924,7 +924,7 @@ fn play_loops_forever() {
 #[test]
 fn play_once_bounds_the_binding_to_one_bar() {
     let bs = bindings_of("fn kick(f) = sin(f)\nplay_once([220, 330], kick)\n");
-    assert_eq!(bs[0].instrument, "kick");
+    assert_eq!(bs[0].target, "kick");
     assert_eq!(bs[0].pattern, Pattern::seq(vec![
         Step::Value(220.0), Step::Value(330.0),
     ]));
@@ -1129,7 +1129,7 @@ fn a_scalar_lane_is_a_one_step_pattern() {
 #[test]
 fn lanes_survive_the_pipe_form() {
     let bs = bindings_of(&format!("{BASS}[220, 330] >> play(bass, cut: [400, 2000])\n"));
-    assert_eq!(bs[0].instrument, "bass");
+    assert_eq!(bs[0].target, "bass");
     assert_eq!(bs[0].lanes.len(), 1);
 }
 
@@ -1166,7 +1166,7 @@ playn([220], lead, 8).then(ramp)
     let pats = Patterns { bindings: bindings_of(src), origin: 0.0, choices: Vec::new() };
     let vols: Vec<f64> = (0..14)
         .flat_map(|bar| pats.query(Span::new(bar as f64, bar as f64 + 1.0)))
-        .filter(|e| e.instrument == "breath")
+        .filter(|e| e.target == "breath")
         .map(|e| e.args.iter().find(|(n, _)| n == "vol").expect("vol lane").1.as_num().expect("a number lane"))
         .collect();
 
@@ -1927,9 +1927,10 @@ fn every_example_compiles_and_realizes() {
                 })
                 .collect();
             let voice = crate::scheduler::voice::build_voice(
-                &instruments, &binding.instrument, 60.0, &lanes, 0.5, DEFAULT_BEAT_SECS, Default::default());
+                &instruments, binding.target.instrument().expect("an example plays an instrument"),
+                60.0, &lanes, 0.5, DEFAULT_BEAT_SECS, Default::default());
             if voice.is_err() {
-                panic!("{name}: instrument `{}` failed to build", binding.instrument);
+                panic!("{name}: instrument `{}` failed to build", binding.target);
             }
         }
         checked += 1;
@@ -1956,12 +1957,12 @@ fn then_offsets_what_follows() {
         "{SECTIONS}playn([c3], bass, 4).then(chorus)\n"));
     assert_eq!(bs.len(), 2);
 
-    assert_eq!(bs[0].instrument, "bass");
+    assert_eq!(bs[0].target, "bass");
     assert_eq!(bs[0].start, 0.0);
     assert_eq!(bs[0].bars, Some(4.0));
 
     // The chorus opens exactly where the four bars ran out.
-    assert_eq!(bs[1].instrument, "lead");
+    assert_eq!(bs[1].target, "lead");
     assert_eq!(bs[1].start, 4.0);
     assert_eq!(bs[1].bars, None);
 }
@@ -2074,7 +2075,7 @@ fn then_refuses_a_function_taking_parameters() {
 fn shape(src: &str) -> Vec<(String, f64, Option<f64>)> {
     bindings_of(src)
         .into_iter()
-        .map(|b| (b.instrument, b.start, b.bars))
+        .map(|b| (b.target.label(), b.start, b.bars))
         .collect()
 }
 
@@ -2086,7 +2087,7 @@ fn a_play_written_out_is_placed_rather_than_left_at_the_origin() {
         "{SECTIONS}playn([c3], bass, 4).then(play([c4, e4], lead))\n"));
     assert_eq!(bs.len(), 2, "the section is placed once, not written twice");
     assert_eq!(bs[0].start, 0.0);
-    assert_eq!(bs[1].instrument, "lead");
+    assert_eq!(bs[1].target, "lead");
     assert_eq!(bs[1].start, 4.0);
 }
 
@@ -2189,7 +2190,7 @@ fn a_written_out_section_keeps_its_rate_and_lanes() {
         "{SECTIONS}fn wide(n, cut = 400) = lowpass(saw(n), cut, 1)\n\
          playn([c3], bass, 2).then(playn([c4, `, e4, `], wide, 4, 0.5, cut: 800))\n"));
     assert_eq!(bs.len(), 2);
-    assert_eq!(bs[1].instrument, "wide");
+    assert_eq!(bs[1].target, "wide");
     assert_eq!(bs[1].start, 2.0);
     assert_eq!(bs[1].lanes.len(), 1);
     assert_eq!(bs[1].lanes[0].name, "cut");
@@ -2255,7 +2256,7 @@ fn naming_the_section_as_a_fn_places_it() {
          playn([c3], bass, 4).then(named)\n"));
     assert_eq!(bs.len(), 2);
     assert_eq!(bs[0].start, 0.0);
-    assert_eq!(bs[1].instrument, "lead");
+    assert_eq!(bs[1].target, "lead");
     assert_eq!(bs[1].start, 4.0);
 }
 
@@ -2278,7 +2279,7 @@ fn a_named_play_is_still_a_receiver() {
     let bs = bindings_of(&format!(
         "{SECTIONS}let intro = playn([c3], bass, 4)\nintro.then(chorus)\n"));
     assert_eq!(bs.len(), 2);
-    assert_eq!(bs[1].instrument, "lead");
+    assert_eq!(bs[1].target, "lead");
     assert_eq!(bs[1].start, 4.0);
 }
 
@@ -2322,7 +2323,7 @@ fn play_all_hands_over_after_its_longest_part() {
     let bs = bindings_of(&format!(
         "{SECTIONS}play_all(playn([c3], bass, 4), play_once([c4], lead)).then(chorus)\n"));
     assert_eq!(bs.len(), 3);
-    assert_eq!(bs[2].instrument, "lead");   // chorus
+    assert_eq!(bs[2].target, "lead");   // chorus
     assert_eq!(bs[2].start, 4.0);
 }
 
@@ -2383,7 +2384,7 @@ fn play_all_takes_a_section_by_name() {
 
     assert_eq!(named.len(), written.len());
     for (a, b) in named.iter().zip(written.iter()) {
-        assert_eq!(a.instrument, b.instrument);
+        assert_eq!(a.target, b.target);
         assert_eq!(a.start, b.start);
         assert_eq!(a.bars, b.bars);
     }
@@ -3324,7 +3325,7 @@ fn then_fill_inherits_the_instrument_and_its_lanes() {
     let bs = bindings_of(&format!(
         "{ARR}playn([c3], bass, 4, cut: [500, 900]).then_fill([c2, c2, c2])\n"));
     assert_eq!(bs.len(), 2);
-    assert_eq!(bs[1].instrument, "bass");
+    assert_eq!(bs[1].target, "bass");
     assert_eq!(bs[1].start, 4.0);
     assert_eq!(bs[1].bars, Some(1.0), "one pass");
     assert_eq!(bs[1].lanes, bs[0].lanes, "the lanes came with it");
@@ -3356,7 +3357,7 @@ fn loop_repeats_the_whole_chain_and_not_just_the_last_link() {
     // Pass one is the original pair; every later pass is it, four bars on.
     let starts: Vec<f64> = bs.iter().map(|b| b.start).collect();
     assert_eq!(starts, vec![0.0, 3.0, 4.0, 7.0, 8.0, 11.0]);
-    assert_eq!(bs[2].instrument, "bass", "a copy plays what it copied");
+    assert_eq!(bs[2].target, "bass", "a copy plays what it copied");
     assert_eq!(bs[2].pattern, bs[0].pattern);
     assert_eq!(bs[3].pattern, bs[1].pattern);
     assert_eq!(bs[2].bars, Some(3.0), "and for as long");
@@ -4503,4 +4504,179 @@ fn an_enum_must_be_declared_before_it_is_used() {
     // rule is about order rather than about enums.
     let before = lower_src("enum Scale { major = [0, 2] }\nsin(Scale.major[1])\n");
     assert!(before.is_ok(), "got: {before:?}");
+}
+
+// ---- playing gear instead of an instrument ----
+
+use crate::midi::out::{Destination, DEFAULT_VELOCITY};
+use crate::midi::ports::Selector;
+use crate::pattern::patterns::Target;
+
+/// Where a program's one binding is sending its notes.
+fn destination_of(src: &str) -> Destination {
+    match &bindings_of(src)[0].target {
+        Target::Midi(destination) => destination.clone(),
+        Target::Instrument(name) => panic!("expected a MIDI destination, got `{name}`"),
+    }
+}
+
+#[test]
+fn a_pattern_can_be_played_to_a_named_port_instead_of_an_instrument() {
+    let destination = destination_of("play([60, 64], midiout(\"deluge\"))\n");
+    assert_eq!(destination.selector, Selector::Name("deluge".into()));
+}
+
+#[test]
+fn a_port_can_be_named_by_its_number_instead() {
+    assert_eq!(destination_of("play([60], midiout(2))\n").selector, Selector::Number(2));
+}
+
+/// Channel is written the way it is spoken and the way every synth's front
+/// panel prints it, which is 1-16 rather than the 0-15 on the wire.
+#[test]
+fn a_destination_plays_channel_one_until_it_is_told_otherwise() {
+    assert_eq!(destination_of("play([60], midiout(\"x\"))\n").channel, 1);
+    assert_eq!(destination_of("play([60], midiout(\"x\", 10))\n").channel, 10);
+}
+
+#[test]
+fn a_channel_outside_one_to_sixteen_is_refused() {
+    assert!(play_err("play([60], midiout(\"x\", 0))\n").contains("channel"));
+    assert!(play_err("play([60], midiout(\"x\", 17))\n").contains("channel"));
+    assert!(play_err("play([60], midiout(\"x\", 1.5))\n").contains("channel"));
+}
+
+#[test]
+fn a_port_number_must_be_a_whole_number_counted_from_zero() {
+    assert!(play_err("play([60], midiout(-1))\n").contains("whole number"));
+    assert!(play_err("play([60], midiout(1.5))\n").contains("whole number"));
+}
+
+/// The whole of why `midiout` is intercepted before its arguments are
+/// evaluated: a string is not a value in this language, so a port's name has
+/// to be read off the syntax exactly as `load`'s path is.
+#[test]
+fn a_port_has_to_be_written_out_at_the_call_rather_than_worked_out() {
+    let err = play_err("play([60], midiout(1 + 1))\n");
+    assert!(err.contains("written out"), "got: {err}");
+}
+
+/// Arrangement is above the target rather than beside it, so a section that
+/// sends MIDI chains like any other.
+#[test]
+fn a_midi_binding_can_be_bounded_and_chained_like_any_other() {
+    let bindings = bindings_of(
+        "fn lead(n) = sin(n)\nfn part() = play([67], lead)\n\
+         playn([60, 64], midiout(\"deluge\"), 4).then(part)\n");
+    assert_eq!(bindings.len(), 2);
+    assert!(matches!(bindings[0].target, Target::Midi(_)));
+    assert_eq!(bindings[0].bars, Some(4.0), "four passes of a one-bar pattern");
+    assert_eq!(bindings[1].start, 4.0, "and the next section opens where it stopped");
+}
+
+#[test]
+fn a_midi_binding_takes_the_lanes_midi_understands() {
+    let bindings = bindings_of(
+        "play([60, 64], midiout(\"x\"), vel: [1, .5], chan: [1, 10], legato: .5)\n");
+    let lanes: Vec<&str> = bindings[0].lanes.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(lanes, vec!["vel", "chan", "legato"]);
+}
+
+/// A lane aimed at a destination has no instrument to reach, so a misspelling
+/// has nowhere to land. Refusing is what keeps it from being a dynamic nobody
+/// can find by reading the program.
+#[test]
+fn a_lane_midi_does_not_understand_is_refused_rather_than_dropped() {
+    let err = play_err("play([60], midiout(\"x\"), velocity: [1])\n");
+    assert!(err.contains("velocity"), "got: {err}");
+    assert!(err.contains("vel"), "and it should say what there is instead: {err}");
+}
+
+/// `pan` places a voice in a stereo field, and there is no voice here — the
+/// note is two bytes going out of the machine.
+#[test]
+fn pan_is_not_one_of_them() {
+    assert!(play_err("play([60], midiout(\"x\"), pan: [-1, 1])\n").contains("pan"));
+}
+
+/// The reserved names only mean anything when there is no instrument to mean
+/// something else to them, which is why they are not in `RESERVED`: an
+/// instrument with its own `vel` parameter is perfectly ordinary and has
+/// nothing to do with MIDI.
+#[test]
+fn an_instrument_may_still_declare_a_parameter_called_vel() {
+    let lanes = &bindings_of("fn lead(n, vel = 0.5) = sin(n) * vel\nplay([60], lead, vel: [1])\n")[0].lanes;
+    assert_eq!(lanes[0].name, "vel");
+}
+
+#[test]
+fn a_destination_is_not_something_a_pattern_can_contain() {
+    let err = play_err("fn lead(n) = sin(n)\nplay([midiout(\"x\")], lead)\n");
+    assert!(err.contains("midiout"), "got: {err}");
+}
+
+#[test]
+fn a_destination_is_not_a_signal() {
+    assert!(lower_src("midiout(\"x\") * 2\n").is_err());
+}
+
+// ---- what a note comes out as ----
+
+use crate::midi::out::Note;
+use crate::pattern::patterns::LaneArg;
+
+fn note_of(value: f64, lanes: &[(&str, f64)]) -> Note {
+    let lanes: Vec<(String, LaneArg)> =
+        lanes.iter().map(|(n, v)| ((*n).to_string(), LaneArg::Num(*v))).collect();
+    let destination =
+        Destination { selector: Selector::Name("x".into()), channel: 1 };
+    Note::from_event(&destination, value, &lanes, 0.0, 1.0)
+}
+
+/// The language already counts pitch in MIDI note numbers, so nothing is
+/// converted: `c4` is 60 to an instrument and 60 on the wire.
+#[test]
+fn a_patterns_value_is_the_midi_note_number() {
+    assert_eq!(note_of(60.0, &[]).note, 60);
+}
+
+#[test]
+fn a_note_between_two_numbers_lands_on_the_nearer_one() {
+    assert_eq!(note_of(60.4, &[]).note, 60);
+    assert_eq!(note_of(60.6, &[]).note, 61);
+}
+
+/// Clamped rather than dropped, and the difference is whether anybody finds
+/// out: an octave error piling a line onto note 127 points straight at itself,
+/// while the same error playing nothing looks exactly like a program that
+/// should sound.
+#[test]
+fn a_note_outside_what_the_wire_carries_is_clamped_rather_than_dropped() {
+    assert_eq!(note_of(200.0, &[]).note, 127);
+    assert_eq!(note_of(-5.0, &[]).note, 0);
+}
+
+#[test]
+fn velocity_is_written_from_zero_to_one_and_sent_as_seven_bits() {
+    assert_eq!(note_of(60.0, &[("vel", 1.0)]).velocity, 127);
+    assert_eq!(note_of(60.0, &[("vel", 0.5)]).velocity, 64);
+}
+
+#[test]
+fn a_note_with_nothing_to_say_about_velocity_is_sent_at_the_usual_one() {
+    assert_eq!(note_of(60.0, &[]).velocity, DEFAULT_VELOCITY);
+}
+
+/// Velocity zero *is* a note-off on the wire, so a note written silent would
+/// release itself the moment it started. It is still a note somebody asked
+/// for.
+#[test]
+fn a_note_written_silent_is_still_sent_as_a_note() {
+    assert_eq!(note_of(60.0, &[("vel", 0.0)]).velocity, 1);
+}
+
+#[test]
+fn a_chan_lane_overrides_the_destinations_channel_for_that_note() {
+    assert_eq!(note_of(60.0, &[]).channel, 1);
+    assert_eq!(note_of(60.0, &[("chan", 10.0)]).channel, 10);
 }

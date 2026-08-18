@@ -49,6 +49,31 @@ impl Stage {
     }
 }
 
+/// Whether a diagnostic stopped the program or merely has something to say
+/// about it.
+///
+/// Every diagnostic was an [`Error`](Severity::Error) until MIDI arrived, and
+/// the reason MIDI needed the other one is worth keeping: a program names the
+/// port it plays to (`midiout("deluge")`), and the port it names is not always
+/// plugged in. Refusing to compile there would mean a piece written for a rack
+/// could not be edited on a train, which is the same trade `input(channel)`
+/// already settled by being silence on a channel the device does not have.
+///
+/// So a warning is a diagnostic that rode the ordinary path to the problems
+/// panel and changed nothing else: the eval that raised it still published its
+/// graph and its patterns, and the run still counts as having succeeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// The program did not run. Every diagnostic returned as an `Err` is one
+    /// of these, which is why it is the default — a constructor that says
+    /// nothing about severity is being called on a failure path.
+    #[default]
+    Error,
+    /// The program ran, and this is something it is worth knowing about it.
+    Warning,
+}
+
 /// One reason a program did not run.
 ///
 /// `line` and `column` are 1-based, and both absent together: a pass either
@@ -58,6 +83,10 @@ impl Stage {
 #[derive(Debug, Clone, Serialize)]
 pub struct Diagnostic {
     pub stage: Stage,
+    /// Whether this stopped the program. Serialized always rather than skipped
+    /// when it is the default, because the frontend mirrors this type field for
+    /// field and a missing key there is a shape it would have to guess at.
+    pub severity: Severity,
     pub message: String,
     /// 1-based line in the source that was compiled.
     pub line: Option<usize>,
@@ -77,6 +106,9 @@ pub struct Diagnostic {
 /// the fields itself and never sees this.
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.severity == Severity::Warning {
+            write!(f, "warning: ")?;
+        }
         write!(f, "{}", self.stage.label())?;
         if let Some(file) = &self.file {
             write!(f, " in {file}")?;
@@ -93,12 +125,22 @@ impl Diagnostic {
     pub fn message(stage: Stage, message: impl Into<String>) -> Diagnostic {
         Diagnostic {
             stage,
+            severity: Severity::Error,
             message: message.into(),
             line: None,
             column: None,
             snippet: None,
             file: None,
         }
+    }
+
+    /// A diagnostic that did not stop anything.
+    ///
+    /// Positionless like [`message`](Diagnostic::message), and for the same
+    /// reason: the passes that raise warnings are the ones downstream of the
+    /// parser, which walk a tree carrying no spans.
+    pub fn warning(stage: Stage, message: impl Into<String>) -> Diagnostic {
+        Diagnostic { severity: Severity::Warning, ..Diagnostic::message(stage, message) }
     }
 
     /// Point a diagnostic at `offset` in `source`, unless it already knows a
@@ -111,8 +153,11 @@ impl Diagnostic {
         if self.line.is_some() {
             return self;
         }
-        let file = self.file;
-        Diagnostic { file, ..Diagnostic::at(self.stage, self.message, source, offset) }
+        let (file, severity) = (self.file, self.severity);
+        // Severity rides across because `at` rebuilds the whole diagnostic and
+        // knows only how to make failures. A warning that has been given a
+        // position is still a warning.
+        Diagnostic { file, severity, ..Diagnostic::at(self.stage, self.message, source, offset) }
     }
 
     /// Say which file a diagnostic is in, unless it already says.
@@ -153,6 +198,7 @@ impl Diagnostic {
 
         Diagnostic {
             stage,
+            severity: Severity::Error,
             message: message.into(),
             line: Some(before.matches('\n').count() + 1),
             column: Some(source[line_start..offset].chars().count() + 1),

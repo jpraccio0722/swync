@@ -2204,6 +2204,22 @@
       "doc": "Read an audio file into a buffer: `let amen = load(\"breaks/amen.wav\")`. The path is relative to the file it is written in. Any format symphonia reads: wav, mp3, flac, ogg."
     },
     {
+      "name": "midiout",
+      "params": [
+        "device",
+        "channel"
+      ],
+      "arities": [
+        1,
+        2
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "number",
+      "returns": "destination",
+      "doc": "Gear to send a pattern to, in place of an instrument: `play(bass, midiout(\"deluge\"), vel: [1, .6])`. The device is a port's name — matched on any part of it, ignoring case — or its number in the settings panel's list. `channel` is 1-16 and defaults to 1. A pattern's values are MIDI note numbers, which is what `c4`, `semi` and `scale` already count in. Lanes: `vel` is 0 to 1, `chan` overrides the channel per note, and `legato` sets how long the note is held. A port that is not connected is a warning rather than an error, so a piece written for a rack still runs on the laptop it is edited on."
+    },
+    {
       "name": "sample",
       "params": [
         "buffer",

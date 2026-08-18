@@ -74,6 +74,15 @@ pub struct Settings {
     /// default written down twice is one that can disagree with itself.
     #[serde(default)]
     pub editor_font_size: Option<f32>,
+    /// How far behind the audio a MIDI message is sent, in milliseconds.
+    ///
+    /// Here rather than in a project for the same reason the two audio devices
+    /// are: what it corrects for is a converter, a driver and whatever is at
+    /// the far end of the cable — every one of which is a fact about the desk
+    /// this is being played on, and none of which travels with the piece. See
+    /// `midi::out` for what is actually being corrected.
+    #[serde(default)]
+    pub midi_offset_ms: i64,
 }
 
 impl Settings {
@@ -147,6 +156,7 @@ mod tests {
         let root = temp("round-trip");
         let path = root.join("nested").join(FILE);
         let settings = Settings {
+            midi_offset_ms: 0,
             recording_dir: Some(root.display().to_string()),
             recording_format: Format::Wav32,
             input_device: Some(DeviceInfo {

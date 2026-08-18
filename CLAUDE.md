@@ -24,6 +24,7 @@ cd swync-app && npm install && npm run tauri dev
 
 - **`swync-app/src-tauri/src/lang.rs` is the single source of every builtin's arity, params, kinds and docs.** The frontend reads it over the `language_metadata` command; the website dumps it via `npm run reference` in `website/`. Adding a builtin is one entry there — CI diffs the site's reference against it.
 - **Version lives in six manifests across both projects.** `swync-app/scripts/set-version.sh` writes them all; `check-version.sh` fails a merge if they disagree.
+- **MIDI ports are named inside a program, not chosen in a panel** (`swync-app/src-tauri/src/midi/`). That is the opposite of how an audio device is picked, and deliberately: `midiout("deluge")` says which synth a part is for, which travels with the piece. The panel lists the ports only so the names and numbers can be read off. See swync-app/CLAUDE.md.
 - Three Rust tests fail on a fresh clone and always have (see swync-app/CLAUDE.md); CI skips exactly those three and fails if the count changes.
 
 ## Conventions

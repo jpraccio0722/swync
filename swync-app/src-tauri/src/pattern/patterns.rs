@@ -1,3 +1,4 @@
+use crate::midi::out::Destination;
 use crate::pattern::pattern::{Event, Pattern, Span};
 use crate::pattern::rate::Rate;
 
@@ -19,6 +20,107 @@ pub const RESERVED: [(&str, &str); 2] = [
     (LEGATO, "sets the note's length"),
     (PAN, "places the voice in the stereo field"),
 ];
+
+/// How hard the note is struck, 0 to 1, on a binding whose target is MIDI.
+///
+/// Written 0 to 1 like everything else in the language rather than the 0-127
+/// the wire carries. The scale is the odd one out only if you are reading a
+/// synth's manual; from inside a program it is the same number `amp` and a
+/// lane feeding a gain already are, and it means the same pattern can be
+/// pointed at an instrument instead without every value being wrong by a
+/// factor of a hundred.
+pub const VELOCITY: &str = "vel";
+
+/// Which MIDI channel *this note* goes out on, overriding the destination's.
+///
+/// A lane rather than only an argument because one pattern is often one
+/// player's part on a multitimbral box, where the drum lane is channel 10 and
+/// the rest is not. Written 1-16.
+pub const CHANNEL: &str = "chan";
+
+/// The lanes a MIDI binding understands, each with what it does.
+///
+/// Kept apart from [`RESERVED`] rather than folded into it, and the difference
+/// is not tidiness. A reserved name is one no instrument may declare, checked
+/// against every `play` in the language — so adding `vel` there would break
+/// every existing `fn lead(n, vel = 0.5)`, which is a perfectly ordinary
+/// instrument that has nothing to do with MIDI. These names only mean anything
+/// when there is no instrument to mean something else to them.
+pub const MIDI_LANES: [(&str, &str); 3] = [
+    (LEGATO, "sets the note's length"),
+    (VELOCITY, "sets how hard the note is struck, 0 to 1"),
+    (CHANNEL, "sets which MIDI channel the note goes out on"),
+];
+
+/// What plays a pattern.
+///
+/// The two arms are not variations on each other: one names something inside
+/// the program that will be lowered into a `fundsp` voice per note, and the
+/// other names something on a desk that will be sent two bytes. What they have
+/// in common is everything above them — a pattern, its lanes, its rate, and
+/// every arrangement combinator that moves a section around — which is why
+/// this is a field of [`Binding`] rather than a second kind of binding
+/// alongside it. `playn(riff, midiout("deluge"), 4).then(chorus)` has to mean
+/// what it looks like it means.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    /// A user `fn`, by name. Held as a name rather than as a definition
+    /// because a voice is lowered per note on the scheduler thread, against
+    /// whatever the most recent eval published under that name.
+    Instrument(String),
+    /// Gear outside the machine, from `midiout`.
+    Midi(Destination),
+}
+
+/// So that the great many places that write `instrument: "kick".into()` — most
+/// of them tests about rhythm, which have no opinion about MIDI — go on saying
+/// exactly that.
+impl From<&str> for Target {
+    fn from(name: &str) -> Target {
+        Target::Instrument(name.to_string())
+    }
+}
+
+impl From<String> for Target {
+    fn from(name: String) -> Target {
+        Target::Instrument(name)
+    }
+}
+
+/// So that a test can say `assert_eq!(binding.target, "kick")`, which is what
+/// nearly every one of them wants to say and what all of them said before a
+/// pattern could be pointed at anything but an instrument. A destination never
+/// equals a name: `midiout(..)` is not spelled, it is called.
+impl PartialEq<&str> for Target {
+    fn eq(&self, name: &&str) -> bool {
+        self.instrument() == Some(*name)
+    }
+}
+
+/// What a sentence about a binding calls its target — see [`Target::label`].
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+impl Target {
+    /// The instrument this plays, if it is an instrument at all.
+    pub fn instrument(&self) -> Option<&str> {
+        match self {
+            Target::Instrument(name) => Some(name),
+            Target::Midi(_) => None,
+        }
+    }
+
+    /// What to call this in a sentence about the binding.
+    pub fn label(&self) -> String {
+        match self {
+            Target::Instrument(name) => name.clone(),
+            Target::Midi(destination) => format!("midiout({})", destination.selector),
+        }
+    }
+}
 
 /// One named parameter, as a sequence of values rather than a shape in time.
 ///
@@ -95,11 +197,12 @@ impl LaneArg {
     }
 }
 
-/// A pattern paired with the instrument that plays it.
+/// A pattern paired with whatever plays it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
-    pub instrument: String,   // name of the user `fn`
-    /// Structure, and the instrument's first parameter.
+    /// The instrument, or the gear. See [`Target`].
+    pub target: Target,
+    /// Structure, and — for an instrument — its first parameter.
     pub pattern: Pattern,
     pub lanes: Vec<Lane>,
     /// Bars to wait after the origin's downbeat before this binding starts.
@@ -256,7 +359,7 @@ fn joins_in_progress(b: &Binding) -> bool {
 /// An event with its instrument attached — what the scheduler consumes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundEvent {
-    pub instrument: String,
+    pub target: Target,
     pub event: Event,
     /// Lane values sampled at this event's onset, ready to be passed by name.
     /// A lane resting here is absent, so the parameter falls back to its own
@@ -338,7 +441,7 @@ impl Patterns {
                 // knows about.
                 event.begin += grid;
                 event.end += grid;
-                BoundEvent { instrument: b.instrument.clone(), event, args, rate }
+                BoundEvent { target: b.target.clone(), event, args, rate }
             }).collect::<Vec<_>>()
             }).collect::<Vec<_>>()
         }).collect()
@@ -467,13 +570,13 @@ mod tests {
         let pats = Patterns {
             bindings: vec![
                 Binding {
-                    instrument: "kick".into(),
+                    target: "kick".into(),
                     pattern: Pattern::steps([Some(1.0), None]),
                     lanes: Vec::new(),
                     start: 0.0,
                     bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
                 Binding {
-                    instrument: "hat".into(),
+                    target: "hat".into(),
                     pattern: Pattern::steps([Some(1.0), Some(1.0)]),
                     lanes: Vec::new(),
                     start: 0.0,
@@ -483,7 +586,7 @@ mod tests {
         };
 
         let evs = pats.query(Span::new(0.0, 1.0));
-        let mut names: Vec<_> = evs.iter().map(|b| b.instrument.as_str()).collect();
+        let mut names: Vec<_> = evs.iter().map(|b| b.target.label()).collect();
         names.sort();
         assert_eq!(names, vec!["hat", "hat", "kick"]);
     }
@@ -499,7 +602,7 @@ mod tests {
 
     fn bound(pattern: Pattern, lanes: Vec<Lane>) -> Vec<super::BoundEvent> {
         Patterns {
-            bindings: vec![Binding { instrument: "i".into(), pattern, lanes, start: 0.0, bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+            bindings: vec![Binding { target: "i".into(), pattern, lanes, start: 0.0, bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         }
         .query(Span::new(0.0, 1.0))
@@ -560,7 +663,7 @@ mod tests {
     fn a_long_lane_walks_across_cycles() {
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::steps([Some(1.0), Some(2.0)]),
                 lanes: vec![lane("cut", (1..=6).map(|i| Some(i as f64 * 100.0)).collect())],
                 start: 0.0,
@@ -587,7 +690,7 @@ mod tests {
     fn uneven_lengths_rotate_against_each_other() {
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::steps([Some(1.0), Some(2.0), Some(3.0), Some(4.0)]),
                 lanes: vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
                 start: 0.0,
@@ -612,7 +715,7 @@ mod tests {
     fn rate_does_not_shift_a_lane() {
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::fast(2.0, Pattern::steps([Some(1.0), Some(2.0)])),
                 lanes: vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
                 start: 0.0,
@@ -706,7 +809,7 @@ mod tests {
     fn bounded(bars: Option<f64>, origin: f64, span: Span) -> Vec<f64> {
         Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::steps([Some(1.0), Some(2.0)]),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -781,13 +884,13 @@ mod tests {
         let pats = Patterns {
             bindings: vec![
                 Binding {
-                    instrument: "once".into(),
+                    target: "once".into(),
                     pattern: Pattern::steps([Some(1.0)]),
                     lanes: Vec::new(),
                     start: 0.0,
                     bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) },
                 Binding {
-                    instrument: "loop".into(),
+                    target: "loop".into(),
                     pattern: Pattern::steps([Some(1.0)]),
                     lanes: Vec::new(),
                     start: 0.0,
@@ -798,7 +901,7 @@ mod tests {
         let names: Vec<_> = pats
             .query(Span::new(5.0, 6.0))
             .iter()
-            .map(|e| e.instrument.clone())
+            .map(|e| e.target.label())
             .collect();
         assert_eq!(names, vec!["loop"]);
     }
@@ -818,7 +921,7 @@ mod tests {
     fn started(start: f64, bars: Option<f64>, span: Span) -> Vec<f64> {
         Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::steps([Some(1.0), Some(2.0)]),
                 lanes: Vec::new(),
                 start,
@@ -867,7 +970,7 @@ mod tests {
     fn an_offset_is_measured_from_the_downbeat() {
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::steps([Some(1.0)]),
                 lanes: Vec::new(),
                 start: 2.0,
@@ -890,7 +993,7 @@ mod tests {
         use crate::pattern::rate::Rate;
         Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::fast(Rate::accel(1.0, 3.0, 4.0), Pattern::steps([Some(1.0)])),
                 lanes: Vec::new(),
                 start,
@@ -971,7 +1074,7 @@ mod tests {
     fn offset_section(start: f64) -> Patterns {
         Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::fast(
                     Rate::Fixed(1.0 / 2.5),
                     Pattern::steps([Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0)]),
@@ -1024,7 +1127,7 @@ mod tests {
     fn a_plain_play_keeps_the_performances_grid() {
         let running = |origin: f64| Patterns {
             bindings: vec![Binding {
-                instrument: "i".into(),
+                target: "i".into(),
                 pattern: Pattern::fast(1.5, Pattern::steps([Some(1.0), Some(2.0)])),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -1108,7 +1211,7 @@ mod tests {
     /// One arm of a two-armed choice, sounding once per bar.
     fn arm(instrument: &str, group: usize, index: usize, period: f64) -> Binding {
         Binding {
-            instrument: instrument.into(),
+            target: instrument.into(),
             pattern: Pattern::steps([Some(1.0)]),
             lanes: Vec::new(),
             start: 0.0,
@@ -1133,7 +1236,7 @@ mod tests {
             .map(|i| {
                 let evs = pats.query(Span::new(i as f64, i as f64 + 1.0));
                 assert_eq!(evs.len(), 1, "exactly one arm sounds in bar {i}");
-                evs[0].instrument.clone()
+                evs[0].target.label()
             })
             .collect()
     }
@@ -1176,7 +1279,7 @@ mod tests {
         let mut whole: Vec<(f64, String)> = pats
             .query(Span::new(0.0, 24.0))
             .into_iter()
-            .map(|e| (e.event.begin, e.instrument))
+            .map(|e| (e.event.begin, e.target.label()))
             .collect();
         whole.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let whole: Vec<String> = whole.into_iter().map(|(_, i)| i).collect();
@@ -1188,7 +1291,7 @@ mod tests {
             let straddle = pats.query(Span::new(bar as f64 + 0.5, bar as f64 + 1.5));
             assert_eq!(straddle.len(), 1, "bar {bar} boundary");
             assert_eq!(
-                straddle[0].instrument, once[bar + 1],
+                straddle[0].target.label(), once[bar + 1],
                 "a window straddling bar {bar} drew a different arm"
             );
         }
@@ -1235,7 +1338,7 @@ mod tests {
     fn a_repeating_window_reopens_every_period() {
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "a".into(),
+                target: "a".into(),
                 pattern: Pattern::steps([Some(1.0)]),
                 lanes: Vec::new(),
                 start: 0.0,
@@ -1261,7 +1364,7 @@ mod tests {
     fn a_repeating_window_does_not_open_before_its_start() {
         let pats = Patterns {
             bindings: vec![Binding {
-                instrument: "a".into(),
+                target: "a".into(),
                 pattern: Pattern::steps([Some(1.0)]),
                 lanes: Vec::new(),
                 start: 3.0,

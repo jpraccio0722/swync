@@ -52,6 +52,18 @@ pub struct Lowerer {
     /// `None` outside a sequence, and that is what keeps an octave-less note an
     /// error everywhere else rather than a silent pitch.
     pub octave: Option<i32>,
+    /// Things worth saying about a program that still ran.
+    ///
+    /// Collected rather than returned because a warning is not a refusal:
+    /// lowering carries on past one, and every other way out of here is a
+    /// `Result` whose `Err` stops the eval. Plain strings, like every other
+    /// message the lowerer makes — `run_code` is what turns them into
+    /// `Diagnostic`s, in the same breath as it does for the failures.
+    ///
+    /// `midiout` is so far the only thing that raises one, and the reason is
+    /// its whole design: a program names the port it plays to, and a port that
+    /// is not plugged in tonight must not stop the program compiling.
+    pub warnings: Vec<String>,
 }
 
 /// One eval produces two artifacts: the persistent graph, which is crossfaded
@@ -60,6 +72,9 @@ pub struct Lowered {
     pub graph: SwyncGraph,
     pub bindings: Vec<Binding>,
     pub choices: Vec<ChoiceGroup>,
+    /// What lowering had to say about a program it did not refuse. Empty for
+    /// almost every program — see [`Lowerer::warnings`].
+    pub warnings: Vec<String>,
 }
 
 /// A fresh RNG for one eval.
@@ -170,6 +185,7 @@ fn lower_inner(
         choices: Vec::new(),
         meter,
         octave: None,
+        warnings: Vec::new(),
     };
 
     if let Some(dur) = dur {
@@ -197,7 +213,12 @@ fn lower_inner(
         lw.item(item)?;
     }
 
-    Ok(Lowered { graph: lw.graph, bindings: lw.bindings, choices: lw.choices })
+    Ok(Lowered {
+        graph: lw.graph,
+        bindings: lw.bindings,
+        choices: lw.choices,
+        warnings: lw.warnings,
+    })
 }
 
 /// Lower a program that is only expected to produce a graph.

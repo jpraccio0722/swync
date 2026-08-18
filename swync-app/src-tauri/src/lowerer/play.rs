@@ -20,7 +20,7 @@ use crate::swync_graph::environment::{Item, Length, Value};
 use crate::lowerer::lower::Lowerer;
 use crate::parser::parser::{Arg, Expr, Ident};
 use crate::pattern::pattern::{Pattern, Slot, Step, UNIT};
-use crate::pattern::patterns::{Binding, Lane, LaneValues, RESERVED};
+use crate::pattern::patterns::{Binding, Lane, LaneValues, Target, MIDI_LANES, RESERVED};
 use crate::pattern::rate::Rate;
 use crate::scheduler::clock::Meter;
 
@@ -109,17 +109,33 @@ impl Lowerer {
             }
         };
 
-        let Some((instrument_expr, tail)) = rest.split_first() else {
+        let Some((target_expr, tail)) = rest.split_first() else {
             return Err(format!("{name} expects an instrument name"));
         };
 
-        let Expr::Var(Ident(instrument)) = instrument_expr else {
-            return Err(format!("{name}: the instrument must be a plain function name"));
+        // Two things can play a pattern, and they are told apart here because
+        // this is the last moment the *syntax* is still in hand. An instrument
+        // has to be a bare name — `Binding` stores a name and a
+        // `Value::Function` has already lost it — while `midiout(..)` is a
+        // call, so it is evaluated like any other expression and the two never
+        // compete for the same shape.
+        let (target, def) = match target_expr {
+            Expr::Var(Ident(instrument)) => {
+                let Some(Value::Function(def)) = self.env.lookup(instrument) else {
+                    return Err(format!("{name}: {instrument} is not a function"));
+                };
+                (Target::Instrument(instrument.clone()), Some(def))
+            }
+            _ => match self.expr(target_expr)? {
+                Value::Destination(destination) => (Target::Midi(destination), None),
+                _ => return Err(format!(
+                    "{name}: the instrument must be a plain function name, or a \
+                     `midiout(..)` to send the pattern out as MIDI")),
+            },
         };
-
-        let Some(Value::Function(def)) = self.env.lookup(instrument) else {
-            return Err(format!("{name}: {instrument} is not a function"));
-        };
+        // Only for the messages below, which name what is being played in
+        // order to say what is wrong with it.
+        let instrument = &target.label();
 
         // `playn` takes its count where the others take their rate, so it comes
         // off the front of the tail and everything after it lines up again.
@@ -173,23 +189,39 @@ impl Lowerer {
         let mut lanes = Vec::with_capacity(named.len());
         for arg in named {
             let lane = arg.name.as_ref().expect("partitioned on name").0.clone();
-            match RESERVED.iter().find(|(reserved, _)| *reserved == lane) {
-                // A reserved lane is never passed on, so the instrument must
-                // not be expecting it under that name.
-                Some((_, effect)) => {
-                    if def.params.iter().any(|p| p.name.0 == lane) {
+            match &def {
+                // Sending MIDI, where there is no instrument for a lane to
+                // reach and so nothing but the fixed set means anything. A
+                // name outside it is refused here rather than ignored: a
+                // misspelled `vel` that was quietly dropped would be a
+                // dynamic nobody could find by reading the program.
+                None => {
+                    if !MIDI_LANES.iter().any(|(known, _)| *known == lane) {
+                        let known: Vec<&str> =
+                            MIDI_LANES.iter().map(|(known, _)| *known).collect();
                         return Err(format!(
-                            "{name}: '{lane}' {effect}, so {instrument} cannot take a \
-                             parameter of that name"));
+                            "{name}: {instrument} sends MIDI, which has no parameter \
+                             named '{lane}' — only {}", known.join(", ")));
                     }
                 }
-                None => match def.params.iter().position(|p| p.name.0 == lane) {
-                    None => return Err(format!(
-                        "{name}: {instrument} has no parameter named '{lane}'")),
-                    Some(0) => return Err(format!(
-                        "{name}: '{lane}' is {instrument}'s first parameter, which the \
-                         pattern itself fills")),
-                    Some(_) => {}
+                Some(def) => match RESERVED.iter().find(|(reserved, _)| *reserved == lane) {
+                    // A reserved lane is never passed on, so the instrument must
+                    // not be expecting it under that name.
+                    Some((_, effect)) => {
+                        if def.params.iter().any(|p| p.name.0 == lane) {
+                            return Err(format!(
+                                "{name}: '{lane}' {effect}, so {instrument} cannot take a \
+                                 parameter of that name"));
+                        }
+                    }
+                    None => match def.params.iter().position(|p| p.name.0 == lane) {
+                        None => return Err(format!(
+                            "{name}: {instrument} has no parameter named '{lane}'")),
+                        Some(0) => return Err(format!(
+                            "{name}: '{lane}' is {instrument}'s first parameter, which the \
+                             pattern itself fills")),
+                        Some(_) => {}
+                    },
                 },
             }
             if lanes.iter().any(|l: &Lane| l.name == lane) {
@@ -203,7 +235,12 @@ impl Lowerer {
             // what the note is handed. Settled before the pattern conversion
             // below, which would read the same brackets as steps.
             if let Some(lists) = lane_lists(&value) {
-                if let Some((_, effect)) = RESERVED.iter().find(|(r, _)| *r == lane) {
+                let one_number = RESERVED.iter().chain(if def.is_none() {
+                    MIDI_LANES.as_slice()
+                } else {
+                    [].as_slice()
+                });
+                if let Some((_, effect)) = one_number.into_iter().find(|(r, _)| *r == lane) {
                     return Err(format!(
                         "{name}: '{lane}' {effect}, which is one number — a quoted \
                          list has nothing to say there"));
@@ -227,8 +264,11 @@ impl Lowerer {
         }
 
         // Every parameter the pattern and lanes leave unfilled has to have a
-        // default, or the instrument cannot be called at all.
-        for param in def.params.iter().skip(1) {
+        // default, or the instrument cannot be called at all. A destination
+        // has no parameters to leave unfilled — every one of its lanes has a
+        // default, because gear that was sent no velocity still has to be
+        // sent something.
+        for param in def.iter().flat_map(|d| d.params.iter().skip(1)) {
             let filled = lanes.iter().any(|l| l.name == param.name.0);
             if !filled && param.default.is_none() {
                 return Err(format!(
@@ -263,7 +303,7 @@ impl Lowerer {
         let start = self.play_start;
         let first = self.bindings.len();
         self.bindings.push(Binding {
-            instrument: instrument.clone(),
+            target,
             pattern,
             lanes,
             start,
@@ -572,6 +612,10 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
         Value::Rate(_) => Err(
             "a pattern cannot contain a rate — `accel` says how fast a pattern runs, \
              so it belongs in `play`'s rate rather than among its steps".to_string()),
+        Value::Destination(_) => Err(
+            "a pattern cannot contain a MIDI destination — `midiout(..)` says where the \
+             notes go, so it belongs where the instrument goes rather than among the \
+             steps".to_string()),
         Value::EnumType(def) => Err(format!(
             "`{}` is an enum rather than a step. Name one of its members — \
              `{}.{}` — if one of them is what should sound here",
@@ -718,6 +762,9 @@ fn enum_not_a_step(v: &Value) -> String {
 fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
     match v {
         Value::Number(n) => Ok(Step::Value(*n)),
+        Value::Destination(_) => Err(
+            "a MIDI destination is not a step — `midiout(..)` goes where the \
+             instrument goes, not in the pattern".into()),
         Value::Rest => Ok(Step::Rest),
         // A trigger sounds but carries nothing; instruments that take an
         // argument see 1.

@@ -46,7 +46,11 @@ export type ValueKind =
   /** A list marked to be passed whole, from `'` or `list`. Only a `play` lane
    *  takes one, and it takes plain numbers there too — so like `rate`, this is
    *  only ever a result and a dot after one has nothing to offer. */
-  | "lane";
+  | "lane"
+  /** Gear to send notes to, from `midiout`. Only `play`'s instrument slot
+   *  accepts one, and it accepts a `fn` there too — so like `rate` and `lane`,
+   *  this is only ever a result and a dot after one has nothing to offer. */
+  | "destination";
 
 export interface Builtin {
   name: string;

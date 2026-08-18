@@ -17,6 +17,11 @@ impl Lowerer {
         if Lowerer::is_load(&func.0) {
             return self.load(args, piped);
         }
+        // And `midiout`, which reads a port's name off the syntax for exactly
+        // the reason `load` reads a path off it.
+        if Lowerer::is_midiout(&func.0) {
+            return self.midiout(args, piped);
+        }
 
         // And the arrangement combinators, for a reason of the same shape: a
         // section has to be lowered where it is *placed*, with `play_start`

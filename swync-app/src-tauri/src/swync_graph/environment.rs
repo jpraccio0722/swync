@@ -37,6 +37,14 @@ pub enum Value {
     /// That is also why the items are checked to be numbers here, at the quote,
     /// rather than being discovered to be something else one note at a time.
     Quoted(Rc<Vec<f64>>),
+    /// Where a pattern's notes are being sent, as `midiout` answers with it.
+    ///
+    /// Opaque, like a [`Buffer`](Value::Buffer): nothing may be done with one
+    /// except hand it to a `play` in the slot an instrument would otherwise
+    /// fill. It carries the port as it was *written* rather than as it
+    /// resolved, because which ports exist is a fact about tonight and the
+    /// value may outlive an unplugging — see `midi::out::Destination`.
+    Destination(crate::midi::out::Destination),
     /// A loaded audio file, as `load` answers with it. Not a signal — nothing
     /// comes out of a buffer until `sample` reads it at a position.
     Buffer(Arc<Wave>),

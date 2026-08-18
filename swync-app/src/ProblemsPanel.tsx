@@ -41,7 +41,8 @@ function Problem({
   diagnostic: Diagnostic;
   onReveal: (diagnostic: Diagnostic) => void;
 }) {
-  const { stage, message, line, column, snippet, file } = diagnostic;
+  const { stage, severity, message, line, column, snippet, file } = diagnostic;
+  const warning = severity === "warning";
   // A position in an imported file is still somewhere to go: the click opens
   // that file rather than moving within this one.
   const locatable = line !== null;
@@ -49,8 +50,16 @@ function Problem({
   const body = (
     <>
       <div className="flex items-baseline gap-2">
-        <span className="rounded bg-red-950 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-300">
-          {STAGE_LABEL[stage]}
+        {/* A warning wears the same badge in amber rather than a badge of its
+            own: what it is about — which pass, which file, which line — is the
+            same thing, and the only difference worth drawing is that the run
+            happened anyway. */}
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+            warning ? "bg-amber-950 text-amber-300" : "bg-red-950 text-red-300"
+          }`}
+        >
+          {warning ? "warning" : STAGE_LABEL[stage]}
         </span>
         {/* Only imported files are named. An unnamed diagnostic is in the file
             that was run, which the panel already says at the top. */}
@@ -147,7 +156,7 @@ export function ProblemsPanel({
       )}
       {diagnostics.map((diagnostic, i) => (
         <Problem
-          key={`${diagnostic.stage}-${diagnostic.line}-${i}`}
+          key={`${diagnostic.stage}-${diagnostic.severity}-${diagnostic.line}-${i}`}
           diagnostic={diagnostic}
           onReveal={onReveal}
         />
