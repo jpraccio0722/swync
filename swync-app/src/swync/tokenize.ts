@@ -291,7 +291,7 @@ export function swyncTokenizer(
       // has no more to do with the `chorus` UGen than it does with a pitch.
       if (state.expectMember && atMemberDepth(state)) {
         state.expectMember = false;
-        return "swyncEnum";
+        return "swyncEnumMember";
       }
       if (keywords.has(name)) {
         // Both introduce a name of their own, so both colour the word after
@@ -300,14 +300,16 @@ export function swyncTokenizer(
         state.defining = name === "fn" || name === "enum" ? name : null;
         return "keyword";
       }
-      // The two halves of `Scale.major`, coloured alike because they are one
-      // reference: the member is reached through the enum and nowhere else, so
-      // reading either on its own says less than reading the pair.
+      // The two halves of `Scale.major`, told apart because they are read for
+      // different things. The enum names where to look and is the same word on
+      // every line that reaches into it; the member is which one, and is the
+      // half a reader is actually scanning for. Colouring them alike made the
+      // pair one shape to find and then gave no help inside it.
       //
       // Ahead of every other reading, and that ordering is the point — a member
       // may be spelled like anything at all. `Kit.bell` is not the `bell`
       // filter, and `Scale.e` is not the eighth note.
-      if (member) return "swyncEnum";
+      if (member) return "swyncEnumMember";
       if (state.enums.includes(name)) {
         state.receiver = true;
         return "swyncEnum";

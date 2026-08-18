@@ -41,13 +41,20 @@ export const noteTag = Tag.define();
  *  apart from both notes and variables: rhythm is the other thing you scan a
  *  pattern for, and it is read in a different place from pitch. */
 export const durationTag = Tag.define();
-/** An enum where it is used: both `Scale` and `major` in `Scale.major`.
+/** An enum's own name where it is used: the `Scale` of `Scale.major`.
  *
- *  One tag for the pair rather than two, because they are one reference — a
- *  member is reached through its enum and nowhere else, and colouring the
- *  halves apart would split a thing that is read whole. The declaration keeps
- *  `def`, exactly as a `fn` does: defined in one colour, used in another. */
+ *  The declaration keeps `def`, exactly as a `fn` does: defined in one colour,
+ *  used in another. */
 export const enumTag = Tag.define();
+/** A member: the `major` of `Scale.major`, and each name inside the braces
+ *  where the enum is declared.
+ *
+ *  Tagged apart from the enum itself because the two are read for different
+ *  things. The enum names where to look, and is the same word on every line
+ *  that reaches into it; the member is which one, and is what the eye is
+ *  actually hunting for in `61.scale(Scale.major)`. One colour for the pair
+ *  made it a single shape to find and then offered nothing inside it. */
+export const enumMemberTag = Tag.define();
 
 function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<TokenizerState> {
   return {
@@ -79,6 +86,7 @@ function parser(meta: LanguageMetadata, index: BuiltinIndex): StreamParser<Token
       swyncNote: noteTag,
       swyncDuration: durationTag,
       swyncEnum: enumTag,
+      swyncEnumMember: enumMemberTag,
       swyncRest: restTag,
       swyncTrigger: triggerTag,
       swyncQuote: quoteTag,
@@ -110,12 +118,20 @@ export const swyncHighlightStyle = HighlightStyle.define([
   { tag: t.function(t.variableName), color: "#93c5fd" },
   { tag: t.definition(t.variableName), color: "#fcd34d" },
   { tag: t.variableName, color: "#e5e7eb" },
-  // Indigo: the one clear gap left in the palette, between the paler blue that
-  // functions take and the purple of the keywords. Deliberately outside the
-  // pattern colours — rose, amber, orange, green, cyan — which have to stay
-  // maximally separable from each other inside a dense bar. An enum member
-  // cannot appear in a pattern at all, so it never has to compete with them.
+  // Indigo for the enum, between the paler blue that functions take and the
+  // purple of the keywords. Deliberately outside the pattern colours — rose,
+  // amber, orange, green, cyan — which have to stay maximally separable from
+  // each other inside a dense bar. An enum cannot appear in a pattern at all,
+  // so it never has to compete with them.
   { tag: enumTag, color: "#818cf8" },
+  // Sky for the member, two steps round the wheel from the indigo rather than
+  // one: neighbouring hues are not far enough apart to read as different in
+  // `Scale.major`, where the two words touch. It is close to the blue a
+  // function takes, and that is the one pair here allowed to be close — a
+  // function name is followed by `(` and a member never is, so the two never
+  // stand in the same position. What it must not be is anything near the amber
+  // `def`, since a declaration puts those two side by side: `enum Scale {`.
+  { tag: enumMemberTag, color: "#7dd3fc" },
   // Warm for silence, cool-bright for a hit: the pair has to be separable at
   // a glance inside a dense pattern like `[\, `, \, [\, \]]`.
   { tag: restTag, color: "#fb923c", fontWeight: "bold" },
