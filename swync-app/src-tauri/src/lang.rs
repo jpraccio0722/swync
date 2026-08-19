@@ -2413,6 +2413,13 @@ mod receives_tests {
     /// the bug this field exists to prevent.
     #[test]
     fn every_builtin_receives_what_it_declares() {
+        // Every name in the table gets called, and four of them — `midiin`,
+        // `cc`, `bend`, `aftertouch` — intern a MIDI port when they lower. That
+        // is a slot taken out of a table the whole process shares, so this
+        // holds the same guard the MIDI tests do: without it these two leak a
+        // slot into whichever keyboard test happens to be running beside them,
+        // and it is that test which fails.
+        let _bus = crate::midi::input::exclusive();
         for Entry { name, params, method_arity, receives, .. } in callables() {
             if receives == ValueKind::Nothing {
                 continue;
@@ -2490,6 +2497,13 @@ mod receives_tests {
     /// this field to tell it.
     #[test]
     fn every_builtin_returns_what_it_declares() {
+        // Every name in the table gets called, and four of them — `midiin`,
+        // `cc`, `bend`, `aftertouch` — intern a MIDI port when they lower. That
+        // is a slot taken out of a table the whole process shares, so this
+        // holds the same guard the MIDI tests do: without it these two leak a
+        // slot into whichever keyboard test happens to be running beside them,
+        // and it is that test which fails.
+        let _bus = crate::midi::input::exclusive();
         for Entry { name, params, arity, callable, returns, .. } in callables() {
             // `Any` is the honest answer where the result follows the input;
             // there is nothing single-valued to check it against. A name that

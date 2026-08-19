@@ -292,7 +292,13 @@ Opening is a separate step, `ensure_open`, taken only by `run_code`.
 
 Slots are finite (`MAX_PORTS`) and never released, which is right for a program
 and wrong for a suite — so `midi::input::exclusive()` clears the table as well
-as taking the lock. That is why the guard and the reset are one function.
+as taking the lock. That is why the guard and the reset are one function. **Any
+test that lowers a program naming a MIDI port has to hold it**, including tests
+that are not about MIDI at all: `lang`'s two `receives_tests` call every name in
+the table, four of which intern. Forgetting it does not fail the test that
+forgot — it leaks a slot into whatever is running beside it — so `slot_for`
+asserts the guard is held rather than leaving that to be noticed. A run with
+`--test-threads=1` names any offender outright.
 
 **Smoothing is in the node, not the bus.** The bus holds what arrived, which is
 the truth; each read site decides what to do between arrivals. Ten
