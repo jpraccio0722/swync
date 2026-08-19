@@ -45,6 +45,19 @@ pub enum Value {
     /// resolved, because which ports exist is a fact about tonight and the
     /// value may outlive an unplugging — see `midi::out::Destination`.
     Destination(crate::midi::out::Destination),
+    /// Notes arriving from outside, as `midiin` answers with them.
+    ///
+    /// The mirror of [`Destination`](Value::Destination), and it goes in the
+    /// slot the other one does not: a destination is what *plays* a pattern,
+    /// and a source is the pattern itself. So `play(midiin("keys"), lead)`
+    /// reads as what it is, and the method form `midiin("keys").play(lead)`
+    /// falls out of it — `a.f(b)` is `f(a, b)`, and nothing had to be added
+    /// for that.
+    ///
+    /// It carries the slot rather than the port as written, because unlike a
+    /// destination there is nothing left to resolve: a slot is handed out at
+    /// lowering time and is fixed for the life of the process.
+    Source(crate::swync_graph::environment::Source),
     /// A loaded audio file, as `load` answers with it. Not a signal — nothing
     /// comes out of a buffer until `sample` reads it at a position.
     Buffer(Arc<Wave>),
@@ -127,6 +140,18 @@ pub enum Value {
         chain_first: usize,
         template: Option<usize>,
     },
+}
+
+/// A keyboard, as `midiin` names one.
+///
+/// Plain numbers, because this ends up inside a `Binding` and crosses to the
+/// scheduler thread.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Source {
+    /// Which port, as `midi::input` interned it.
+    pub slot: usize,
+    /// `None` is every channel, which is what a keyboard on its own means.
+    pub channel: Option<u8>,
 }
 
 /// What a `;` said, which is one of two different things.

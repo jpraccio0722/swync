@@ -2204,6 +2204,80 @@
       "doc": "Read an audio file into a buffer: `let amen = load(\"breaks/amen.wav\")`. The path is relative to the file it is written in. Any format symphonia reads: wav, mp3, flac, ogg."
     },
     {
+      "name": "midiin",
+      "params": [
+        "device",
+        "channel"
+      ],
+      "arities": [
+        1,
+        2
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "number",
+      "returns": "source",
+      "doc": "A keyboard to play, in place of a pattern: `play(midiin(\"keystation\"), lead)`, or `midiin(\"keystation\").play(lead)`. The device is a port's name — matched on any part of it, ignoring case — or its number in the settings panel's list. `channel` is 1-16 and defaults to every channel, which is what a keyboard on its own means. A note arrives as its MIDI note number, the same thing a pattern step carries. An instrument that declares a `vel` parameter is given the velocity, 0 to 1. A keyboard has no length, so it takes neither a rate nor `play_once`/`playn`."
+    },
+    {
+      "name": "cc",
+      "params": [
+        "device",
+        "number",
+        "channel",
+        "lo",
+        "hi"
+      ],
+      "arities": [
+        2,
+        3,
+        5
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "number",
+      "returns": "signal",
+      "doc": "One controller — a knob, a wheel, a pedal — as a signal: `cc(\"push\", 74)` is 0 to 1. `channel` is 1-16 and defaults to 1. Give a range to map it straight onto something: `cc(\"push\", 74, 1, 200, 5000)` is a filter cutoff. Smoothed over a few milliseconds, because seven bits wired to a cutoff zippers. Zero until the controller first moves, and silent when the port is not connected."
+    },
+    {
+      "name": "bend",
+      "params": [
+        "device",
+        "channel",
+        "lo",
+        "hi"
+      ],
+      "arities": [
+        1,
+        2,
+        4
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "number",
+      "returns": "signal",
+      "doc": "The pitch wheel as a signal, -1 to 1 with the wheel at rest reading 0 — so `note + bend(\"keys\", 1, -2, 2)` bends two semitones either way. Give a range to change that. Smoothed like `cc`."
+    },
+    {
+      "name": "aftertouch",
+      "params": [
+        "device",
+        "channel",
+        "lo",
+        "hi"
+      ],
+      "arities": [
+        1,
+        2,
+        4
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "number",
+      "returns": "signal",
+      "doc": "Channel pressure — how hard the keys are being leant on — as a signal, 0 to 1. Give a range to map it. Smoothed like `cc`. Zero on a keyboard that does not send it."
+    },
+    {
       "name": "midiout",
       "params": [
         "device",

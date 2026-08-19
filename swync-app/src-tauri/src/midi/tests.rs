@@ -180,3 +180,63 @@ fn a_note_reaches_a_real_port() {
     assert_eq!(got[0], vec![0x90, 60, 100], "note on, channel 1");
     assert_eq!(got[1], vec![0x80, 60, 0], "note off, channel 1");
 }
+
+
+/// The input half's one thing no fixture can show: that a message put on a
+/// real wire reaches the bus, as the right value, through the real callback.
+///
+/// The mirror of `a_note_reaches_a_real_port`, and ignored for the same
+/// reason — everything else about MIDI in is tested against `receive` called
+/// directly, because a suite that needed hardware would not run.
+///
+///     cargo test the_bus_hears_a_real_port -- --ignored --nocapture
+///
+/// Needs the same loopback bus, and here it is doing both jobs at once: the
+/// test opens it as an *output*, sends, and the bus reads it back as an
+/// *input*. Skipped rather than failed when there is none.
+#[test]
+#[ignore = "needs a loopback MIDI port; run it by name when the wire is in doubt"]
+fn the_bus_hears_a_real_port() {
+    use std::time::{Duration, Instant};
+    use crate::midi::input::{bus, exclusive, slot_for};
+    use midir::MidiOutput;
+
+    const LOOPBACK: &str = "IAC Driver Bus 1";
+    let _held = exclusive();
+
+    let midi = MidiOutput::new("swync test").expect("a MIDI client");
+    let Some(port) = midi.ports().into_iter().find(|p| {
+        midi.port_name(p).is_ok_and(|n| n == LOOPBACK)
+    }) else {
+        println!("no {LOOPBACK} on this machine — nothing was tested");
+        return;
+    };
+    let mut sending = midi.connect(&port, "swync test").expect("the loopback should open");
+
+    // The real path: intern the port, then open it exactly as an eval does.
+    let slot = slot_for(&Selector::Name("iac driver bus 1".into())).expect("a slot");
+    let missing = crate::midi::input::ensure_open();
+    assert!(missing.is_empty(), "the loopback should have opened: {missing:?}");
+
+    // Controller 74 hard over, on channel 1.
+    sending.send(&[0xB0, 74, 127]).expect("send");
+    // And a note, which takes the other road entirely.
+    sending.send(&[0x90, 60, 100]).expect("send");
+
+    // The callback is on midir's thread, so this is the one place a wait is
+    // honest — everything else here is called directly.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut notes = Vec::new();
+    while notes.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        notes = bus().take_notes();
+    }
+
+    println!("controller 74 read back as {}", bus().controller(slot, 1, 74));
+    println!("notes: {notes:?}");
+    assert_eq!(bus().controller(slot, 1, 74), 1.0, "the knob should be hard over");
+    assert_eq!(notes.len(), 1, "expected one note");
+    assert_eq!(notes[0].note, 60);
+    assert!(notes[0].on);
+    assert!((notes[0].velocity - 100.0 / 127.0).abs() < 1e-6);
+}

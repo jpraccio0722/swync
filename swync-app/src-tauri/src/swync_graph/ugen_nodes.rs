@@ -8,7 +8,9 @@ pub struct NodeId(pub usize);
 pub enum NodeKind {
     Add, ADSR, Afollow, Allpass, Allpole,
     Bandpass, Bandrez, Bell, Biquad, Brown, Butterpass,
-    Chorus, Clip, ClipTo,
+    Aftertouch,
+    Bend,
+    Cc, Chorus, Clip, ClipTo,
     Dcblock, Declick, Delay, Div, DsfSaw, DsfSquare,
     Env,
     Fir3, Follow,

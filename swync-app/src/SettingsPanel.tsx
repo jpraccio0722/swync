@@ -395,6 +395,39 @@ export function SettingsPanel({
         </div>
 
         <div className="mt-4">
+          <label className="text-xs text-neutral-400">Inputs</label>
+          {midi === null ? (
+            <p className="mt-1 text-[11px] text-neutral-600">Looking…</p>
+          ) : midi.inputs.length === 0 ? (
+            <p className="mt-1 text-[11px] leading-snug text-neutral-500">
+              Nothing to read from. Plug in a keyboard or a control surface.
+            </p>
+          ) : (
+            <ul className="mt-1 space-y-0.5">
+              {midi.inputs.map((port) => (
+                <li key={port.number} className="flex items-baseline gap-2">
+                  <span className="w-4 shrink-0 text-right font-mono text-[11px] text-neutral-500">
+                    {port.number}
+                  </span>
+                  <span className="break-all font-mono text-[11px] leading-snug text-neutral-300">
+                    {port.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+            Play one:{" "}
+            <span className="font-mono text-neutral-400">
+              play(midiin("{midi?.inputs[0]?.name.split(" ")[0].toLowerCase() ?? "keys"}"), lead)
+            </span>
+            . Read a knob:{" "}
+            <span className="font-mono text-neutral-400">cc("push", 74)</span>.
+            These are offered in the editor too.
+          </p>
+        </div>
+
+        <div className="mt-4">
           <label htmlFor="midi-offset" className="text-xs text-neutral-400">
             Send offset
           </label>
@@ -417,8 +450,8 @@ export function SettingsPanel({
             </span>
           </div>
           <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
-            Lines external gear up with what you hear. Nothing can work this
-            out for you — it is the converter, the driver and whatever is at
+            Lines gear you are <em>sending</em> to up with what you hear.
+            Nothing can work this out for you — it is the converter, the driver and whatever is at
             the far end of the cable — so set it by ear against a sound the app
             is making itself.
           </p>

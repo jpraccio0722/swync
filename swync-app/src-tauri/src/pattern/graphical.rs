@@ -389,7 +389,7 @@ mod tests {
         let lowered = lower(&items).expect("and lower");
 
         assert_eq!(
-            lowered.bindings[0].pattern,
+            lowered.bindings[0].source.pattern().cloned().expect("a written pattern"),
             Pattern::seq(vec![Step::Value(60.0), Step::Rest, Step::Value(1.0)]),
         );
     }
@@ -533,7 +533,7 @@ mod tests {
             .expect("should parse");
         let lowered = lower(&items).expect("should lower");
         assert_eq!(
-            lowered.bindings[0].pattern,
+            lowered.bindings[0].source.pattern().cloned().expect("a written pattern"),
             Pattern::seq(vec![Step::Value(1.0), Step::Value(54.0), Step::Rest]),
         );
     }
@@ -585,7 +585,7 @@ mod length_tests {
         let src = "fn tone(n) = sin(n)\nlet riff = [c4;3, e4]\nplay(riff, tone)\n";
         let items = parse(src.to_string()).expect("should parse");
         let lowered = lower(&items).expect("should lower");
-        let Pattern::Steps(slots) = &lowered.bindings[0].pattern else {
+        let Pattern::Steps(slots) = &lowered.bindings[0].source.pattern().cloned().expect("a written pattern") else {
             panic!("expected a sequence");
         };
         assert_eq!(slots[0].length, 3.0);
@@ -649,7 +649,7 @@ mod composer_format_tests {
         let items = parse(format!("fn tone(n) = sin(n)\n{src}\nplay(riff, tone)\n"))
             .expect("should parse");
         let lowered = lower(&items).expect("should lower");
-        let Pattern::Steps(slots) = &lowered.bindings[0].pattern else {
+        let Pattern::Steps(slots) = &lowered.bindings[0].source.pattern().cloned().expect("a written pattern") else {
             panic!("expected a sequence");
         };
         assert_eq!(slots[0].length, 3.0);

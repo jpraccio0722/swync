@@ -81,6 +81,9 @@ pub enum ValueKind {
     /// `Lane`, this is what a name answers with rather than something anything
     /// receives.
     Destination,
+    /// A keyboard to play, from `midiin`. The mirror of `Destination`, in
+    /// `play`'s other slot, and only ever a result for the same reason.
+    Source,
 }
 
 /// A UGen builtin: a name that lowers to a graph node.
@@ -1419,6 +1422,42 @@ pub static SPECIALS: &[ListBuiltin] = &[
         doc: "Read an audio file into a buffer: `let amen = load(\"breaks/amen.wav\")`. The path is relative to the file it is written in. Any format symphonia reads: wav, mp3, flac, ogg.",
     },
     ListBuiltin {
+        name: "midiin",
+        params: &["device", "channel"],
+        arities: &[1, 2],
+        variadic: false,
+        receives: ValueKind::Number,
+        returns: ValueKind::Source,
+        doc: "A keyboard to play, in place of a pattern: `play(midiin(\"keystation\"), lead)`, or `midiin(\"keystation\").play(lead)`. The device is a port's name — matched on any part of it, ignoring case — or its number in the settings panel's list. `channel` is 1-16 and defaults to every channel, which is what a keyboard on its own means. A note arrives as its MIDI note number, the same thing a pattern step carries. An instrument that declares a `vel` parameter is given the velocity, 0 to 1. A keyboard has no length, so it takes neither a rate nor `play_once`/`playn`.",
+    },
+    ListBuiltin {
+        name: "cc",
+        params: &["device", "number", "channel", "lo", "hi"],
+        arities: &[2, 3, 5],
+        variadic: false,
+        receives: ValueKind::Number,
+        returns: ValueKind::Signal,
+        doc: "One controller — a knob, a wheel, a pedal — as a signal: `cc(\"push\", 74)` is 0 to 1. `channel` is 1-16 and defaults to 1. Give a range to map it straight onto something: `cc(\"push\", 74, 1, 200, 5000)` is a filter cutoff. Smoothed over a few milliseconds, because seven bits wired to a cutoff zippers. Zero until the controller first moves, and silent when the port is not connected.",
+    },
+    ListBuiltin {
+        name: "bend",
+        params: &["device", "channel", "lo", "hi"],
+        arities: &[1, 2, 4],
+        variadic: false,
+        receives: ValueKind::Number,
+        returns: ValueKind::Signal,
+        doc: "The pitch wheel as a signal, -1 to 1 with the wheel at rest reading 0 — so `note + bend(\"keys\", 1, -2, 2)` bends two semitones either way. Give a range to change that. Smoothed like `cc`.",
+    },
+    ListBuiltin {
+        name: "aftertouch",
+        params: &["device", "channel", "lo", "hi"],
+        arities: &[1, 2, 4],
+        variadic: false,
+        receives: ValueKind::Number,
+        returns: ValueKind::Signal,
+        doc: "Channel pressure — how hard the keys are being leant on — as a signal, 0 to 1. Give a range to map it. Smoothed like `cc`. Zero on a keyboard that does not send it.",
+    },
+    ListBuiltin {
         name: "midiout",
         params: &["device", "channel"],
         arities: &[1, 2],
@@ -2040,13 +2079,15 @@ mod tests {
         const BOUND: [&str; 3] = ["dur", "qvs", "qvh"];
         for b in SPECIALS {
             // Everything else is intercepted somewhere: the `play` family,
-            // `then`, `play_all`, `load`, `midiout`, `accel`, and the three
-            // that begin from a buffer.
+            // `then`, `play_all`, `load`, the four MIDI names, `accel`, and
+            // the three that begin from a buffer.
             let intercepted = Lowerer::is_play(b.name)
                 || Lowerer::is_section(b.name)
                 || Lowerer::is_play_all(b.name)
                 || Lowerer::is_load(b.name)
                 || Lowerer::is_midiout(b.name)
+                || Lowerer::is_midiin(b.name)
+                || Lowerer::is_midi_control(b.name)
                 || Lowerer::is_buffer_builtin(b.name)
                 || Lowerer::is_rate(b.name);
             assert_eq!(
@@ -2241,8 +2282,9 @@ mod receives_tests {
             // `play` and read nowhere else, so nothing chains off one.
             ValueKind::Lane => false,
             // And the same again: a destination is written into a `play`'s
-            // instrument slot, which is not the receiver position.
-            ValueKind::Destination => false,
+            // instrument slot, and a source into its pattern slot. Neither is
+            // the receiver position.
+            ValueKind::Destination | ValueKind::Source => false,
             ValueKind::Nothing => false,
         }
     }
@@ -2459,7 +2501,10 @@ mod receives_tests {
             // receivers, so no probe could name any of them — and that is the
             // property worth pinning: nothing at all may follow one, so the
             // editor offering anything after the dot would be wrong.
-            if matches!(returns, ValueKind::Rate | ValueKind::Lane | ValueKind::Destination) {
+            if matches!(
+                returns,
+                ValueKind::Rate | ValueKind::Lane | ValueKind::Destination | ValueKind::Source
+            ) {
                 assert!(
                     found.is_none(),
                     "{name} answers with a {returns:?}, so nothing should chain off \
