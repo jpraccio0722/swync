@@ -658,7 +658,7 @@ pub static LIST_BUILTINS: &[ListBuiltin] = &[
         variadic: true,
         receives: ValueKind::Number,
         returns: ValueKind::Lane,
-        doc: "Marks numbers as one value rather than a sequence: `play(riff, bzzz, div: list(2, 3))` gives every note both, where `div: [2, 3]` would give the first note 2 and the second 3. `'[2, 3]` is the same thing written short. Only a lane reads one.",
+        doc: "Marks numbers as one value rather than a sequence. A lane is read by note — the nth note takes the nth value, wrapping — so `div: [2, 3]` gives the first note 2 and the second 3, where `div: list(2, 3)` gives every note both. `'[2, 3]` is the same value written short. Only a lane reads one.",
     },
     ListBuiltin {
         name: "len",
