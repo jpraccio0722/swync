@@ -12,6 +12,7 @@
 //! the settings panel, which is the opposite of what an audio device does and
 //! is explained there.
 
+pub mod follow;
 pub mod input;
 pub mod out;
 pub mod ports;

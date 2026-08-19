@@ -33,6 +33,18 @@ export interface Settings {
    *  is correcting — none of which is knowable from here, which is why it is
    *  a control rather than a calculation. */
   midiOffsetMs: number;
+  /** The MIDI input whose clock the transport follows, by port name. Null is
+   *  swync's own clock. Here rather than in a project because whether you are
+   *  the slave tonight is about the rig, not the music — see `settings.rs`. */
+  midiClockSource: string | null;
+}
+
+/** How a followed clock is getting on, as `midi_clock_status` answers.
+ *  Mirrors `Status` in `midi/follow.rs`. */
+export interface ClockStatus {
+  status: "internal" | "locked" | "lost" | "missing";
+  /** The tempo arriving, when one is. */
+  bpm: number | null;
 }
 
 /** One MIDI port, as `midi_ports` reports it. */
@@ -108,6 +120,8 @@ interface SettingsPanelProps {
   formats: RecordingFormat[];
   /** What can be opened, and what is. Null until the backend has answered. */
   devices: AudioDevices | null;
+  /** How the followed clock is doing, polled while this panel is open. */
+  clock: ClockStatus | null;
   /** What MIDI there is to write to. Null until the backend has answered.
    *  Unlike the audio devices there is nothing here to *choose* — a port is
    *  named in the program — so this list is read rather than picked from. */
@@ -177,6 +191,7 @@ export function SettingsPanel({
   settings,
   onChange,
   midi,
+  clock,
   formats,
   devices,
   levels,
@@ -425,6 +440,67 @@ export function SettingsPanel({
             <span className="font-mono text-neutral-400">cc("push", 74)</span>.
             These are offered in the editor too.
           </p>
+        </div>
+
+        {/* Chosen here rather than named in a program, and that is the one
+            exception to how every other MIDI port works. Sending clock to a
+            synth is about the piece — its arps have to line up with the part
+            written for it — so `midiclock("deluge")` is in the program. But
+            whether *this* machine is the slave tonight is about the rig: the
+            same piece is master in the studio and slave when somebody else's
+            box is running the room. See `midi/follow.rs`. */}
+        <div className="mt-4">
+          <label htmlFor="midi-clock" className="text-xs text-neutral-400">
+            Follow clock
+          </label>
+          <select
+            id="midi-clock"
+            value={settings.midiClockSource ?? ""}
+            onChange={(e) =>
+              onChange({ ...settings, midiClockSource: e.target.value || null })
+            }
+            className="mt-1 w-full rounded-md bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+          >
+            <option value="">Internal — swync keeps its own time</option>
+            {midi?.inputs.map((port) => (
+              <option key={port.number} value={port.name}>
+                {port.name}
+              </option>
+            ))}
+            {/* A remembered port that is not plugged in tonight is kept in the
+                list rather than silently falling back to Internal, which would
+                lose the choice the next time anything was saved. */}
+            {settings.midiClockSource !== null &&
+              !midi?.inputs.some((p) => p.name === settings.midiClockSource) && (
+                <option value={settings.midiClockSource}>
+                  {settings.midiClockSource} (not connected)
+                </option>
+              )}
+          </select>
+          {clock !== null && settings.midiClockSource !== null && (
+            <p
+              className={`mt-1.5 text-[11px] leading-snug ${
+                clock.status === "locked" ? "text-neutral-500" : "text-amber-500/80"
+              }`}
+            >
+              {clock.status === "locked" ? (
+                <>
+                  Following at{" "}
+                  <span className="font-mono text-neutral-300">
+                    {clock.bpm?.toFixed(1) ?? "…"} bpm
+                  </span>
+                  . The tempo control is theirs while this is on.
+                </>
+              ) : clock.status === "missing" ? (
+                <>That port is not on this machine, so nothing is arriving.</>
+              ) : (
+                <>
+                  No clock arriving. Still playing at the tempo it last saw —
+                  silence would be worse — but it is no longer in sync.
+                </>
+              )}
+            </p>
+          )}
         </div>
 
         <div className="mt-4">

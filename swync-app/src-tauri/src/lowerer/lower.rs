@@ -64,6 +64,9 @@ pub struct Lowerer {
     /// its whole design: a program names the port it plays to, and a port that
     /// is not plugged in tonight must not stop the program compiling.
     pub warnings: Vec<String>,
+    /// The ports this program wants the transport's clock on, from
+    /// `midiclock`. Empty for almost every program.
+    pub clocks: Vec<crate::midi::ports::Selector>,
 }
 
 /// One eval produces two artifacts: the persistent graph, which is crossfaded
@@ -75,6 +78,8 @@ pub struct Lowered {
     /// What lowering had to say about a program it did not refuse. Empty for
     /// almost every program — see [`Lowerer::warnings`].
     pub warnings: Vec<String>,
+    /// The ports to send the transport's clock to.
+    pub clocks: Vec<crate::midi::ports::Selector>,
 }
 
 /// A fresh RNG for one eval.
@@ -186,6 +191,7 @@ fn lower_inner(
         meter,
         octave: None,
         warnings: Vec::new(),
+        clocks: Vec::new(),
     };
 
     if let Some(dur) = dur {
@@ -218,6 +224,7 @@ fn lower_inner(
         bindings: lw.bindings,
         choices: lw.choices,
         warnings: lw.warnings,
+        clocks: lw.clocks,
     })
 }
 

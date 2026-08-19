@@ -240,3 +240,80 @@ fn the_bus_hears_a_real_port() {
     assert!(notes[0].on);
     assert!((notes[0].velocity - 100.0 / 127.0).abs() < 1e-6);
 }
+
+/// Clock, both directions, through a real port: the out thread sends ticks to
+/// the loopback bus and the follower reads them back and moves the transport.
+///
+/// The one thing no fixture can show. Everything else about clock is tested
+/// against `Player::clock` and `Follow::receive` called directly, because a
+/// suite that needed hardware would not run.
+///
+///     cargo test the_clock_goes_out_and_comes_back -- --ignored --nocapture
+///
+/// Needs the same loopback bus as the other two. Skipped when there is none.
+#[test]
+#[ignore = "needs a loopback MIDI port; run it by name when the wire is in doubt"]
+fn the_clock_goes_out_and_comes_back() {
+    use std::time::{Duration, Instant};
+    use crate::midi::input::{exclusive, following, slot_for};
+    use crate::scheduler::clock::Clock;
+
+    const LOOPBACK: &str = "IAC Driver Bus 1";
+    let _held = exclusive();
+
+    if !crate::midi::ports::outputs().iter().any(|p| p.name == LOOPBACK) {
+        println!("no {LOOPBACK} on this machine — nothing was tested");
+        return;
+    }
+
+    // The transport the *sender* runs on, ticking in real time so the out
+    // thread has bar time to count against — the audio callback's part, as in
+    // `a_note_reaches_a_real_port`.
+    let sending = Clock::with_cps(44100.0, 0.5);
+    let ticking = sending.clone();
+    std::thread::spawn(move || {
+        // Advanced by the time that *actually* passed, not by a fixed number
+        // of frames per sleep. `thread::sleep` overshoots by a millisecond or
+        // two, so a fixed advance makes audio time run slow — and since ticks
+        // are placed on bar time and measured back in wall time, that reads as
+        // a slower tempo at the far end. Measured: 82 bpm for a clock sent at
+        // 120. A real audio callback advances by frames it really rendered,
+        // which is what this now imitates.
+        let mut last = Instant::now();
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(2));
+            let now = Instant::now();
+            ticking.advance((now.duration_since(last).as_secs_f64() * 44100.0) as u64);
+            last = now;
+        }
+    });
+
+    // And a separate transport for the follower, so that what is being tested
+    // is one clock reaching the other rather than a value being shared.
+    let receiving = Clock::with_cps(44100.0, 0.1);
+    following().drives(receiving.clone());
+    let slot = slot_for(&Selector::Name(LOOPBACK.to_string())).expect("a slot");
+    following().follow(Some((LOOPBACK, slot)));
+    let missing = crate::midi::input::ensure_open();
+    assert!(missing.is_empty(), "the loopback should have opened: {missing:?}");
+
+    let out = crate::midi::out::start(sending);
+    out.clock_to(vec![Selector::Name(LOOPBACK.to_string())]);
+    out.transport(true);
+
+    // Long enough for the tempo window to fill several times over.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && following().ticks() < 200 {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    out.transport(false);
+
+    println!("ticks received: {}", following().ticks());
+    println!("tempo followed: {:.2} bpm (sent at 120)", receiving.bpm());
+    assert!(following().ticks() > 100, "ticks should have arrived");
+    assert!(
+        (receiving.bpm() - 120.0).abs() < 6.0,
+        "the followed tempo should be the sent one, got {}", receiving.bpm()
+    );
+}

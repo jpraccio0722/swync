@@ -26,6 +26,9 @@ pub const MIDI_OUT: &str = "midiout";
 /// Reading a keyboard, in `play`'s pattern slot.
 pub const MIDI_IN: &str = "midiin";
 
+/// Sending the transport's clock to a port.
+pub const MIDI_CLOCK: &str = "midiclock";
+
 /// The three continuous readers. Each is a graph node whose device has been
 /// resolved to a slot here, because a slot is a number and a port's name is
 /// not something the audio callback could look up — see `midi::input`.
@@ -42,6 +45,51 @@ impl Lowerer {
     /// True when this call names a MIDI source to play.
     pub fn is_midiin(name: &str) -> bool {
         name == MIDI_IN
+    }
+
+    /// True when this call asks for clock on a port.
+    pub fn is_midiclock(name: &str) -> bool {
+        name == MIDI_CLOCK
+    }
+
+    /// `midiclock(device)` — send the transport's clock to this port.
+    ///
+    /// A statement rather than a value: it answers with nothing, because there
+    /// is nothing to do with the answer. Writing it says "this synth follows
+    /// us", which belongs to the piece for the same reason `midiout` does —
+    /// the arps and delays on that synth have to line up with the part written
+    /// for it, and that is true wherever the piece is played.
+    ///
+    /// Following somebody *else's* clock is the opposite kind of fact and is
+    /// not here: whether swync is the slave tonight is about the rig, so it
+    /// lives in the transport panel beside the tempo it replaces.
+    pub fn midiclock(&mut self, args: &[Arg], piped: Option<Value>) -> Result<Value, String> {
+        let (device, rest) = self.device_and_rest(MIDI_CLOCK, args, piped)?;
+        if !rest.is_empty() {
+            return Err(format!(
+                "{MIDI_CLOCK} takes only a port: {MIDI_CLOCK}(\"deluge\"). Clock is the \
+                 transport's, so there is no channel and no tempo to give it"));
+        }
+
+        match ports::find(&ports::outputs(), &device) {
+            Match::Missing => self.warnings.push(format!(
+                "{MIDI_CLOCK}({device}): no MIDI output here answers to that, so nothing \
+                 will be following this clock. The program still runs.")),
+            Match::Ambiguous(taken, others) => self.warnings.push(format!(
+                "{MIDI_CLOCK}({device}) matches {} ports — sending clock to \"{}\" and not \
+                 to {}. Name more of the port to choose between them.",
+                others.len() + 1,
+                taken.name,
+                others.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(", "))),
+            Match::One(_) => {}
+        }
+
+        // Two `midiclock`s naming one port would send it every tick twice,
+        // which reads as double tempo on the other end.
+        if !self.clocks.contains(&device) {
+            self.clocks.push(device);
+        }
+        Ok(Value::Number(0.0))
     }
 
     /// True when this call reads something continuous off a MIDI port.

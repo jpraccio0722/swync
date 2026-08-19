@@ -1078,7 +1078,9 @@ mod pass_tests {
         rx.try_iter()
             .flat_map(|c| match c {
                 midi::Command::Play(notes) => notes,
-                midi::Command::Stop => Vec::new(),
+                // Nothing else this thread sends carries notes, and these
+                // tests are about the notes.
+                _ => Vec::new(),
             })
             .collect()
     }

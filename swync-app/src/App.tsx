@@ -27,6 +27,7 @@ import {
   SettingsPanel,
   type AudioDevices,
   type MidiPorts,
+  type ClockStatus,
   type FinishedRecording,
   type RecordingFormat,
   type RecordingState,
@@ -364,6 +365,10 @@ function App() {
   // devices nothing is chosen from this — a port is named in the program — so
   // it is only ever displayed.
   const [midiPorts, setMidiPorts] = useState<MidiPorts | null>(null);
+  // How a followed MIDI clock is doing. Polled rather than pushed, because
+  // what the panel most needs to show — that ticks have *stopped* arriving —
+  // is the absence of something, and nothing fires on that.
+  const [clockStatus, setClockStatus] = useState<ClockStatus | null>(null);
   // What the two meters in the title bar draw, and what the settings panel
   // says about the devices keeping step. Polled while there is anything to
   // meter; see the effect below.
@@ -551,6 +556,7 @@ function App() {
       setSettings(next);
       setDevices(open);
       setMidiPorts(ports);
+      setClockStatus(await invoke<ClockStatus>("midi_clock_status"));
     } catch (e) {
       console.error("could not read the audio devices:", e);
     }
@@ -1549,6 +1555,32 @@ function App() {
   }, [settingsShowing, resyncAudio]);
 
   /**
+   * How a followed MIDI clock is doing, while the panel showing it is open.
+   *
+   * Polled rather than pushed, and the reason is what it most needs to say:
+   * that ticks have *stopped* arriving. That is the absence of something, and
+   * nothing fires on an absence — the backend can only answer when asked.
+   *
+   * Twice a second, which is the same rate the recording clock runs at and far
+   * more often than the two-tenths a clock takes to count as lost. Only while
+   * a clock is actually being followed, so the ordinary session polls nothing.
+   */
+  const followingClock = settings?.midiClockSource ?? null;
+  useEffect(() => {
+    if (!settingsShowing || followingClock === null) return;
+    const tick = async () => {
+      try {
+        setClockStatus(await invoke<ClockStatus>("midi_clock_status"));
+      } catch (e) {
+        console.error("could not read the MIDI clock status:", e);
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 500);
+    return () => window.clearInterval(timer);
+  }, [settingsShowing, followingClock]);
+
+  /**
    * The two meters in the title bar.
    *
    * Ten times a second, which is also what the meters measure: levels are
@@ -2051,6 +2083,7 @@ function App() {
               formats={formats}
               devices={devices}
               midi={midiPorts}
+              clock={clockStatus}
               levels={levels}
               onInputDevice={changeInputDevice}
               onOutputDevice={changeOutputDevice}

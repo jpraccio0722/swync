@@ -138,6 +138,15 @@ pub struct MidiIn {
     notes: Mutex<VecDeque<LiveNote>>,
 }
 
+/// The clock being followed, if any.
+///
+/// A singleton beside [`bus`] and for the same reason — there is one
+/// transport, and what may follow it is one choice.
+pub fn following() -> &'static crate::midi::follow::Follow {
+    static FOLLOW: OnceLock<crate::midi::follow::Follow> = OnceLock::new();
+    FOLLOW.get_or_init(crate::midi::follow::Follow::new)
+}
+
 /// The one input bus.
 ///
 /// A `OnceLock` singleton for the same reason `audio_in::bus()` is one:
@@ -321,10 +330,11 @@ pub fn ensure_open() -> Vec<String> {
 /// else's job further down, where there is no callback deadline.
 fn open(slot: usize, name: &str) -> Option<MidiInputConnection<()>> {
     let mut midi = MidiInput::new(CLIENT_NAME).ok()?;
-    // Nothing here reads clock, sysex or active sensing yet, and active
-    // sensing in particular arrives 300 times a second on some gear — waking
-    // the callback for something nothing looks at.
-    midi.ignore(Ignore::All);
+    // Clock is read now, so it may not be ignored — but sysex and active
+    // sensing still are. Active sensing in particular arrives 300 times a
+    // second on some gear, and would wake this callback for something nothing
+    // looks at.
+    midi.ignore(Ignore::SysexAndActiveSense);
 
     let port = midi
         .ports()
@@ -333,6 +343,17 @@ fn open(slot: usize, name: &str) -> Option<MidiInputConnection<()>> {
 
     midi.connect(&port, name, move |_, bytes, _| receive(slot, bytes), ()).ok()
 }
+
+/// The transport bytes, which carry no channel — they are the whole message.
+///
+/// Here rather than beside `midi::out`'s copies because the two directions are
+/// deliberately written without reference to each other: what is *sent* is a
+/// decision about a synth, and what is *understood* is a decision about the
+/// wire, and nothing good comes of one changing because the other did.
+pub(crate) const CLOCK_TICK: u8 = 0xF8;
+pub(crate) const CLOCK_START: u8 = 0xFA;
+pub(crate) const CLOCK_CONTINUE: u8 = 0xFB;
+pub(crate) const CLOCK_STOP: u8 = 0xFC;
 
 /// Status bytes, with the channel masked off.
 const NOTE_OFF: u8 = 0x80;
@@ -344,6 +365,17 @@ const PITCH_BEND: u8 = 0xE0;
 /// One message, from midir's thread.
 fn receive(slot: usize, bytes: &[u8]) {
     let Some((status, data)) = bytes.split_first() else { return };
+
+    // Clock first, and it belongs to no slot: which port the transport
+    // follows is one choice for the whole app, made in the panel, so a tick
+    // arriving on a port nobody is following is dropped inside `receive`
+    // there rather than sorted out here.
+    if *status >= CLOCK_TICK && following().slot() == Some(slot) {
+        if following().receive(*status, std::time::Instant::now()) {
+            return;
+        }
+    }
+
     // Channels are 0-15 on the wire and 1-16 everywhere a person writes one.
     let channel = (status & 0x0F) + 1;
     let bus = bus();

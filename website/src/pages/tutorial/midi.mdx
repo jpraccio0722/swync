@@ -1,0 +1,159 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: midi
+---
+
+So far everything has happened inside swync. Now let's play with some hardware.
+
+## Finding your gear
+
+Open the settings panel. Under MIDI there are two lists — what you can send to, and what you
+can read from — each with a number beside it.
+
+You won't need to come back here often. When you type `midiout("` the editor offers the same
+list, which is usually easier than remembering how a vendor spelled things.
+
+## Sending a pattern
+
+`midiout` goes where an instrument would go.
+
+```swync
+play([c2;q, c2, g2, c2], midiout("deluge"))
+```
+
+Any part of the name will do, and case doesn't matter — `"deluge"` finds `Deluge MIDI 1`.
+The device number works too.
+
+```swync
+play([c2;q, c2, g2, c2], midiout(2))
+```
+
+A second argument is the channel, 1 to 16.
+
+```swync
+play([c2;q, c2, g2, c2], midiout("deluge", 3))
+```
+
+If the port isn't plugged in, the problems panel says so but won't prevent a compile. Everything else in your
+program still runs.
+
+## Lanes
+
+Three lanes work here. `vel`: 0 to 1 like everything else in the language.
+
+```swync
+play([c2;q, c2, g2, c2], midiout("deluge"), vel: [1, .5, .8, .5])
+```
+
+`legato` shortens or lengthens the note, as it does for an instrument.
+
+```swync
+play([c2;q, c2, g2, c2], midiout("deluge"), legato: .25)   // staccato
+```
+
+And `chan` overrides the channel per note.
+
+```swync
+play([36;e, 42, 38, 42], midiout("digitakt"), chan: [1, 10, 1, 10])
+```
+
+## Playing a keyboard
+
+`midiin` goes where the *pattern* would go.
+
+```swync
+fn lead(n) = saw(n.m2h) * perc(0.01, 0.4)
+
+play(midiin("keystation"), lead)
+```
+
+Play the keyboard. Your instrument sounds.
+
+Because `a.f(b)` is `f(a, b)`, this reads the other way round too:
+
+```swync
+midiin("keystation").play(lead)
+```
+
+By default it listens on every channel. A second argument narrows it.
+
+```swync
+play(midiin("keystation", 2), lead)
+```
+
+### Velocity
+
+Give your instrument a parameter called `vel` and it gets the velocity of each note, 0 to 1.
+
+```swync
+fn lead(n, vel = 0.7) = saw(n.m2h) * vel * perc(0.01, 0.4)
+
+play(midiin("keystation"), lead)
+```
+
+An instrument without a `vel` parameter never sees it, so everything you've already written
+still plays.
+
+### Duration
+
+`dur` is how long a note lasts, and a key you're still holding down doesn't have a length
+yet. So on a keyboard `dur` is the longest a note *could* be — which is a long time.
+
+Write it in the last slot of `env` as usual, and the note will release when you let go:
+
+```swync
+fn pad(n) = saw(n.m2h) * env(0.5, 0.3, 0.7, 2, dur)
+```
+
+But don't do arithmetic on it. `dur/2` is fine for a written pattern and about thirty seconds
+on a keyboard. Say the number you mean instead.
+
+Lanes work here too, and a keyboard has no length, so `playn` and a rate are refused rather
+than quietly ignored.
+
+## Knobs and wheels
+
+`cc` reads one controller as a signal you can use anywhere.
+
+```swync
+fn lead(n) = lowpass(saw(n.m2h), cc("push", 74), 1) * perc(0.01, 0.4)
+```
+
+That's controller 74, and it reads 0 to 1. A filter cutoff wants hertz, so say the range once
+where the knob is named rather than doing the arithmetic every time you use it.
+
+```swync
+cc("push", 74, 1, 200, 5000)
+```
+
+That's `device, number, channel, range`. The channel is 1 unless you say otherwise.
+
+`bend` is the pitch wheel. It rests at zero rather than at the bottom, so you can add it
+straight to a note.
+
+```swync
+fn lead(n) = saw((n + bend("keys", 1, -2, 2)).m2h) * perc(0.01, 0.4)
+```
+
+Two semitones either way. `aftertouch` is how hard you're leaning on the keys, 0 to 1, and
+takes a range the same way.
+
+```swync
+fn pad(n) = saw(n.m2h) * (0.4 + aftertouch("keys") * 0.6)
+```
+
+All three are smoothed, so a knob won't zipper when you turn it.
+
+## Clock
+
+If you're sending notes to a synth, its arpeggiator and delays probably want to be in time
+with them. `midiclock` sends it the transport.
+
+```swync
+midiclock("deluge")
+
+play(bass, midiout("deluge"), vel: [1, .6, .8])
+```
+
+It starts and stops with the transport, and follows your tempo wherever you drag it. Write it
+once per port.

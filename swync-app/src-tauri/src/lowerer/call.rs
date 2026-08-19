@@ -29,6 +29,9 @@ impl Lowerer {
         if Lowerer::is_midi_control(&func.0) {
             return self.midi_control(&func.0, args, piped);
         }
+        if Lowerer::is_midiclock(&func.0) {
+            return self.midiclock(args, piped);
+        }
 
         // And the arrangement combinators, for a reason of the same shape: a
         // section has to be lowered where it is *placed*, with `play_start`

@@ -84,6 +84,7 @@ fn run_code(
     engine: tauri::State<Mutex<AudioEngine>>,
     sched: tauri::State<SchedulerState>,
     samples: tauri::State<samples::Cache>,
+    midi_out: tauri::State<midi::out::Out>,
 ) -> Result<Vec<Diagnostic>, Diagnostic> {
     let mut workspace = workspace;
     if let Some(patterns) = &patterns {
@@ -135,6 +136,10 @@ fn run_code(
             .into_iter()
             .map(|w| Diagnostic::warning(Stage::Lower, w)),
     );
+
+    // Whatever this program's `midiclock` calls named, replacing the last
+    // program's — a `midiclock` that has been deleted stops being sent to.
+    midi_out.clock_to(lowered.clocks.clone());
     let audio_graph = realize(&lowered.graph)
         .map_err(|e| Diagnostic::message(Stage::Realize, e))?;
 
@@ -181,6 +186,14 @@ fn run_code(
         .map_err(|_| Diagnostic::message(Stage::Engine, "audio engine poisoned"))?;
     swap_program(&mut eng, audio_graph);
 
+    // After the clock has been reset and the patterns published, so that the
+    // `Start` a following box receives lands on the same downbeat this eval
+    // just put bar zero at. Sent on every eval rather than only the first: it
+    // is a no-op once running, and the one that matters is the eval that began
+    // from silence, which is not distinguishable from here without asking
+    // twice.
+    midi_out.transport(true);
+
     // What lowering had to say about a program it did not refuse. Returned on
     // the *success* path, which is the whole point: this eval published its
     // graph and its patterns, and the problems panel is being told something
@@ -200,7 +213,11 @@ fn run_code(
 fn stop_audio(
     engine: tauri::State<Mutex<AudioEngine>>,
     sched: tauri::State<SchedulerState>,
+    midi: tauri::State<midi::out::Out>,
 ) -> Result<(), String> {
+    // Anything following this transport is told before the room goes quiet.
+    // A drum machine left waiting for the next tick sits there for ever.
+    midi.transport(false);
     // Bindings first, so the next pass has nothing to schedule, then the flag
     // the scheduler thread reads to cut what it already pushed.
     *sched.patterns.lock().map_err(|_| "patterns lock poisoned")? = Patterns::default();
@@ -532,7 +549,60 @@ fn set_settings(
     midi: tauri::State<midi::out::Out>,
 ) -> Result<(), String> {
     midi.set_offset_ms(settings.midi_offset_ms);
+    follow_clock(settings.midi_clock_source.as_deref());
     settings::write(&config_file(&app, settings::FILE)?, &settings)
+}
+
+/// Point the transport at a clock to follow, or at none.
+///
+/// The port is opened through the same slot machinery a `cc` uses, so a port
+/// already open for a keyboard is not opened twice — a clock and a controller
+/// arriving on one cable are one connection, and the callback sorts them out.
+fn follow_clock(port: Option<&str>) {
+    let Some(port) = port else {
+        midi::input::following().follow(None);
+        return;
+    };
+    // Matched whole rather than by substring: this came from a list, not from
+    // somebody typing under pressure.
+    let selector = midi::ports::Selector::Name(port.to_string());
+    match midi::input::slot_for(&selector) {
+        Some(slot) => midi::input::following().follow(Some((port, slot))),
+        // Every slot taken, which is a program already reading eight ports.
+        // Following nothing is the honest answer and the panel says so.
+        None => midi::input::following().follow(None),
+    }
+    // Opening is the same step a program's inputs take, and answering nothing
+    // is the same "not here tonight" it answers with: the panel reads the
+    // status rather than a result.
+    let _ = midi::input::ensure_open();
+}
+
+/// What the transport panel needs to draw the clock control.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClockStatus {
+    status: midi::follow::Status,
+    /// The tempo arriving, when one is. The panel shows this in place of the
+    /// transport's own while a clock is being followed.
+    bpm: Option<f64>,
+}
+
+/// How the followed clock is getting on.
+///
+/// Polled by the panel while it is open, like the meters and the recording
+/// clock — there is no event for "ticks have stopped arriving", because it is
+/// the *absence* of something and nothing fires on that.
+#[tauri::command]
+fn midi_clock_status() -> ClockStatus {
+    let present = match midi::input::following().port() {
+        None => true,
+        Some(name) => midi::ports::inputs().iter().any(|p| p.name == name),
+    };
+    ClockStatus {
+        status: midi::input::following().status(present),
+        bpm: midi::input::following().bpm(),
+    }
 }
 
 /// Every MIDI port on this machine, with the number a program may name it by.
@@ -1464,6 +1534,7 @@ pub fn run() {
             recording_state,
             audio_devices,
             midi_ports,
+            midi_clock_status,
             audio_levels,
             set_input_device,
             set_output_device,
@@ -1496,6 +1567,12 @@ pub fn run() {
             // cost is the first note of the first `midiout` in a set.
             let midi = midi::out::start(clock.clone());
             midi.set_offset_ms(remembered.midi_offset_ms);
+
+            // What an incoming clock drives, and what it was following last
+            // time. Before the scheduler starts, so a tick arriving in the
+            // first millisecond has a transport to move.
+            midi::input::following().drives(clock.clone());
+            follow_clock(remembered.midi_clock_source.as_deref());
             let sched = sched.with_midi(midi.clone());
 
             // Free-runs for the life of the app; evals only swap what it reads.

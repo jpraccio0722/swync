@@ -275,6 +275,29 @@ impl Clock {
         tempo.epoch = tempo.epoch.wrapping_add(1);
     }
 
+    /// Shift bar time by a fraction of a bar, without touching the tempo.
+    ///
+    /// The one thing following an external clock needs that setting a tempo
+    /// cannot do. `set_cps` deliberately *holds* the bar position across a
+    /// tempo change — which is right for a tempo drag and exactly wrong here,
+    /// where the tempo is already agreed and it is the phase that has drifted.
+    ///
+    /// The epoch does not move: this is a nudge of a few milliseconds, not a
+    /// jump, so watermarks taken before it are still good. A correction large
+    /// enough to invalidate one is a `reset`, which is what `Start` does.
+    pub fn nudge_bars(&self, bars: f64) {
+        if !bars.is_finite() || bars == 0.0 {
+            return;
+        }
+        let mut tempo = self.tempo.lock().unwrap_or_else(|e| e.into_inner());
+        if tempo.cps <= 0.0 {
+            return;
+        }
+        // Bar time is `(now - origin) * cps`, so moving it forward by `bars`
+        // means moving the origin *back* by that many bars' worth of seconds.
+        tempo.origin_secs -= bars / tempo.cps;
+    }
+
     /// How many times bar time has jumped backwards. A bar figure only
     /// means anything against the epoch it was measured in.
     pub fn epoch(&self) -> u64 {

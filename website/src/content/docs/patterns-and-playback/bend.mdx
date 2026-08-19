@@ -7,16 +7,7 @@ receives: number
 returns: signal
 ---
 
-The pitch wheel, as a signal:
+The pitch wheel as a signal, -1 to 1 with the wheel at rest reading 0 — so
+`note + bend("keys", 1, -2, 2)` bends two semitones either way.
 
-```swync
-fn lead(n) = saw((n + bend("keys", 1, -2, 2)).m2h)
-```
-
-Unlike `cc` it rests at **zero**, not at the bottom: a wheel is centred, and a
-program adding one to a note should not have to subtract a middle it never
-asked about. So the default range is -1 to 1, and giving it `-2, 2` makes it
-bend two semitones either way.
-
-`bend("keys")` reads channel 1. `bend("keys", 2)` reads channel 2. Smoothed
-like `cc`, and zero on a port that is not connected.
+Give a range to change that. Smoothed like `cc`.
