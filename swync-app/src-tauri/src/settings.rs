@@ -83,6 +83,19 @@ pub struct Settings {
     /// `midi::out` for what is actually being corrected.
     #[serde(default)]
     pub midi_offset_ms: i64,
+    /// The MIDI input whose clock the transport follows, by the port's name.
+    ///
+    /// `None` is swync's own clock, which is where every machine starts. Here
+    /// rather than in a project for the reason the audio devices are, and this
+    /// one is the clearest case of it: the same piece is the master in the
+    /// studio and the slave when somebody else's box is running the room, and
+    /// which of those is true tonight has nothing to do with the music.
+    ///
+    /// A name rather than a number, and unlike a `midiout` written in a
+    /// program this one is matched whole: it was picked from a list rather
+    /// than typed, so there is nothing to be forgiving about.
+    #[serde(default)]
+    pub midi_clock_source: Option<String>,
 }
 
 impl Settings {
@@ -157,6 +170,7 @@ mod tests {
         let path = root.join("nested").join(FILE);
         let settings = Settings {
             midi_offset_ms: 0,
+            midi_clock_source: None,
             recording_dir: Some(root.display().to_string()),
             recording_format: Format::Wav32,
             input_device: Some(DeviceInfo {

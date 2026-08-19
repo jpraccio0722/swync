@@ -1,0 +1,45 @@
+---
+name: midiclock
+params: [device]
+arities: [1]
+variadic: false
+receives: number
+returns: number
+---
+
+Send the transport's clock to a port, so a synth's own arpeggiator, delays and
+sequencer line up with the part you wrote for it:
+
+```swync
+midiclock("deluge")
+play(bass, midiout("deluge"), vel: [1, .6, .8])
+```
+
+Twenty-four ticks to the quarter note, plus **start** when the transport
+starts and **stop** when it stops. There is no channel and no tempo to give
+it: clock belongs to the transport, not to a part.
+
+The device is a port's name — matched on any part of it, ignoring case — or
+its number. Write it once per port; naming the same port twice would send it
+every tick twice, which reads as double tempo at the other end.
+
+Ticks are counted against **bar time** rather than against a stopwatch, so a
+tempo change — including one under an `accel` — is followed without anything
+here being told about it.
+
+## Following, rather than sending
+
+This is the sending half only. Following somebody *else's* clock is not in the
+language, and that is deliberate: which synth a part is written for is a fact
+about the piece and travels with it, but whether you are the slave tonight is
+a fact about the rig. The same piece is the master in the studio and the slave
+when the drummer's box is running the room.
+
+So it is in the settings panel, under MIDI — **Follow clock**, beside the
+ports it names. While one is being followed the tempo is theirs, and the panel
+shows what is arriving.
+
+If that clock stops — a cable out, or the other box stopped without saying so
+— the transport **keeps playing** at the tempo it last saw, and the panel says
+it has lost it. Silence in a room is worse than being out of sync, and the
+last tempo is the best guess anybody has.

@@ -2220,6 +2220,20 @@
       "doc": "A keyboard to play, in place of a pattern: `play(midiin(\"keystation\"), lead)`, or `midiin(\"keystation\").play(lead)`. The device is a port's name — matched on any part of it, ignoring case — or its number in the settings panel's list. `channel` is 1-16 and defaults to every channel, which is what a keyboard on its own means. A note arrives as its MIDI note number, the same thing a pattern step carries. An instrument that declares a `vel` parameter is given the velocity, 0 to 1. A keyboard has no length, so it takes neither a rate nor `play_once`/`playn`."
     },
     {
+      "name": "midiclock",
+      "params": [
+        "device"
+      ],
+      "arities": [
+        1
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "number",
+      "returns": "number",
+      "doc": "Send the transport's clock to a port, so a synth's arps and delays line up with the part written for it: `midiclock(\"deluge\")`. Twenty-four ticks to the quarter note, plus start and stop with the transport. The device is a port's name — matched on any part of it, ignoring case — or its number. Following somebody else's clock is the other way round and is not this: it is in the transport panel, because whether you are the slave tonight is about the rig rather than the piece."
+    },
+    {
       "name": "cc",
       "params": [
         "device",

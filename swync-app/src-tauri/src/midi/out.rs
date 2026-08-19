@@ -217,6 +217,32 @@ impl Note {
     }
 }
 
+/// The MIDI clock's resolution: twenty-four ticks to the quarter note.
+///
+/// Fixed by the specification rather than chosen here, and it is why clock is
+/// this thread's job rather than the scheduler's. At 120 bpm a tick is every
+/// 21 ms and at 180 it is every 14 — either way, a thread waking every 25 ms
+/// could not place them, while one waking every millisecond can.
+pub const PPQN: f64 = 24.0;
+
+/// The three transport bytes. `Continue` is not sent: swync's own stop clears
+/// the pattern bindings, so what follows is always a beginning rather than a
+/// resumption, and saying `Continue` would tell a drum machine to pick up
+/// where it left off while everything here started again from the top.
+const CLOCK_TICK: u8 = 0xF8;
+const CLOCK_START: u8 = 0xFA;
+const CLOCK_STOP: u8 = 0xFC;
+
+/// How many ticks may be sent at once when this thread has been late.
+///
+/// A stall — a device switch, a machine that went to sleep — leaves bar time
+/// far ahead of the last tick sent, and catching up literally would spray
+/// hundreds of ticks at a drum machine, which reads them as a burst of tempo.
+/// Past this the count is simply resynchronised: the gear has already lost the
+/// beat, and the quickest way back is to start counting again from where the
+/// music actually is.
+const MAX_CATCHUP_TICKS: i64 = 48;
+
 /// What the scheduler and the command thread can ask of this thread.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -227,6 +253,15 @@ pub enum Command {
     /// Everything stops now. Pending note-ons are dropped and everything
     /// sounding is released — see [`Player::stop`].
     Stop,
+    /// The ports a program wants clock on, replacing whatever the last program
+    /// asked for. Empty is the ordinary case and costs nothing.
+    ClockTo(Vec<Selector>),
+    /// The transport moved. `true` starts the clock, `false` stops it.
+    ///
+    /// Separate from [`Stop`](Command::Stop) even though a stop does both,
+    /// because the two are not the same event: a program can be re-evaluated,
+    /// which starts the transport again without anything having stopped.
+    Transport(bool),
 }
 
 /// A note this thread has sent an on for and not yet an off.
@@ -284,6 +319,20 @@ impl Out {
     /// Drop what has not been sent and release what is sounding.
     pub fn stop(&self) {
         let _ = self.tx.send(Command::Stop);
+    }
+
+    /// Send clock to these ports, and to no others.
+    ///
+    /// Called on every eval with whatever the program named, so a `midiclock`
+    /// that has been deleted stops being sent to. Sending the empty list is
+    /// what almost every program does and is the cheap path.
+    pub fn clock_to(&self, ports: Vec<Selector>) {
+        let _ = self.tx.send(Command::ClockTo(ports));
+    }
+
+    /// The transport started, or stopped.
+    pub fn transport(&self, running: bool) {
+        let _ = self.tx.send(Command::Transport(running));
     }
 
     /// How far behind the audio a message should be sent, in milliseconds.
@@ -350,6 +399,18 @@ struct Player {
     /// and nothing else.
     sounding: HashSet<Sounding>,
     anchor: Option<Anchor>,
+    /// The ports a program asked for clock on, as written. Resolved per batch
+    /// like a note's, so a box plugged in mid-set starts receiving.
+    clock_to: Vec<Selector>,
+    /// The same, resolved to port names on the last batch. Kept apart from
+    /// `clock_to` because resolving talks to the platform and a tick must not.
+    resolved: Vec<String>,
+    /// Whether the transport is running, which is the whole of whether ticks
+    /// are being sent.
+    running: bool,
+    /// The last tick index sent, counted in ticks since bar zero. `None`
+    /// before the first one of a run — see [`Player::clock`].
+    last_tick: Option<i64>,
 }
 
 /// A note-on's velocity is its third byte; a note-off's is zero, and the
@@ -373,7 +434,55 @@ impl Player {
             pending: Vec::new(),
             sounding: HashSet::new(),
             anchor: None,
+            clock_to: Vec::new(),
+            resolved: Vec::new(),
+            running: false,
+            last_tick: None,
         }
+    }
+
+    /// Send whatever clock ticks are due at this bar position.
+    ///
+    /// Counted against **bar time** rather than against an interval, which is
+    /// what keeps it in step with the music rather than merely regular. A
+    /// tempo change moves the bar position, so the next tick falls where the
+    /// new tempo puts it and nothing here has to be told the tempo changed at
+    /// all — which also means an `accel` under a pattern is followed for free.
+    fn clock(&mut self, bars: f64, ticks_per_bar: f64) {
+        if !self.running || self.clock_to.is_empty() || !bars.is_finite() {
+            return;
+        }
+        let now = (bars * ticks_per_bar).floor() as i64;
+        let from = match self.last_tick {
+            // The first tick of a run is *not* sent: `Start` has just been
+            // sent, and a receiver counts its first tick as one already
+            // elapsed. Beginning at the tick after the current position is
+            // what puts the downbeat where both ends agree it is.
+            None => now,
+            Some(last) if now - last > MAX_CATCHUP_TICKS => now,
+            Some(last) => last,
+        };
+        for _ in from..now {
+            self.broadcast(CLOCK_TICK);
+        }
+        self.last_tick = Some(now);
+    }
+
+    /// Send one byte to every port a program asked for clock on.
+    fn broadcast(&mut self, byte: u8) {
+        // Cloned so the ports can be walked while `send_raw` borrows self
+        // mutably to open a connection. The list is a handful of strings and
+        // this happens at most a few hundred times a second.
+        let ports = std::mem::take(&mut self.resolved);
+        for port in &ports {
+            if let Some(connection) = self.connect(port) {
+                // A failed send is dropped for the same reason a note's is:
+                // the port was open a moment ago, so this is gear being
+                // unplugged, and the next batch says so properly.
+                let _ = connection.send(&[byte]);
+            }
+        }
+        self.resolved = ports;
     }
 
     /// Move the anchor towards what the audio clock actually says.
@@ -542,6 +651,31 @@ fn run(rx: Receiver<Command>, clock: Clock, out: Out) {
                         player.send(key, velocity);
                     }
                 }
+                Ok(Command::ClockTo(ports)) => {
+                    // Resolved here, on the command, rather than per tick:
+                    // enumerating talks to the platform and a tick has 21
+                    // milliseconds to spare at best.
+                    let available = ports::outputs();
+                    player.resolved = ports
+                        .iter()
+                        .filter_map(|selector| match ports::find(&available, selector) {
+                            Match::One(port) | Match::Ambiguous(port, _) => Some(port.name),
+                            Match::Missing => None,
+                        })
+                        .collect();
+                    player.clock_to = ports;
+                    player.refused.clear();
+                }
+                Ok(Command::Transport(running)) => {
+                    if running != player.running {
+                        player.running = running;
+                        player.broadcast(if running { CLOCK_START } else { CLOCK_STOP });
+                        // Counting begins again from wherever the music is,
+                        // rather than from a tick index left over from the
+                        // last run.
+                        player.last_tick = None;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 // The app is going away and every sender has been dropped.
                 // Releasing first is not politeness: a note left on is a
@@ -550,6 +684,12 @@ fn run(rx: Receiver<Command>, clock: Clock, out: Out) {
                 Err(TryRecvError::Disconnected) => {
                     for (key, velocity) in player.stop() {
                         player.send(key, velocity);
+                    }
+                    // Gear left following a clock that has stopped arriving
+                    // sits waiting for the next tick for ever. Saying so on
+                    // the way out costs one byte.
+                    if player.running {
+                        player.broadcast(CLOCK_STOP);
                     }
                     return;
                 }
@@ -566,6 +706,11 @@ fn run(rx: Receiver<Command>, clock: Clock, out: Out) {
         for (key, velocity) in player.due(audio_now) {
             player.send(key, velocity);
         }
+
+        // Clock rides the same predicted time as the notes, so a tick and the
+        // note on that beat leave together rather than a buffer apart.
+        let ticks_per_bar = PPQN * clock.meter().quarters_per_bar();
+        player.clock(clock.bars_at(audio_now), ticks_per_bar);
     }
 }
 
@@ -723,6 +868,78 @@ mod tests {
         let due = player.due(2.0);
         assert_eq!(due.len(), 2, "both ends fall in the same moment");
         assert_eq!(due[1].1, NOTE_OFF, "and the off is still last");
+    }
+
+    /// A player already sending clock somewhere, with a note of every byte
+    /// that went out — `send` needs no port open to record what was sounding,
+    /// and `broadcast` needs one, so clock is counted rather than captured.
+    fn clocking() -> Player {
+        let mut player = Player::new();
+        player.clock_to = vec![Selector::Name("deluge".into())];
+        player.resolved = vec![PORT.to_string()];
+        player.running = true;
+        player
+    }
+
+    /// Ticks are counted against **bar time**, not against an interval. That
+    /// is what keeps them in step with the music rather than merely regular —
+    /// and it is why a tempo change needs no code here at all.
+    #[test]
+    fn a_quarter_note_of_bar_time_is_twenty_four_ticks() {
+        let mut player = clocking();
+        let per_bar = PPQN * 4.0;
+        player.clock(0.0, per_bar);
+        assert_eq!(player.last_tick, Some(0));
+        // A quarter of a 4/4 bar.
+        player.clock(0.25, per_bar);
+        assert_eq!(player.last_tick, Some(24));
+    }
+
+    /// The first tick of a run is not sent: `Start` has just gone, and a
+    /// receiver counts its first tick as one already elapsed.
+    #[test]
+    fn counting_begins_where_the_music_is_rather_than_at_zero() {
+        let mut player = clocking();
+        player.clock(8.0, PPQN * 4.0);
+        assert_eq!(player.last_tick, Some(8 * 96), "eight bars in, not tick zero");
+    }
+
+    /// A stall leaves bar time far ahead of the last tick sent. Catching up
+    /// literally would spray hundreds of ticks at a drum machine, which reads
+    /// them as a burst of tempo.
+    #[test]
+    fn a_long_stall_resynchronises_rather_than_catching_up() {
+        let mut player = clocking();
+        let per_bar = PPQN * 4.0;
+        player.clock(0.0, per_bar);
+        player.clock(10.0, per_bar);
+        assert_eq!(player.last_tick, Some(960), "it should be where the music is");
+    }
+
+    #[test]
+    fn nothing_is_sent_while_the_transport_is_stopped() {
+        let mut player = clocking();
+        player.running = false;
+        player.clock(1.0, PPQN * 4.0);
+        assert_eq!(player.last_tick, None, "a stopped transport counts nothing");
+    }
+
+    #[test]
+    fn nothing_is_sent_when_no_program_asked_for_clock() {
+        let mut player = Player::new();
+        player.running = true;
+        player.clock(1.0, PPQN * 4.0);
+        assert_eq!(player.last_tick, None);
+    }
+
+    /// A signature with a different bar length changes how many ticks fill a
+    /// bar, and nothing else — the quarter note is still twenty-four.
+    #[test]
+    fn a_bar_holds_as_many_ticks_as_it_holds_quarter_notes() {
+        let mut player = clocking();
+        player.clock(0.0, PPQN * 3.0);
+        player.clock(1.0, PPQN * 3.0);
+        assert_eq!(player.last_tick, Some(72), "three quarters to a 3/4 bar");
     }
 
     /// The anchor exists to predict audio time between the audio callback's

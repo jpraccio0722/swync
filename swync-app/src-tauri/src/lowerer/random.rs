@@ -365,6 +365,7 @@ mod tests {
             meter: Default::default(),
             octave: None,
             warnings: Vec::new(),
+            clocks: Vec::new(),
         }
     }
 

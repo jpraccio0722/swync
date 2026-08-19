@@ -363,7 +363,63 @@ A keyboard takes no rate and no `playn`: it has no passes to count, and both
 would be a claim the program makes and the music does not keep. Both are
 refused rather than ignored.
 
-MIDI **clock** is not built — neither in nor out.
+## MIDI clock
+
+The two directions are **not** mirrors, and the asymmetry is the design.
+
+**Sending is in the program.** `midiclock("deluge")` — that synth's arps and
+delays have to line up with the part written for it, which is true wherever
+the piece is played. Ticks are sent by `midi::out`'s thread, which already
+wakes every millisecond: at 120 bpm a tick is every 21 ms and at 180 every 14,
+so the scheduler's 25 ms pass could not place them. They are counted against
+**bar time** rather than an interval (`Player::clock`), which is what keeps
+them in step with the music rather than merely regular — and means a tempo
+change, including one under an `accel`, is followed with no code here knowing
+about it. A stall past `MAX_CATCHUP_TICKS` resynchronises rather than spraying
+the backlog, which a drum machine reads as a burst of tempo.
+
+**Following is in the panel** (`midi/follow.rs`, `settings.midi_clock_source`).
+Whether *this* machine is the slave tonight is a fact about the rig: the same
+piece is master in the studio and slave when somebody else's box is running the
+room. So nothing in the language mentions it.
+
+What arrives is twenty-four ticks a quarter note and nothing else — no tempo,
+no bar number. Two separate things have to be made of that, and confusing them
+is the trap:
+
+- **Tempo** is how fast they come, measured **across a window** of a quarter
+  note rather than smoothed tick by tick. MIDI jitter is not noise around a
+  true time, it is a *delay*: a tick sits behind something else on the wire and
+  the next arrives at its own correct time, so one interval is long and the
+  next short by the same amount. A window spans both and is already right.
+  Measured: a whole missed tick moves an exponential average by 5.7 bpm and
+  the window by 1.5; ordinary jitter costs 0.5.
+- **Phase** is where in the bar we are, from `Start` and the tick count.
+  Tempo alone drifts a whole beat away over minutes even when it is nearly
+  right. `Clock::nudge_bars` is what corrects it and exists only for this —
+  `set_cps` deliberately *holds* bar position across a tempo change, which is
+  right for a tempo drag and exactly wrong here. The correction is weak and
+  has a dead band, because bar time is what every playing pattern is placed
+  against and a correction anybody can hear is worse than the drift it fixes.
+
+A clock that stops arriving does **nothing**: the transport carries on at the
+tempo it was following, and `Follow::status` says `Lost` so the panel can. The
+alternative is silence in a room, and the last tempo is the best guess there
+is. Turning following off is the same — nothing about ceasing to follow is a
+reason to stop playing.
+
+A box already running when swync starts listening never sends a `Start`, so
+its first tick starts the follower; waiting would mean ignoring it until it
+happened to stop. An interval outside `MIN_BPM`..`MAX_BPM` is clamped, since a
+wire hiccup that reads as 3000 bpm takes seconds of audible wrongness to walk
+back from.
+
+`the_clock_goes_out_and_comes_back` is the fourth `#[ignore]`d hardware test:
+it sends clock to a loopback bus and follows it back on a second transport.
+Measured 119.35 bpm for a clock sent at 120. It also has to advance its fake
+audio clock by *real elapsed time* — a fixed advance per `sleep` runs slow,
+which reads as 82 bpm at the far end, and that is a mistake worth not making
+twice.
 
 ## Bars, passes, and the one place "cycle" survives
 
