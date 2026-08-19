@@ -178,6 +178,11 @@ interface LibraryManifest {
 /** How wide either side panel may be dragged. The floor is what a pattern's
  *  grid and the sliders need; the ceiling keeps the editor from vanishing. */
 const MIN_PANEL = 240;
+/** The icon tray's width, which stands between a panel's outer edge and the
+ *  window's. A drag reads the pointer against the window, so without taking
+ *  this off the panel would sit a tray's width behind the pointer. Matches the
+ *  `w-11` in `ActivityBar`. */
+const TRAY = 44;
 const MAX_PANEL = 720;
 const DEFAULT_PANEL = 288;
 /** The left panel holds wrapped prose, a snippet and a file tree, all of which
@@ -204,7 +209,7 @@ function usePanelResize(edge: "left" | "right", setWidth: (width: number) => voi
 
       const onMove = (ev: PointerEvent) => {
         const width =
-          edge === "left" ? ev.clientX : window.innerWidth - ev.clientX;
+          (edge === "left" ? ev.clientX : window.innerWidth - ev.clientX) - TRAY;
         setWidth(Math.min(MAX_PANEL, Math.max(MIN_PANEL, width)));
       };
       const onUp = () => {
@@ -254,15 +259,16 @@ function App() {
   const lastCodeId = useRef<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL);
-  // The right panel opens on the transport: it is the tab with the buttons the
-  // app is played from. The reference is always beside it, and a ⌘-click in
-  // the editor is what usually brings it up.
+  // The right panel opens on the patterns, which is the view that is drawn in
+  // rather than read. The reference is one icon below it, and a ⌘-click in the
+  // editor is what usually brings that up.
   const [panelTab, setPanelTab] = useState<RightTab>("transport");
   const [docsFocus, setDocsFocus] = useState<DocsFocus | null>(null);
 
-  // The left panel starts shut, on its problems tab: there is nothing to say
-  // until something has been run. A failed run opens it, which is the whole
-  // point of it.
+  // The left panel starts shut, on the project: there is nothing for it to say
+  // until a folder is open or something has been run, and either of those
+  // opens it. Its tray is on screen throughout, so a shut panel is not a
+  // hidden one.
   const [sideOpen, setSideOpen] = useState(false);
   const [sideWidth, setSideWidth] = useState(DEFAULT_SIDE_PANEL);
   const [sideTab, setSideTab] = useState<SideTab>("project");
@@ -384,6 +390,29 @@ function App() {
 
   const startResize = usePanelResize("right", setPanelWidth);
   const startSideResize = usePanelResize("left", setSideWidth);
+
+  /**
+   * What a tray icon does, which is the same on both sides: the view that is
+   * already up puts its panel away, and any other one brings the panel back
+   * showing that view. One control for both jobs is why neither panel needs a
+   * close button — and why the tray has to stay drawn when the panel is not.
+   */
+  const selectSideTab = useCallback(
+    (next: SideTab) => {
+      if (sideOpen && next === sideTab) return setSideOpen(false);
+      setSideTab(next);
+      setSideOpen(true);
+    },
+    [sideOpen, sideTab],
+  );
+  const selectPanelTab = useCallback(
+    (next: RightTab) => {
+      if (panelOpen && next === panelTab) return setPanelOpen(false);
+      setPanelTab(next);
+      setPanelOpen(true);
+    },
+    [panelOpen, panelTab],
+  );
 
   // The tabs as they are right now, for everything below that has to ask about
   // them after an `await`.
@@ -1304,6 +1333,7 @@ function App() {
       }
 
       setLibraryVersion((v) => v + 1);
+      setSideOpen(true);
       setSideTab("libraries");
     } catch (e) {
       report(toDiagnostic(e, "could not install that library"), null);
@@ -1828,75 +1858,23 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
-      <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
-        <div className="flex items-center gap-2">
-          {/* On the left, for the panel on the left. Wears the number of
-              problems so a run that failed is visible with the panel shut. */}
-          <button
-            onClick={() => setSideOpen((open) => !open)}
-            title={sideOpen ? "Hide panel" : "Show panel"}
-            aria-expanded={sideOpen}
-            className={
-              "relative rounded-md p-1.5 transition-colors " +
-              (sideOpen
-                ? "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
-                : problemsAreErrors
-                  ? "text-red-400 hover:bg-neutral-800 hover:text-red-300"
-                  : diagnostics.length > 0
-                    ? "text-amber-400 hover:bg-neutral-800 hover:text-amber-300"
-                    : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100")
-            }
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-              <path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z" />
-            </svg>
-            {diagnostics.length > 0 && (
-              <span
-                className={`absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-[10px] font-semibold leading-4 text-white ${
-                  problemsAreErrors ? "bg-red-600" : "bg-amber-600"
-                }`}
-              >
-                {diagnostics.length}
-              </span>
-            )}
-          </button>
-          <div className="ml-4">
-            <Transport
-              play={play}
-              stop={stop}
-              state={transport}
-              onChange={setTransport}
-              playing={playing}
-              recording={recording}
-              onToggleRecording={() => void toggleRecording()}
-            />
-          </div>
-          {/* Beside the transport, because they answer the question the
-              transport raises: it says something is running, and these say
-              whether anything is coming of it. */}
-          <div className="ml-3">
-            <Meters levels={levels} hasInput={settings?.inputDevice != null} />
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* One hamburger, both ways: it is where a reader looks for the
-              panel whether it is showing or not. */}
-          <button
-            onClick={() => setPanelOpen((open) => !open)}
-            title={panelOpen ? "Hide right panel" : "Show right panel"}
-            aria-expanded={panelOpen}
-            className={
-              "rounded-md p-1.5 transition-colors " +
-              (panelOpen
-                ? "bg-neutral-700 text-neutral-100 hover:bg-neutral-600"
-                : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100")
-            }
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-              <path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z" />
-            </svg>
-          </button>
-        </div>
+      {/* No panel buttons: both panels are opened and closed from their own
+          tray of icons, down either edge of the window. This row is the
+          transport and what it is doing. */}
+      <header className="flex items-center gap-3 border-b border-neutral-800 px-4 py-2">
+        <Transport
+          play={play}
+          stop={stop}
+          state={transport}
+          onChange={setTransport}
+          playing={playing}
+          recording={recording}
+          onToggleRecording={() => void toggleRecording()}
+        />
+        {/* Beside the transport, because they answer the question the
+            transport raises: it says something is running, and these say
+            whether anything is coming of it. */}
+        <Meters levels={levels} hasInput={settings?.inputDevice != null} />
       </header>
 
       {/* Tab bar */}
@@ -1959,8 +1937,9 @@ function App() {
           width={sideWidth}
           onResizeStart={startSideResize}
           tab={sideTab}
-          onTabChange={setSideTab}
+          onSelect={selectSideTab}
           problemCount={diagnostics.length}
+          problemsAreErrors={problemsAreErrors}
           problems={
             <ProblemsPanel
               status={runStatus}
@@ -2075,7 +2054,7 @@ function App() {
           width={panelWidth}
           onResizeStart={startResize}
           tab={panelTab}
-          onTabChange={setPanelTab}
+          onSelect={selectPanelTab}
           transport={
             <TransportPanel
               patterns={patterns}
