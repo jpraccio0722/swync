@@ -1310,6 +1310,23 @@ function App() {
     }
   }, [report]);
 
+  /* What the libraries panel is handed. Held here rather than written inline
+     in the element below, because the panel reloads its list when what it was
+     given changes: an arrow rebuilt every render would have it reloading for
+     as long as the panel is open. */
+
+  /** Something in the panel changed what is installed. A vendored library is
+   *  also a folder in the project, so the tree is out of date as well. */
+  const libraryChanged = useCallback(() => {
+    setLibraryVersion((v) => v + 1);
+    setProjectVersion((v) => v + 1);
+  }, []);
+
+  const libraryFailed = useCallback(
+    (message: string) => report(toDiagnostic(message, "library"), null),
+    [report],
+  );
+
   /**
    * Pack the project up as a library somebody else can install.
    *
@@ -1982,13 +1999,8 @@ function App() {
               // that changes what is installed also changes the tree.
               version={libraryVersion + projectVersion}
               onInstall={() => void installLibrary()}
-              onChanged={() => {
-                setLibraryVersion((v) => v + 1);
-                setProjectVersion((v) => v + 1);
-              }}
-              onError={(message) =>
-                report(toDiagnostic(message, "library"), null)
-              }
+              onChanged={libraryChanged}
+              onError={libraryFailed}
             />
           }
         />
