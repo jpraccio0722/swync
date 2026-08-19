@@ -7,84 +7,14 @@ receives: number
 returns: source
 ---
 
-A keyboard, played live, where a pattern would go:
+A keyboard to play, in place of a pattern:
+`play(midiin("keystation"), lead)`, or `midiin("keystation").play(lead)`.
 
-```swync
-fn lead(n) = saw(n.m2h) * perc(0.01, 0.4)
+The device is a port's name — matched on any part of it, ignoring case — or its
+number in the settings panel's list. `channel` is 1-16 and defaults to every
+channel, which is what a keyboard on its own means.
 
-play(midiin("keystation"), lead)
-```
+A note arrives as its MIDI note number, the same thing a pattern step carries.
+An instrument that declares a `vel` parameter is given the velocity, 0 to 1.
 
-It is the mirror of `midiout`: that one puts gear where the *instrument* goes,
-this one puts gear where the *pattern* goes. And because `a.f(b)` is `f(a, b)`,
-the chained spelling comes free:
-
-```swync
-midiin("keystation").play(lead)
-```
-
-The device is a port's name — matched on any part of it, ignoring case — or
-its number. The editor offers this machine's inputs as you type. `channel` is
-1-16 and defaults to **every** channel, which is what a keyboard on its own
-means.
-
-## What a note is
-
-The MIDI note number, which is the same thing a pattern step carries — so an
-instrument does not know or care which one it is playing:
-
-```swync
-let riff = [c4;q, e4, g4]
-
-play(riff, lead)                   -- written down
-play(midiin("keystation"), lead)   -- played by hand
-```
-
-## Velocity
-
-An instrument that declares a `vel` parameter is given the velocity of each
-note, 0 to 1. One that does not never sees it — which is what lets an
-instrument written long before any of this still play from a keyboard.
-
-```swync
-fn touched(n, vel = 0.7) = saw(n.m2h) * vel * perc(0.01, 0.4)
-
-play(midiin("keystation"), touched)
-```
-
-An explicit lane wins over the keyboard: `play(midiin("keys"), touched,
-vel: 0.6)` plays everything at the same weight.
-
-## Releases, and what `dur` means here
-
-Letting a key go runs the instrument's **own** release. `env(0.01, 0.1, 0.7,
-2, dur)` takes two seconds to fade, as written — the note is not cut short by
-the key coming up.
-
-`dur` is the one thing that cannot mean what it usually does. For a written
-note it is how long that note lasts; for a held key there is no such number at
-the moment the voice is built, so `dur` is the longest a note may be held —
-a minute. That matters if you write times *derived* from it:
-
-```swync
--- On a keyboard, `dur/2` is thirty seconds.
-fn pad(n) = saw(n.m2h) * env(0.5, dur/2, 0.7, 2, dur)
-
--- Say what you mean instead, and the release still follows the key.
-fn pad(n) = saw(n.m2h) * env(0.5, 0.3, 0.7, 2, dur)
-```
-
-`dur` in the last slot is still right, and still what gates the envelope on
-the key — it is only arithmetic on it that goes strange.
-
-A **stop** is different from a key coming up: it cuts, without the release.
-Stop means the room goes quiet now, and a pad ringing for two seconds after
-somebody pressed it would be the one thing a stop is for.
-
-## What it cannot do
-
-A keyboard has no length. There is no first note to start a pass and none to
-end one, so `play_once`, `playn` and a rate are all refused rather than
-quietly ignored — each of them would be a claim the program makes and the
-music does not keep. `play` is the only one it takes, and what stops it is the
-transport, or the next run not naming it.
+A keyboard has no length, so it takes neither a rate nor `play_once`/`playn`.

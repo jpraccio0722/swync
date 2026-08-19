@@ -3,8 +3,7 @@ layout: ../../layouts/Chapter.astro
 slug: midi
 ---
 
-So far everything has happened inside swync. Now let's play some hardware, and let some
-hardware play us.
+So far everything has happened inside swync. Now let's play with some hardware.
 
 ## Finding your gear
 
@@ -23,20 +22,10 @@ play([c2;q, c2, g2, c2], midiout("deluge"))
 ```
 
 Any part of the name will do, and case doesn't matter — `"deluge"` finds `Deluge MIDI 1`.
-The number works too, if the name is unpronounceable.
+The device number works too.
 
 ```swync
 play([c2;q, c2, g2, c2], midiout(2))
-```
-
-The notes are the same note numbers you've been writing all along, so a line you wrote for a
-synth in swync plays your hardware unchanged.
-
-```swync
-let riff = [c4;q, e4, g4, e4]
-
-play(riff, lead)               // the instrument you wrote
-play(riff, midiout("prophet")) // the same notes, out of the machine
 ```
 
 A second argument is the channel, 1 to 16.
@@ -45,13 +34,12 @@ A second argument is the channel, 1 to 16.
 play([c2;q, c2, g2, c2], midiout("deluge", 3))
 ```
 
-If the port isn't plugged in tonight, the problems panel says so and everything else in your
-program still runs. Write for a rack, edit on a train.
+If the port isn't plugged in, the problems panel says so but won't prevent a compile. Everything else in your
+program still runs.
 
 ## Lanes
 
-Three lanes work here. `vel` is how hard the note is struck, 0 to 1 like everything else in
-the language.
+Three lanes work here. `vel`: 0 to 1 like everything else in the language.
 
 ```swync
 play([c2;q, c2, g2, c2], midiout("deluge"), vel: [1, .5, .8, .5])
@@ -63,23 +51,15 @@ play([c2;q, c2, g2, c2], midiout("deluge"), vel: [1, .5, .8, .5])
 play([c2;q, c2, g2, c2], midiout("deluge"), legato: .25)   // staccato
 ```
 
-And `chan` overrides the channel per note, which is how a drum part gets its kick and snare
-onto one channel and its ride onto another.
+And `chan` overrides the channel per note.
 
 ```swync
 play([36;e, 42, 38, 42], midiout("digitakt"), chan: [1, 10, 1, 10])
 ```
 
-Everything else you know still applies. Arrangement doesn't care that the notes are leaving
-the building.
-
-```swync
-playn(verse, midiout("deluge"), 4).then(chorus)
-```
-
 ## Playing a keyboard
 
-`midiin` is the mirror: it goes where the *pattern* would go.
+`midiin` goes where the *pattern* would go.
 
 ```swync
 fn lead(n) = saw(n.m2h) * perc(0.01, 0.4)
@@ -89,7 +69,7 @@ play(midiin("keystation"), lead)
 
 Play the keyboard. Your instrument sounds.
 
-Because `a.f(b)` is `f(a, b)`, this reads the other way round too, which is often nicer:
+Because `a.f(b)` is `f(a, b)`, this reads the other way round too:
 
 ```swync
 midiin("keystation").play(lead)
@@ -114,7 +94,7 @@ play(midiin("keystation"), lead)
 An instrument without a `vel` parameter never sees it, so everything you've already written
 still plays.
 
-### One thing to watch
+### Duration
 
 `dur` is how long a note lasts, and a key you're still holding down doesn't have a length
 yet. So on a keyboard `dur` is the longest a note *could* be — which is a long time.
@@ -177,20 +157,3 @@ play(bass, midiout("deluge"), vel: [1, .6, .8])
 
 It starts and stops with the transport, and follows your tempo wherever you drag it. Write it
 once per port.
-
-### Following someone else
-
-The other way round isn't in the language, because it isn't about the piece — it's about
-tonight. In the settings panel, under MIDI, **Follow clock** picks an input to take the tempo
-from.
-
-While one is chosen, the tempo is theirs. If it stops arriving — a cable out, or the other
-box just stopped — swync keeps playing at the tempo it last saw and the panel tells you it
-has lost the clock. Better than silence.
-
-### Lining things up
-
-Sound leaves your machine through a converter, and whatever is at the other end of your MIDI
-cable has its own delay. If your gear sits slightly ahead of or behind swync, the **Send
-offset** in the settings panel moves the MIDI. Set it by ear against something swync is
-playing itself.

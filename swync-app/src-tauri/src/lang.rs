@@ -1437,7 +1437,7 @@ pub static SPECIALS: &[ListBuiltin] = &[
         variadic: false,
         receives: ValueKind::Number,
         returns: ValueKind::Number,
-        doc: "Send the transport's clock to a port, so a synth's arps and delays line up with the part written for it: `midiclock(\"deluge\")`. Twenty-four ticks to the quarter note, plus start and stop with the transport. The device is a port's name — matched on any part of it, ignoring case — or its number. Following somebody else's clock is the other way round and is not this: it is in the transport panel, because whether you are the slave tonight is about the rig rather than the piece.",
+        doc: "Send the transport's clock to a port, so a synth's arps and delays line up with the part written for it: `midiclock(\"deluge\")`. Twenty-four ticks to the quarter note, plus start and stop with the transport. The device is a port's name — matched on any part of it, ignoring case — or its number. Following somebody else's clock is the other way round and is not this: it is in the settings panel under MIDI, because whether you are the slave tonight is about the rig rather than the piece.",
     },
     ListBuiltin {
         name: "cc",
