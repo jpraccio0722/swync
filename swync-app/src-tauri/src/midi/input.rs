@@ -439,6 +439,17 @@ pub(crate) fn exclusive() -> std::sync::MutexGuard<'static, ()> {
     guard
 }
 
+/// Put a message on the bus as if it had arrived, for tests elsewhere in the
+/// crate that are about what happens *after* one does.
+///
+/// The scheduler's tests need this and cannot reach `receive`, which is
+/// private because nothing outside this module has any business deciding what
+/// a MIDI message means.
+#[cfg(test)]
+pub(crate) fn inject(slot: usize, bytes: &[u8]) {
+    receive(slot, bytes);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

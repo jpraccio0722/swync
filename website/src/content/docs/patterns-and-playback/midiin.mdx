@@ -55,6 +55,32 @@ play(midiin("keystation"), touched)
 An explicit lane wins over the keyboard: `play(midiin("keys"), touched,
 vel: 0.6)` plays everything at the same weight.
 
+## Releases, and what `dur` means here
+
+Letting a key go runs the instrument's **own** release. `env(0.01, 0.1, 0.7,
+2, dur)` takes two seconds to fade, as written — the note is not cut short by
+the key coming up.
+
+`dur` is the one thing that cannot mean what it usually does. For a written
+note it is how long that note lasts; for a held key there is no such number at
+the moment the voice is built, so `dur` is the longest a note may be held —
+a minute. That matters if you write times *derived* from it:
+
+```swync
+-- On a keyboard, `dur/2` is thirty seconds.
+fn pad(n) = saw(n.m2h) * env(0.5, dur/2, 0.7, 2, dur)
+
+-- Say what you mean instead, and the release still follows the key.
+fn pad(n) = saw(n.m2h) * env(0.5, 0.3, 0.7, 2, dur)
+```
+
+`dur` in the last slot is still right, and still what gates the envelope on
+the key — it is only arithmetic on it that goes strange.
+
+A **stop** is different from a key coming up: it cuts, without the release.
+Stop means the room goes quiet now, and a pad ringing for two seconds after
+somebody pressed it would be the one thing a stop is for.
+
 ## What it cannot do
 
 A keyboard has no length. There is no first note to start a pass and none to
@@ -62,5 +88,3 @@ end one, so `play_once`, `playn` and a rate are all refused rather than
 quietly ignored — each of them would be a claim the program makes and the
 music does not keep. `play` is the only one it takes, and what stops it is the
 transport, or the next run not naming it.
-
-Notes still held when you stop are released.

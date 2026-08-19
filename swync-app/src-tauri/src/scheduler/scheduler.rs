@@ -20,7 +20,9 @@ use crate::pattern::patterns::{
     Binding, BoundEvent, LaneArg, LaneValues, Patterns, Target, VELOCITY,
 };
 use crate::scheduler::clock::{Clock, Meter};
-use crate::scheduler::voice::{Instruments, build_voice};
+use crate::swync_graph::realizer as realizer;
+use crate::swync_graph::realizer::Gate;
+use crate::scheduler::voice::{Instruments, build_held_voice, build_voice};
 
 /// How far ahead of the audio clock we schedule.
 const LOOKAHEAD_SECS: f64 = 0.2;
@@ -259,6 +261,15 @@ struct HeldKey {
     channel: u8,
     note: u8,
     id: EventId,
+    /// The instrument's own envelope, waiting to be let go.
+    gate: Gate,
+    /// Audio time this voice started, so the release can be written in the
+    /// voice's own time — which is what an envelope counts in.
+    start_secs: f64,
+    /// How long the instrument goes on after the key comes up. The sequencer
+    /// event has to stay open at least that long or the release is cut off by
+    /// the very thing that was supposed to let it run.
+    tail_secs: f64,
 }
 
 /// How far the scheduler has pushed, in bars, tagged with the clock epoch it
@@ -404,7 +415,7 @@ fn play_live_notes(
 
     for note in notes {
         if !note.on {
-            release(seq, held, &note);
+            release(seq, held, &note, clock.now_secs());
             continue;
         }
         for binding in &bindings {
@@ -422,7 +433,7 @@ fn play_live_notes(
             // sends one release per key, so a second voice on the same key
             // would have nothing to end it — the same argument `midi::out`
             // makes from the other side.
-            release(seq, held, &note);
+            release(seq, held, &note, clock.now_secs());
 
             let mut args = live_args(binding, *played);
             // Velocity reaches an instrument that asked for it, under the name
@@ -444,7 +455,7 @@ fn play_live_notes(
             };
 
             let start_secs = clock.now_secs() + LIVE_LEAD_SECS;
-            match build_voice(
+            match build_held_voice(
                 &instruments, instrument, note.note as f64, &args,
                 HELD_SECS, clock.beat_secs(), clock.meter(),
             ) {
@@ -453,12 +464,25 @@ fn play_live_notes(
                     return None;
                 }
                 Ok(voice) => {
-                    if let Some(id) = push_voice(seq, start_secs, HELD_SECS, voice.net) {
+                    let Some(gate) = voice.gate.clone() else {
+                        state.fail("a held voice was built without a gate".to_string());
+                        return None;
+                    };
+                    // Room for the release on the end, exactly as a pattern
+                    // note gets room for its tail — otherwise a key held for
+                    // the full `HELD_SECS` would have its release cut off by
+                    // the safety net rather than by anything musical.
+                    if let Some(id) =
+                        push_voice(seq, start_secs, HELD_SECS + voice.tail_secs, voice.net)
+                    {
                         held.push(HeldKey {
                             slot: note.slot,
                             channel: note.channel,
                             note: note.note,
                             id,
+                            gate,
+                            start_secs,
+                            tail_secs: voice.tail_secs,
                         });
                     }
                 }
@@ -492,22 +516,41 @@ fn live_args(binding: &Binding, played: usize) -> Vec<(String, LaneArg)> {
         .collect()
 }
 
-/// End every voice this key is holding open.
+/// Let go of every voice this key is holding open.
 ///
 /// Every one rather than the last, because two bindings may both be reading
 /// the same keyboard, and one release has to end both — the wire sends one
 /// message per key, not one per thing listening.
-fn release(seq: &mut Sequencer, held: &mut Vec<HeldKey>, note: &crate::midi::input::LiveNote) {
+///
+/// **This is a release, not a cut**, and the difference is the whole reason
+/// [`Gate`] exists. Ending the sequencer event here would fade the voice out
+/// over `FADE_OUT_SECS`, which is twenty milliseconds — so an instrument that
+/// says `env(.., 2, dur)` would be clipped to a click by the machinery meant
+/// to be playing it. Instead the envelope is told the key has come up, in its
+/// own time, and it releases on its own shape; the event is then left open
+/// long enough for that to finish and closed with the ordinary short fade,
+/// which by then is landing on silence.
+fn release(seq: &mut Sequencer, held: &mut Vec<HeldKey>, note: &crate::midi::input::LiveNote,
+           now_secs: f64) {
     held.retain(|key| {
         let same = key.slot == note.slot && key.channel == note.channel && key.note == note.note;
         if same {
-            seq.edit_relative(key.id, FADE_OUT_SECS, FADE_OUT_SECS);
+            // In the voice's own time, which starts when the sequencer starts
+            // it. A key let go before the note has begun releases at zero
+            // rather than at a negative time.
+            realizer::release_at(&key.gate, now_secs - key.start_secs);
+            seq.edit_relative(key.id, key.tail_secs, FADE_OUT_SECS.min(key.tail_secs));
         }
         !same
     });
 }
 
 /// Cut every held key and forget them, for a stop.
+///
+/// A cut rather than a release, unlike [`release`], and deliberately: stop
+/// means the room goes quiet now. Letting every held note run its own release
+/// would leave a pad ringing for two seconds after somebody pressed stop,
+/// which is the one thing a stop is for.
 fn release_all(seq: &mut Sequencer, held: &mut Vec<HeldKey>) {
     for key in held.drain(..) {
         seq.edit_relative(key.id, FADE_OUT_SECS, FADE_OUT_SECS);
@@ -1111,6 +1154,113 @@ mod pass_tests {
         let (out, rx) = midi::Out::collecting();
         out.stop();
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![midi::Command::Stop]);
+    }
+
+    /// The bug from the field, end to end: a pad whose `env` says it releases
+    /// over half a second was being cut off in twenty milliseconds, because
+    /// letting a key go ended the *sequencer event* instead of the
+    /// *envelope*. What that sounds like is a click where a release was
+    /// written.
+    ///
+    /// This is the scheduler's half of it — `voice::gate_tests` covers the
+    /// envelope itself. Together they are the two places the fix had to land.
+    #[test]
+    fn letting_a_key_go_does_not_cut_the_instrument_short() {
+        use crate::midi::input;
+        let _bus = input::exclusive();
+
+        let rate = 44100.0;
+        let clock = Clock::new(rate);
+        let (state, _rx) = midi_state("fn pad(n) = saw(n.m2h) * env(0.01, 0.05, 0.7, 0.5, dur)\n");
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(rate);
+        let mut held = Vec::new();
+        let mut played = 0;
+
+        let slot = input::slot_for(&crate::midi::ports::Selector::Name("keys".into())).unwrap();
+        assert_eq!(slot, 0, "the binding below was built against slot 0");
+
+        // A key goes down, and the pass that follows turns it into a voice.
+        input::inject(slot, &[0x90, 60, 100]);
+        play_live_notes(&mut seq, &clock, &state, &mut held, &mut played);
+        assert_eq!(held.len(), 1, "the key should be holding a voice open");
+
+        // Past the lead and well into the sustain.
+        let sounding = peak_over(&mut seq, (0.2 * rate) as usize);
+        assert!(sounding > 0.05, "the pad should be sounding while the key is down");
+
+        clock.advance((0.2 * rate) as u64);
+        input::inject(slot, &[0x80, 60, 0]);
+        play_live_notes(&mut seq, &clock, &state, &mut held, &mut played);
+        assert!(held.is_empty(), "the key should no longer be holding anything");
+
+        // The whole of the bug is here, and *where* it is measured is the
+        // point. A peak taken from the moment of release would catch the
+        // sound still there in the first twenty milliseconds and pass either
+        // way — the cut is a cut precisely because everything before it is
+        // fine. So skip past where a cut would have landed, and listen to
+        // what is left.
+        peak_over(&mut seq, (0.05 * rate) as usize);
+        let still_ringing = peak_over(&mut seq, (0.05 * rate) as usize);
+        assert!(
+            still_ringing > 0.02,
+            "a tenth of a second into a half-second release the pad should still be \
+             sounding, got {still_ringing} — this is the click the gate exists to prevent"
+        );
+
+        // And it does end, on the instrument's own schedule rather than never.
+        peak_over(&mut seq, (0.5 * rate) as usize);
+        let after = peak_over(&mut seq, (0.1 * rate) as usize);
+        assert!(after < 0.01, "the release should have finished, got {after}");
+    }
+
+    /// A stop is the other way round, and deliberately: the room goes quiet
+    /// now. Letting every held note run its own release would leave a pad
+    /// ringing for two seconds after somebody pressed stop.
+    #[test]
+    fn a_stop_cuts_a_held_key_rather_than_releasing_it() {
+        use crate::midi::input;
+        let _bus = input::exclusive();
+
+        let rate = 44100.0;
+        let clock = Clock::new(rate);
+        let (state, _rx) = midi_state("fn pad(n) = saw(n.m2h) * env(0.01, 0.05, 0.7, 0.5, dur)\n");
+        let mut seq = Sequencer::new(0, 2, ReplayMode::None);
+        seq.set_sample_rate(rate);
+        let mut held = Vec::new();
+
+        let slot = input::slot_for(&crate::midi::ports::Selector::Name("keys".into())).unwrap();
+        input::inject(slot, &[0x90, 60, 100]);
+        play_live_notes(&mut seq, &clock, &state, &mut held, &mut 0);
+        peak_over(&mut seq, (0.2 * rate) as usize);
+
+        release_all(&mut seq, &mut held);
+        // Past the short fade a cut uses, and nothing like far enough for the
+        // half-second release the instrument asked for.
+        peak_over(&mut seq, (0.05 * rate) as usize);
+        let after = peak_over(&mut seq, (0.05 * rate) as usize);
+        assert!(after < 0.01, "stop should have silenced it, got {after}");
+    }
+
+    /// A keyboard bound to an instrument, and the receiving end of what it
+    /// would have sent if it were bound to a port instead.
+    fn midi_state(src: &str) -> (SchedulerState, std::sync::mpsc::Receiver<midi::Command>) {
+        let (out, rx) = midi::Out::collecting();
+        let s = SchedulerState::new().with_midi(out);
+        let ast = parse(src.to_string()).unwrap();
+        *s.instruments.lock().unwrap() = Instruments::from_program(&ast);
+        *s.patterns.lock().unwrap() = Patterns {
+            bindings: vec![Binding {
+                target: "pad".into(),
+                source: crate::pattern::patterns::SourceOf::Live(
+                    crate::swync_graph::environment::Source { slot: 0, channel: None },
+                ),
+                lanes: Vec::new(),
+                start: 0.0,
+                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+            ..Default::default()
+        };
+        (s, rx)
     }
 
     fn peak_over(seq: &mut Sequencer, frames: usize) -> f32 {

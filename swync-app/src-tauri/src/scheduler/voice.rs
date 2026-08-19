@@ -3,7 +3,7 @@
 
 use fundsp::net::Net;
 
-use crate::swync_graph::realizer::{realize, tail_secs};
+use crate::swync_graph::realizer::{self as realizer, realize_gated, tail_secs, Gate};
 use crate::lowerer::lower::lower_voice;
 use crate::parser::parser::{Arg, ListItem, SwyncItem, Expr, Ident};
 use crate::pattern::patterns::{LaneArg, PAN};
@@ -95,6 +95,11 @@ const CENTRE_UNITY: f32 = std::f32::consts::SQRT_2;
 pub struct Voice {
     pub net: Net,
     pub tail_secs: f64,
+    /// The key holding this voice open, for a voice a keyboard is playing.
+    ///
+    /// `None` for every voice whose note has a length — which is every voice a
+    /// written pattern makes. See [`crate::swync_graph::realizer::Gate`].
+    pub gate: Option<Gate>,
 }
 
 /// Lower and realize `instrument(value, name: v, ...)` into a playable
@@ -126,6 +131,38 @@ pub fn build_voice(
     beat_secs: f64,
     meter: Meter,
 ) -> Result<Voice, String> {
+    build(instruments, instrument, value, lanes, dur_secs, beat_secs, meter, false)
+}
+
+/// The same, for a note a key is holding down.
+///
+/// Split from [`build_voice`] rather than given a flag at every call site,
+/// because there is exactly one caller that wants it and several hundred that
+/// do not.
+#[allow(clippy::too_many_arguments)]
+pub fn build_held_voice(
+    instruments: &Instruments,
+    instrument: &str,
+    value: f64,
+    lanes: &[(String, LaneArg)],
+    dur_secs: f64,
+    beat_secs: f64,
+    meter: Meter,
+) -> Result<Voice, String> {
+    build(instruments, instrument, value, lanes, dur_secs, beat_secs, meter, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build(
+    instruments: &Instruments,
+    instrument: &str,
+    value: f64,
+    lanes: &[(String, LaneArg)],
+    dur_secs: f64,
+    beat_secs: f64,
+    meter: Meter,
+    held_by_key: bool,
+) -> Result<Voice, String> {
     let Some(params) = instruments.param_count(instrument) else {
         return Err(format!("no instrument named `{instrument}`"));
     };
@@ -154,7 +191,10 @@ pub fn build_voice(
     }));
 
     let lowered = lower_voice(&items, dur_secs, beat_secs, meter, instruments.samples.clone())?;
-    let net = realize(&lowered.graph)?;
+    // A voice built for a held key gets an envelope it can be let go of; every
+    // other voice knows how long it is and is realized exactly as before.
+    let gate = held_by_key.then(realizer::held);
+    let net = realize_gated(&lowered.graph, gate.as_ref().map(|g| (g, dur_secs)))?;
 
     // `play` refuses a lane given twice, so at most one of these exists — and
     // refuses a quoted list on a reserved lane, so it is a number.
@@ -164,6 +204,7 @@ pub fn build_voice(
     Ok(Voice {
         net: place(net, pan.unwrap_or(0.0)),
         tail_secs: tail_secs(&lowered.graph, dur_secs),
+        gate,
     })
 }
 
@@ -930,5 +971,125 @@ mod zero_param_tests {
         let ins = instruments("fn kick(_) = sin(50) * perc(0.002, 0.3)\n");
         assert_eq!(ins.param_count("kick"), Some(1));
         assert!(build_voice(&ins, "kick", 1.0, &[], 1.0).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+    use fundsp::audiounit::AudioUnit;
+    use crate::parser::parser::parse;
+    use crate::swync_graph::realizer::release_at;
+
+    const RATE: f64 = 44100.0;
+
+    /// A pad shaped like the one in the bug report: a slow-ish attack, a
+    /// sustain, and a release long enough that cutting it instead is
+    /// unmistakable.
+    fn pad() -> Instruments {
+        let src = "fn pad(n) = saw(n.m2h) * env(0.01, 0.05, 0.7, 0.5, dur)\n";
+        Instruments::from_program(&parse(src.to_string()).expect("parse"))
+    }
+
+    /// Peak over the next `secs` of a voice, which is what "is it still
+    /// sounding" means.
+    fn peak(net: &mut fundsp::net::Net, secs: f64) -> f32 {
+        let mut peak = 0.0f32;
+        for _ in 0..(secs * RATE) as usize {
+            let (l, r): (f32, f32) = net.get_stereo();
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        peak
+    }
+
+    fn held_pad() -> Voice {
+        let mut voice = build_held_voice(
+            &pad(), "pad", 60.0, &[], crate::midi::input::HELD_SECS, 0.5, Meter::default(),
+        ).expect("should build");
+        voice.net.set_sample_rate(RATE);
+        voice
+    }
+
+    /// The bug: a key held past the end of the envelope's attack and decay
+    /// should still be sounding, because nothing has let go of it.
+    #[test]
+    fn a_held_key_goes_on_sounding() {
+        let mut voice = held_pad();
+        peak(&mut voice.net, 0.2);
+        assert!(peak(&mut voice.net, 0.2) > 0.1, "a key still down should still sound");
+    }
+
+    /// The fix. Letting the gate go must run the instrument's *own* release —
+    /// so the sound is still there a tenth of a second later, and gone by the
+    /// far side of the half-second the envelope asked for.
+    ///
+    /// Cutting the voice instead, which is what a bare `edit_relative` did,
+    /// would have it silent within twenty milliseconds — which is the click
+    /// this test exists to keep out.
+    #[test]
+    fn letting_a_key_go_runs_the_instruments_own_release() {
+        let mut voice = held_pad();
+        let gate = voice.gate.clone().expect("a held voice has a gate");
+        peak(&mut voice.net, 0.2);
+
+        release_at(&gate, 0.2);
+
+        // Measured *after* the point a cut would have landed, not from the
+        // release — everything in the first twenty milliseconds sounds the
+        // same either way, which is exactly why a cut is hard to catch.
+        peak(&mut voice.net, 0.05);
+        let still_ringing = peak(&mut voice.net, 0.05);
+        assert!(still_ringing > 0.05,
+            "a tenth of a second into a half-second release it should still be sounding, \
+             got {still_ringing}");
+
+        // Past the end of the release.
+        peak(&mut voice.net, 0.45);
+        let after = peak(&mut voice.net, 0.1);
+        assert!(after < 0.01, "the release should have finished, got {after}");
+    }
+
+    /// What makes the release a release rather than a fade: it comes down over
+    /// the time the instrument asked for, so a later moment is quieter than an
+    /// earlier one all the way down.
+    #[test]
+    fn a_release_falls_rather_than_stopping() {
+        let mut voice = held_pad();
+        let gate = voice.gate.clone().expect("a held voice has a gate");
+        peak(&mut voice.net, 0.2);
+        release_at(&gate, 0.2);
+
+        let early = peak(&mut voice.net, 0.15);
+        let late = peak(&mut voice.net, 0.15);
+        assert!(late < early, "it should be falling: {early} then {late}");
+        assert!(late > 0.0, "and not already gone");
+    }
+
+    /// A voice with a length of its own is untouched by any of this — which is
+    /// every voice a written pattern makes, and so nearly every voice there is.
+    #[test]
+    fn a_voice_that_knows_its_length_has_no_gate() {
+        let voice = build_voice(&pad(), "pad", 60.0, &[], 0.5, 0.5, Meter::default())
+            .expect("should build");
+        assert!(voice.gate.is_none());
+    }
+
+    /// Only the envelope written to last the whole note is gated. A short
+    /// shape inside the same instrument keeps the length it asked for —
+    /// otherwise every blip in an instrument would sustain until the key came
+    /// up, which is not what any of them say.
+    #[test]
+    fn a_short_envelope_inside_a_held_voice_keeps_its_own_length() {
+        let src = "fn blip(n) = saw(n.m2h) * env(0.001, 0.01, 0.0, 0.02, 0.05)\n";
+        let instruments = Instruments::from_program(&parse(src.to_string()).expect("parse"));
+        let mut voice = build_held_voice(
+            &instruments, "blip", 60.0, &[], crate::midi::input::HELD_SECS, 0.5,
+            Meter::default(),
+        ).expect("should build");
+        voice.net.set_sample_rate(RATE);
+
+        // Nothing has let go of anything, and it should still be over.
+        peak(&mut voice.net, 0.2);
+        assert!(peak(&mut voice.net, 0.1) < 0.01, "a 50ms shape should have finished");
     }
 }

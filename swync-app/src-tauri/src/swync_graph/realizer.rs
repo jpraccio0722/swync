@@ -248,7 +248,54 @@ fn mono(rev: An<impl AudioNode<Inputs = U2, Outputs = U2> + 'static>) -> Box<dyn
 /// The result is always 0-in / 2-out. Both consumers require it: the engine's
 /// program slot is stereo (crossfade asserts matching arity) and the sequencer
 /// is stereo (push asserts it). A mono result fans out to both channels.
+/// When an envelope should release, for a voice whose note has no length yet.
+///
+/// A key that is down has no end until it comes up, and `env`'s release is
+/// baked in at build time from its fifth argument — so a voice built for a
+/// held key has a release scheduled at a time that never arrives, and the only
+/// way to end it is to cut it. That is a click where a release was written.
+///
+/// This is that fifth argument made to move: seconds of the voice's own time,
+/// `f32::INFINITY` while the key is down, and the moment of the release when
+/// it comes up. One `AtomicU32` per voice, written once, read on the audio
+/// callback like any other envelope parameter.
+pub type Gate = std::sync::Arc<std::sync::atomic::AtomicU32>;
+
+/// A gate that is never let go, which is what a voice with a known length has.
+pub fn held() -> Gate {
+    std::sync::Arc::new(std::sync::atomic::AtomicU32::new(f32::INFINITY.to_bits()))
+}
+
+/// Let a gated voice go, at `secs` into its own life.
+pub fn release_at(gate: &Gate, secs: f64) {
+    gate.store((secs.max(0.0) as f32).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// What a gate currently says, in seconds.
+fn gate_secs(gate: &Gate) -> f64 {
+    f32::from_bits(gate.load(std::sync::atomic::Ordering::Relaxed)) as f64
+}
+
 pub fn realize(graph: &SwyncGraph) -> Result<Net, String> {
+    realize_gated(graph, None)
+}
+
+/// Realize a voice whose note ends when a key is let go.
+///
+/// `gate` is `Some` only for a live voice — a keyboard's, which is the one
+/// case where the length is not known at build time. Everything else in the
+/// engine goes through [`realize`] and is untouched by any of this.
+///
+/// **Only an envelope written to last the whole note is gated.** `held` is the
+/// length such a voice was given, so an `env(.., dur)` matches it exactly and
+/// gates on the key, while an `env(.., 0.1)` blip inside the same instrument
+/// keeps the length it asked for. Overriding both would make every short shape
+/// in an instrument sustain until the key came up, which is not what any of
+/// them say.
+pub fn realize_gated(
+    graph: &SwyncGraph,
+    gate: Option<(&Gate, f64)>,
+) -> Result<Net, String> {
     let mut net = Net::new(0, 2);
     let mut ids: Vec<fundsp::net::NodeId> = Vec::with_capacity(graph.nodes.len());
 
@@ -325,9 +372,21 @@ pub fn realize(graph: &SwyncGraph) -> Result<Net, String> {
                 let decay = const_param(n, 1, "env decay")? as f64;
                 let sustain = const_param(n, 2, "env sustain")? as f64;
                 let release = const_param(n, 3, "env release")? as f64;
-                let gate = (const_param(n, 4, "env duration")? as f64).max(0.0);
+                let written = (const_param(n, 4, "env duration")? as f64).max(0.0);
+                // Written to last the whole note, on a voice whose note is a
+                // key being held: this is the envelope the key lets go of.
+                let keyed = match gate {
+                    Some((cell, held)) if written >= held => Some(cell.clone()),
+                    _ => None,
+                };
                 (
                     Box::new(An(Envelope::new(ENV_INTERVAL, move |t: f64| -> f64 {
+                        // Read per call rather than captured, which is the
+                        // whole point: it changes when the key comes up.
+                        let gate = match &keyed {
+                            Some(cell) => gate_secs(cell),
+                            None => written,
+                        };
                         let level = ads_level(t.min(gate), attack, decay, sustain);
                         let mult = if t < gate {
                             1.0

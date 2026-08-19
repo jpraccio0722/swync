@@ -321,10 +321,39 @@ between a key press and the push is latency under somebody's fingers. So
 `LIVE_TICK` is 2 ms and applies only while a live binding exists; every session
 that plays no keyboard wakes as rarely as it always did.
 
-A held note is pushed with `HELD_SECS` on it and cut short by `edit_relative`
-when the release arrives — the same mechanism an audition uses. The cap is a
-safety net, not a limit: a note-off can be lost to a pulled cable, and what
-that would otherwise leave is a voice droning until the app is quit.
+**A key coming up is a release, not a cut**, and that distinction is what
+`realizer::Gate` exists for. `env`'s fifth argument is its gate time, baked in
+as a constant at build — so a voice built for a held key has its release
+scheduled at a time that never arrives, and ending the sequencer event instead
+fades it out over `FADE_OUT_SECS`. That is twenty milliseconds: a click where a
+two-second release was written, which is exactly what was reported from the
+field. So a live voice goes through `realize_gated`, whose envelope reads its
+gate from an `AtomicU32` per voice; the note-off writes the moment into it in
+the voice's own time and leaves the event open for `tail_secs` so the release
+can finish.
+
+Only an envelope written to last **the whole note** is gated — `realize_gated`
+matches the constant against the length the voice was built for, so
+`env(.., dur)` gates on the key while an `env(.., 0.05)` blip in the same
+instrument keeps its own length. Overriding both would make every short shape
+sustain until the key came up.
+
+A **stop** still cuts, and deliberately: stop means the room goes quiet now,
+not in two seconds. `letting_a_key_go_does_not_cut_the_instrument_short` and
+`a_stop_cuts_a_held_key_rather_than_releasing_it` are the pair that pin the
+difference, and the first measures *past* where a cut would have landed —
+taken from the moment of release it would pass either way, since a cut is a cut
+precisely because everything before it is fine.
+
+`dur` inside a live voice is `HELD_SECS`, the longest a key may be held. There
+is no honest number at build time, and this one is at least an upper bound —
+but times *derived* from `dur` are then minute-scale, so an instrument written
+`env(.., dur/2, ..)` decays over thirty seconds on a keyboard. It is kept large
+rather than musical because the gating rule compares against it: a small `dur`
+would collide with ordinary envelope times written out in full.
+
+The push cap is also a safety net: a note-off can be lost to a pulled cable,
+and what that would otherwise leave is a voice droning until the app is quit.
 
 Velocity reaches an instrument **only if it declares a `vel` parameter**
 (`Instruments::declares`). An instrument that never named it never sees it,
