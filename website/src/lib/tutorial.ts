@@ -91,6 +91,11 @@ export const TUTORIAL: TutorialPage[] = [
 		title: "Enums",
 		blurb: "Giving a group of related values one name each, and comparing them",
 	},
+	{
+		slug: "midi",
+		title: "MIDI",
+		blurb: "Playing your hardware, and letting your hardware play you",
+	},
 ];
 
 export function pageBySlug(slug: string): TutorialPage | undefined {
