@@ -117,10 +117,10 @@ function Problem({
  *
  * The panel outlives the run — it keeps showing the last failure while it is
  * being fixed, and is only replaced by the next run's verdict. Like the
- * transport it stays mounted when hidden, so the hamburger is instant.
+ * transport it stays mounted when hidden, so bringing it back is instant.
  *
- * This is one of the side panel's two tabs; the frame around it, including the
- * count on the tab itself, belongs to `SidePanel`.
+ * This is one of the left panel's views; the frame around it, including the
+ * count on its tray icon, belongs to `SidePanel`.
  */
 export function ProblemsPanel({
   status,

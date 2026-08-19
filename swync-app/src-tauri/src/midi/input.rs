@@ -255,6 +255,22 @@ impl MidiIn {
 ///
 /// `None` when every slot is taken, which is a program naming a ninth port.
 pub fn slot_for(selector: &Selector) -> Option<usize> {
+    // Interning without the guard is a bug that never shows up here: this call
+    // succeeds, and some *other* test — one that took the guard, cleared the
+    // table and had every right to expect slot 0 — fails with a number it
+    // cannot account for. It went unread for as long as it did because the two
+    // have to be running at once for it to happen at all, and which tests those
+    // are is a matter of how many cores are going. So the moment to complain is
+    // this one. Asked before the table is locked, so a panic here cannot poison
+    // it and take the clearing down with it.
+    #[cfg(test)]
+    assert!(
+        guarded(),
+        "interning {selector:?} without holding `midi::input::exclusive()`. A test that \
+         lowers a program naming a MIDI port has to hold the guard — see `exclusive` — or \
+         the slots it takes leak into whatever is running beside it.",
+    );
+
     let bus = bus();
     let mut interned = bus.interned.lock().ok()?;
     if let Some(slot) = interned.iter().position(|s| s == selector) {
@@ -438,6 +454,21 @@ fn push(slot: usize, channel: u8, note: u8, velocity: u8, on: bool) {
     });
 }
 
+/// The lock [`exclusive`] hands out, at module scope so that [`slot_for`] can
+/// ask whether a test is holding it.
+#[cfg(test)]
+static EXCLUSIVE: Mutex<()> = Mutex::new(());
+
+/// Whether some test is holding [`exclusive`].
+///
+/// Only a *free* lock is an answer worth acting on: one held by this thread
+/// and one held by another are both `Err` here, and neither is a bug — a test
+/// may well intern from a thread it spawned while holding the guard itself.
+#[cfg(test)]
+fn guarded() -> bool {
+    EXCLUSIVE.try_lock().is_err()
+}
+
 /// Hold the process's one bus for the duration of a test.
 ///
 /// The same guard [`crate::audio_in::exclusive`] is, for the same reason and
@@ -454,8 +485,7 @@ fn push(slot: usize, channel: u8, note: u8, velocity: u8, on: bool) {
 /// rather than two.
 #[cfg(test)]
 pub(crate) fn exclusive() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = EXCLUSIVE.lock().unwrap_or_else(|e| e.into_inner());
 
     let bus = bus();
     if let Ok(mut interned) = bus.interned.lock() {

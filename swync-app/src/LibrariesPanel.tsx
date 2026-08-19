@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -56,11 +56,21 @@ export function LibrariesPanel({
   const [shadowed, setShadowed] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
+  // The load below re-runs whenever `refresh` changes identity, and `refresh`
+  // is rebuilt whenever anything it closes over does. A parent that writes
+  // `onError={(m) => ...}` inline hands down a new function every render, which
+  // would make that a loop: load, report or set state, render, load again. The
+  // report is one-way and nothing waits on it, so calling whichever one is
+  // current is exactly as good as calling the one captured when `refresh` was
+  // built — and it keeps the load keyed to the project rather than the render.
+  const latestError = useRef(onError);
+  latestError.current = onError;
+
   const refresh = useCallback(async () => {
     try {
       setLibraries(await invoke<Library[]>("list_libraries", { root }));
     } catch (e) {
-      onError(String(e));
+      latestError.current(String(e));
     }
 
     // What the project itself would answer a `use` with. Only the top level:
@@ -82,7 +92,7 @@ export function LibrariesPanel({
       // The tree next door reports its own failures; this is only a note.
       setShadowed([]);
     }
-  }, [root, onError]);
+  }, [root]);
 
   useEffect(() => {
     void refresh();
