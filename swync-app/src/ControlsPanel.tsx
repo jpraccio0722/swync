@@ -1,7 +1,7 @@
 import * as RadixSlider from "@radix-ui/react-slider";
 
 /** Which control this is, and so which way the panel draws it. */
-export type Kind = "slider" | "toggle";
+export type Kind = "slider" | "toggle" | "trigger";
 
 /** One control, as the backend's `controls` command reports it. */
 export interface Control {
@@ -25,8 +25,10 @@ interface ControlsPanelProps {
   controls: Control[];
   /** Every position as it happens: the engine takes them mid-performance. */
   onChange: (name: string, value: number) => void;
-  /** The drag is over. Only a baked slider does anything with this. */
+  /** The gesture is over. Only a baked control does anything with this. */
   onCommit: (control: Control) => void;
+  /** A trigger was hit: fire its section. */
+  onPress: (name: string) => void;
   /** Show me where this was written. Null when there is no project to search. */
   onReveal: ((name: string) => void) | null;
   /** Whether a program has been run at all this session, which is the
@@ -79,6 +81,7 @@ export function ControlsPanel({
   controls,
   onChange,
   onCommit,
+  onPress,
   onReveal,
   hasRun,
 }: ControlsPanelProps) {
@@ -99,11 +102,11 @@ export function ControlsPanel({
             this is most likely to be seen at: an example that needs scrolling
             sideways is one nobody reads. */}
         <pre className="mt-2 overflow-x-auto rounded bg-neutral-900/70 p-2 font-mono text-[11px] text-neutral-400">
-          {'slider("cutoff", 200, 5000)\ntoggle("mute")'}
+          {'slider("cutoff", 200, 5000)\ntoggle("mute")\ntrigger("fill", fill)'}
         </pre>
         <p className="mt-2">
-          Anywhere a signal goes. A slider's range defaults to 0 to 1; a toggle
-          is 0 or 1.
+          A slider or a toggle goes anywhere a signal goes. A trigger names a
+          `fn` and plays it when hit.
         </p>
       </div>
     );
@@ -136,7 +139,7 @@ export function ControlsPanel({
                 {control.name}
               </button>
               <div className="flex shrink-0 items-baseline gap-1.5">
-                {control.baked && (
+                {control.baked && control.kind !== "trigger" && (
                   // Not a warning: it is a fact about where this control was
                   // written, and the only thing that would make it go away is
                   // writing it somewhere else. What it saves is the minute
@@ -149,13 +152,28 @@ export function ControlsPanel({
                     on run
                   </span>
                 )}
-                <span className="font-mono text-xs tabular-nums text-neutral-400">
-                  {control.kind === "toggle" ? (on ? "on" : "off") : value.toFixed(decimals)}
-                </span>
+                {/* A trigger has no value: what it does is not read but
+                    written, so there is nothing here to put a number to. */}
+                {control.kind !== "trigger" && (
+                  <span className="font-mono text-xs tabular-nums text-neutral-400">
+                    {control.kind === "toggle" ? (on ? "on" : "off") : value.toFixed(decimals)}
+                  </span>
+                )}
               </div>
             </div>
 
-            {control.kind === "toggle" ? (
+            {control.kind === "trigger" ? (
+              // Wide and plain, because a trigger is hit rather than set: the
+              // whole row is the target, so it can be found without looking
+              // while something else is being played.
+              <button
+                type="button"
+                onClick={() => onPress(control.name)}
+                className="h-5 w-full rounded bg-neutral-800 text-[11px] text-neutral-300 transition-colors hover:bg-blue-500 hover:text-white active:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              >
+                fire
+              </button>
+            ) : control.kind === "toggle" ? (
               // A switch rather than a two-step slider, because the two mean
               // different things: a slider asks how much and a toggle asks
               // whether. Drawn as the track a thumb slides across so it reads

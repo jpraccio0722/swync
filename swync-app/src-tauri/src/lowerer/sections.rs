@@ -369,6 +369,43 @@ impl Lowerer {
         })
     }
 
+    /// Lower the section a `trigger` fires, at offset zero, and answer where
+    /// its bindings begin.
+    ///
+    /// `place`'s sibling, and deliberately built out of the same two pieces —
+    /// `at_offset` and `inline_body` — so that a `fn` named on a button and the
+    /// same `fn` named after a `.then` are lowered by one mechanism and refused
+    /// in one set of words. What differs is only the offset and what comes
+    /// back: a button has no bar to start at, and the caller wants the slice of
+    /// bindings to mark rather than a section to chain from.
+    ///
+    /// Zero is not a bar here, it is "wherever the press turns out to be" —
+    /// see `Binding::button`, which is what re-reads it that way.
+    pub(crate) fn place_trigger(&mut self, who: &str, args: &[Arg]) -> Result<usize, String> {
+        let Some(arg) = args.first() else {
+            return Err(format!("{who}: the section is missing"));
+        };
+        let expr = &arg.value;
+        let mark = self.bindings.len();
+        self.at_offset(who, 0.0, |me| match me.expr(expr)? {
+            Value::Function(def) => me.inline_body(who, def, Vec::new()),
+            // A play written out at the call is as good as a `fn` named, so
+            // long as its notes are this section's — the same test `place`
+            // makes, and for the same reason.
+            v @ Value::Play { first, chain_first, .. }
+                if first >= mark && chain_first >= mark => Ok(Some(v)),
+            Value::Play { starts_at, .. } => Err(format!(
+                "{who}: the section is a play that has already been placed — it sounds at \
+                 bar {starts_at}, where it was written, and a button's section is lowered \
+                 to be started later rather than moved there afterwards. Wrap it in a `fn` \
+                 and name that here.")),
+            _ => Err(format!(
+                "{who}: the section must be either a `fn` written by name, such as `fill`, \
+                 or a play written out, such as `play_once(pat, inst)`")),
+        })?;
+        Ok(mark)
+    }
+
     /// Parameter `i`, evaluated — for the parts of a combinator that are not
     /// sections and so mean the same whenever they settle.
     fn param(&mut self, p: &Params, i: usize) -> Result<Option<Value>, String> {
@@ -843,7 +880,7 @@ impl Lowerer {
             start: at,
             bars: Some(span),
             repeat: None,
-            choice: None,
+            choice: None, button: None,
             // A fill's own speed, not the one it is filling for: the pattern
             // here is new, and this is the rate it was given.
             rate: rate.into(),

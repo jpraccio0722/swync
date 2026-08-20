@@ -44,7 +44,7 @@
 //! outside it — and a slider reading past its own top is a lie the panel has
 //! no way to draw.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use fundsp::prelude64::*;
@@ -55,6 +55,7 @@ use crate::parser::parser::{Arg, Expr, SwyncItem};
 /// The names, which are also what a diagnostic calls them.
 pub const SLIDER: &str = "slider";
 pub const TOGGLE: &str = "toggle";
+pub const TRIGGER: &str = "trigger";
 
 /// Which control a name declares.
 ///
@@ -75,6 +76,13 @@ pub enum Kind {
     /// with two answers, so a panel draws it as a switch and a program reads it
     /// as the amount it is worth. Multiplying by one is the ordinary use.
     Toggle,
+    /// `trigger(name, section)` — a button that starts a section when pressed.
+    ///
+    /// The odd one out, and the only one that is not a number: it answers with
+    /// nothing, and what a program does with it is not read but *written* —
+    /// the section named beside it. So it has no position, and what its slot
+    /// holds instead is the bar it was last armed at. See [`armed_at`].
+    Trigger,
 }
 
 /// What a slider covers when the program does not say: the range every other
@@ -93,6 +101,13 @@ pub const DEFAULT_HI: f64 = 1.0;
 /// without scrolling past usefulness, and a sixty-fifth is refused with a
 /// warning rather than silently sharing somebody else's slot.
 pub const MAX_SLIDERS: usize = 64;
+
+/// A trigger nobody has pressed.
+///
+/// Infinity rather than a flag beside the number, because every question the
+/// scheduler asks of it is "has this bar come yet?" — and against infinity the
+/// answer is no, forever, without a branch anywhere to forget.
+pub const NEVER: f64 = f64::INFINITY;
 
 /// What a node holds when the slider it named could not be given a slot. Reads
 /// as zero forever, which is what a program declaring a sixty-fifth slider
@@ -129,6 +144,7 @@ impl Kind {
         match self {
             Kind::Slider => SLIDER,
             Kind::Toggle => TOGGLE,
+            Kind::Trigger => TRIGGER,
         }
     }
 
@@ -137,6 +153,7 @@ impl Kind {
         match self {
             Kind::Slider => "slider(\"cutoff\", 200, 5000)",
             Kind::Toggle => "toggle(\"mute\")",
+            Kind::Trigger => "trigger(\"fill\", fill)",
         }
     }
 }
@@ -163,6 +180,17 @@ pub struct Controls {
     /// note plays — late, but never wrong, and the alternative is a return
     /// value neither of those callers has anywhere to hand back to.
     baked: Vec<AtomicBool>,
+    /// The bar each trigger was last armed at, as `f64::to_bits`.
+    ///
+    /// [`NEVER`] until somebody presses it, which reads as a window that never
+    /// opens — every comparison against it is false, so a section nobody has
+    /// fired simply does not sound and needs no second flag to say so.
+    ///
+    /// Written by the press on the main thread and read by the scheduler on
+    /// its own, so it is atomic like a position. It is the *whole* of what the
+    /// scheduler learns from a button: one number, and the arithmetic it
+    /// already does with the origin.
+    armed: Vec<AtomicU64>,
     /// What each slot is, in slot order. Also the interning table: a name's
     /// slot is its position in here. Only the setup path touches it, never the
     /// audio callback.
@@ -217,6 +245,7 @@ pub fn controls() -> &'static Controls {
     CONTROLS.get_or_init(|| Controls {
         at: (0..MAX_SLIDERS).map(|_| AtomicU32::new(0)).collect(),
         baked: (0..MAX_SLIDERS).map(|_| AtomicBool::new(false)).collect(),
+        armed: (0..MAX_SLIDERS).map(|_| AtomicU64::new(NEVER.to_bits())).collect(),
         shapes: Mutex::new(Vec::new()),
         taken: AtomicUsize::new(0),
         declared: Mutex::new(Vec::new()),
@@ -254,6 +283,81 @@ pub fn set(name: &str, value: f64) -> bool {
     let shape = &shapes[slot];
     let clamped = value.clamp(shape.lo.min(shape.hi), shape.lo.max(shape.hi));
     controls.at[slot].store((clamped as f32).to_bits(), Ordering::Relaxed);
+    true
+}
+
+/// The bar a trigger's section starts from, or [`NEVER`].
+///
+/// Read by the scheduler on every pass, so it is one relaxed load. A slot past
+/// the end of the table answers `NEVER`, which is what a binding pointing at
+/// nothing should sound like.
+#[inline]
+pub fn armed_at(slot: usize) -> f64 {
+    match controls().armed.get(slot) {
+        Some(cell) => f64::from_bits(cell.load(Ordering::Relaxed)),
+        None => NEVER,
+    }
+}
+
+/// Which bar a press should arm, given where the transport is.
+///
+/// The next beat — but the next beat **the scheduler has not already been
+/// asked about**, which is not always the same one. It works a lookahead ahead
+/// of the audio clock, so a beat inside that horizon has already been decided:
+/// its notes were computed as not sounding, and some were pushed. Arming there
+/// would ask a window to open in the past, and what came out would be a section
+/// that started late and clipped.
+///
+/// So the horizon is crossed first and the grid is found after. At ordinary
+/// tempos a beat is far longer than the lookahead and this is simply the next
+/// beat; at fast ones it is occasionally the beat after, which is the honest
+/// cost of quantising something that has to be decided before it is heard.
+///
+/// Pure, and separate from [`press`], because it is the part worth testing and
+/// the part that needs no clock to test.
+pub fn arm_at(now_bars: f64, beat_bars: f64, lookahead_bars: f64) -> f64 {
+    if !(beat_bars > 0.0) || !beat_bars.is_finite() {
+        // A signature nothing can be divided by. The horizon is still an
+        // honest answer — it starts the section as soon as it can be heard.
+        return now_bars + lookahead_bars.max(0.0);
+    }
+    let horizon = now_bars + lookahead_bars.max(0.0);
+    let beats = (horizon / beat_bars).ceil();
+    // A horizon landing exactly on a beat is already that beat's, and the
+    // scheduler has been asked about it — so take the next one.
+    let beats = if beats * beat_bars <= horizon { beats + 1.0 } else { beats };
+    beats * beat_bars
+}
+
+/// Press a trigger: arm its section from `at_bar`.
+///
+/// The bar is decided by the caller, because deciding it needs the clock and
+/// the meter and this module has neither. See `lib.rs`, which quantises it —
+/// and which has to quantise past the scheduler's lookahead, not merely onto
+/// the grid, for the reason [`crate::pattern::patterns::Patterns::windows`]
+/// gives: an answer the scheduler has already given must not change.
+///
+/// Pressing again simply overwrites, which is what makes a second press
+/// restart the section rather than queue behind it. What it cannot take back
+/// is a voice already pushed into the sequencer — up to a lookahead of the old
+/// pass may still sound past the new one's start, which is the difference
+/// between cutting a section off and never having played it.
+///
+/// Answers whether the name is a trigger this session knows. An unknown name
+/// is not an error worth raising: the panel draws what the last run declared,
+/// and a run in between may have taken it away.
+pub fn press(name: &str, at_bar: f64) -> bool {
+    let controls = controls();
+    let Ok(shapes) = controls.shapes.lock() else {
+        return false;
+    };
+    let Some(slot) = shapes.iter().position(|s| s.name == name) else {
+        return false;
+    };
+    if shapes[slot].kind != Kind::Trigger {
+        return false;
+    }
+    controls.armed[slot].store(at_bar.to_bits(), Ordering::Relaxed);
     true
 }
 
@@ -360,9 +464,14 @@ pub fn declare_in(items: &[SwyncItem]) -> (Vec<Control>, Vec<String>) {
         let kind = match func.0.as_str() {
             SLIDER => Kind::Slider,
             TOGGLE => Kind::Toggle,
+            TRIGGER => Kind::Trigger,
             _ => return,
         };
-        let Ok(decl) = parse(kind, args) else { return };
+        // A trigger's second argument is its section, which this pass has no
+        // business reading — only the name, which is the first. The lowerer
+        // refuses a call shaped wrongly, with the line in front of the reader.
+        let read = if kind == Kind::Trigger { &args[..Ord::min(args.len(), 1)] } else { args };
+        let Ok(decl) = parse(kind, read) else { return };
 
         if let Some(first) = found.iter().find(|c| c.name == decl.name) {
             // One name is one control wherever it is written — that is what
@@ -515,6 +624,12 @@ pub fn parse(kind: Kind, args: &[Arg]) -> Result<Decl, String> {
     }
 
     match kind {
+        // A trigger takes a section, and a section is not a value: it is
+        // lowered where it is *placed*, which is the lowerer's business and
+        // not this pass's. All this needs off the syntax is the name, so the
+        // panel can draw a button before anything has run.
+        Kind::Trigger => Ok(Decl { name: name.clone(), kind, lo: 0.0, hi: 1.0, start: 0.0 }),
+
         Kind::Toggle => {
             // Two ends, so there is no range to write — only which one it
             // starts at, and only as `0` or `1`. Anything else is a number
@@ -737,6 +852,9 @@ pub(crate) fn exclusive() -> std::sync::MutexGuard<'static, ()> {
     }
     for cell in &controls.baked {
         cell.store(false, Ordering::Relaxed);
+    }
+    for cell in &controls.armed {
+        cell.store(NEVER.to_bits(), Ordering::Relaxed);
     }
     guard
 }
@@ -961,6 +1079,57 @@ mod tests {
         // Within a float of 0.9: a position is held as the `f32` the audio
         // graph reads, so it comes back as near 0.9 as that can say.
         assert!((declared()[0].at - 0.9).abs() < 1e-6, "got: {}", declared()[0].at);
+    }
+
+    /// An ordinary tempo: a beat is a quarter of a bar and the lookahead is a
+    /// fraction of one, so this really is the next beat.
+    #[test]
+    fn a_press_is_armed_at_the_next_beat() {
+        assert_eq!(arm_at(2.1, 0.25, 0.02), 2.25);
+        assert_eq!(arm_at(2.3, 0.25, 0.02), 2.5);
+    }
+
+    /// The beat is already inside the horizon, so it has been decided: opening
+    /// a window there would ask for notes the scheduler has already said no to.
+    #[test]
+    fn a_press_too_close_to_the_next_beat_takes_the_one_after() {
+        assert_eq!(arm_at(2.24, 0.25, 0.05), 2.5);
+    }
+
+    /// A press landing exactly on the horizon is landing on a beat the
+    /// scheduler has just been asked about, so it takes the next.
+    #[test]
+    fn a_press_landing_exactly_on_the_horizon_takes_the_next_beat() {
+        assert_eq!(arm_at(2.0, 0.25, 0.25), 2.5);
+    }
+
+    #[test]
+    fn a_trigger_nobody_has_pressed_is_armed_at_never() {
+        let _controls = exclusive();
+        let slot = declare("fill", Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+        assert_eq!(armed_at(slot), NEVER);
+    }
+
+    #[test]
+    fn pressing_a_trigger_arms_it_and_pressing_again_moves_it() {
+        let _controls = exclusive();
+        let slot = declare("fill", Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+
+        assert!(press("fill", 4.0));
+        assert_eq!(armed_at(slot), 4.0);
+
+        assert!(press("fill", 9.0));
+        assert_eq!(armed_at(slot), 9.0, "a second press restarts rather than queues");
+    }
+
+    /// A slider is not something that can be fired, and pressing one would be
+    /// a panel asking for something the program never declared.
+    #[test]
+    fn only_a_trigger_can_be_pressed() {
+        let _controls = exclusive();
+        declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0);
+        assert!(!press("cutoff", 4.0));
+        assert!(!press("never written", 4.0));
     }
 
     /// The panel draws the program on screen, and a run may have deleted the

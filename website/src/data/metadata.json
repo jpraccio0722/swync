@@ -2327,6 +2327,21 @@
       "doc": "A switch in the panel, off or on, named where it is used: `sin(220) * toggle(\"mute\")` draws a toggle called mute and reads it at audio rate, so flipping it is heard immediately. It is 0 or 1, which makes multiplying by it the ordinary use — a part that is in or out without a number to choose. A second argument says which end it starts at: `toggle(\"lead\", 1)` starts on. Everything else is a `slider`: one name is one control wherever it is written, it keeps its state across an evaluation and forgets it when the app quits, and its ends are smoothed over a few milliseconds so switching something in does not click."
     },
     {
+      "name": "trigger",
+      "params": [
+        "name",
+        "section"
+      ],
+      "arities": [
+        2
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "text",
+      "returns": "number",
+      "doc": "A button in the panel that starts a section when pressed: `trigger(\"fill\", fill)` draws a button called fill and plays `fill` each time it is hit. The section is a `fn` named rather than called, the same thing `.then` takes, and how long it lasts is what it says — a `play_once` or `playn` inside it is a one-shot, a plain `play` keeps going. It is lowered when the program runs, not when the button is pressed, so a press compiles nothing and can fail at nothing. A press starts the section on the next beat, and pressing again restarts it from the top. Nothing else stops: a fired section plays over what is already going, and its own notes are the only ones it decides."
+    },
+    {
       "name": "midiout",
       "params": [
         "device",

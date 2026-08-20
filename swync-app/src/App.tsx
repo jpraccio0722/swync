@@ -1647,7 +1647,19 @@ function App() {
   );
 
   /**
-   * Go to where a slider is written.
+   * A trigger was hit.
+   *
+   * Nothing is compiled and nothing is placed: the section was lowered when
+   * the program ran, and this only arms it. The backend turns the press into a
+   * bar because only it knows where the transport is — see `press_control`.
+   */
+  const pressControl = useCallback((name: string) => {
+    void invoke("press_control", { name }).catch((e) =>
+      console.error(`could not fire ${name}:`, e));
+  }, []);
+
+  /**
+   * Go to where a control is written.
    *
    * A search rather than something the compiler carried here, and the reason
    * is worth keeping: `imports::expand` folds every file into one program
@@ -2382,6 +2394,7 @@ function App() {
               controls={controls}
               onChange={moveControl}
               onCommit={commitControl}
+              onPress={pressControl}
               onReveal={projectRoot === null ? null : (name) => void revealControl(name)}
               hasRun={runStatus !== "idle"}
             />

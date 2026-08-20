@@ -328,7 +328,7 @@ impl Lowerer {
             // Written once and never chosen between: only `wthen` and `maybe`
             // set these, and they set them on bindings this call already made.
             repeat: None,
-            choice: None,
+            choice: None, button: None,
             // Kept as well as folded in: the pattern above needs it to place
             // its notes, and a voice needs it to know how long a beat is here.
             rate,
@@ -396,7 +396,7 @@ impl Lowerer {
             // is the transport, or the next eval not naming it.
             bars: None,
             repeat: None,
-            choice: None,
+            choice: None, button: None,
             rate: Rate::Fixed(1.0),
         });
 

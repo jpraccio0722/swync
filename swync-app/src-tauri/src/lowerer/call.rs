@@ -38,6 +38,12 @@ impl Lowerer {
         if Lowerer::is_control(&func.0) {
             return self.control(&func.0, args, piped);
         }
+        // And `trigger`, which reads a name off the syntax like those and a
+        // *section* off it like `.then` — neither may be evaluated on the way
+        // in, for the two different reasons those two have.
+        if Lowerer::is_trigger(&func.0) {
+            return self.trigger(args, piped);
+        }
 
         // And the arrangement combinators, for a reason of the same shape: a
         // section has to be lowered where it is *placed*, with `play_start`

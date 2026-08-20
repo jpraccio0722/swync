@@ -25,7 +25,7 @@ use crate::swync_graph::realizer::Gate;
 use crate::scheduler::voice::{Instruments, build_held_voice, build_voice};
 
 /// How far ahead of the audio clock we schedule.
-const LOOKAHEAD_SECS: f64 = 0.2;
+pub(crate) const LOOKAHEAD_SECS: f64 = 0.2;
 /// How often the thread wakes. Must be well under LOOKAHEAD_SECS, and well
 /// under the clock's `START_LEAD_SECS` — a pass a tick behind an eval still has
 /// to find bar 0 ahead of it.
@@ -1011,7 +1011,7 @@ mod tests {
                 source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
 
@@ -1045,7 +1045,7 @@ mod pass_tests {
                 source: Pattern::steps(steps).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
         s
@@ -1067,7 +1067,7 @@ mod pass_tests {
                 source: Pattern::steps(steps).into(),
                 lanes,
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
         (s, rx)
@@ -1259,7 +1259,7 @@ mod pass_tests {
                 ),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
         (s, rx)
@@ -1754,7 +1754,7 @@ mod pass_tests {
                 source: Pattern::steps(vec![Some(50.0), Some(50.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
         s
@@ -1821,7 +1821,7 @@ mod pass_tests {
                 source: Pattern::steps(vec![Some(1.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
         let mut seq = Sequencer::new(0, 2, ReplayMode::None);
@@ -1964,7 +1964,7 @@ mod start_position_tests {
                 source: Pattern::steps(steps).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
         s
@@ -2070,7 +2070,7 @@ mod start_position_tests {
                 source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: Some(1.0), repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             origin: clock.now_bars(), epoch: 0, choices: Vec::new() };
 
         // One bar is two seconds at this tempo.

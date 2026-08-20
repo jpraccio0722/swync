@@ -738,6 +738,43 @@ fn set_control(name: String, value: f64) {
     controls::set(&name, value);
 }
 
+/// Press a trigger, from the panel.
+///
+/// The one control whose press is not a store: it has to be turned into a bar
+/// first, and only this side knows where the transport is. See
+/// [`controls::arm_at`] for why that bar is not simply the next beat.
+///
+/// The clock is read under one short lock, so the tempo and the signature the
+/// bar is computed from cannot come from either side of a change.
+///
+/// A name the session does not know, or one that is not a trigger, is not an
+/// error: the panel draws what the last run declared, and a run in between may
+/// have taken it away or made it something else.
+#[tauri::command]
+fn press_control(
+    name: String,
+    engine: tauri::State<Mutex<AudioEngine>>,
+) -> Result<(), String> {
+    let (now, beat_bars, lookahead_bars) = {
+        let eng = engine.lock().map_err(|_| "audio engine poisoned".to_string())?;
+        let meter = eng.clock.meter();
+        // The signature's own beat, not the quarter `beat_secs` counts: in 6/8
+        // a press should land on one of the six, and there are three quarters
+        // in that bar.
+        let beat_bars = 1.0 / (meter.top.max(1) as f64);
+        let bar_secs = eng.clock.beat_secs() * meter.quarters_per_bar();
+        let lookahead_bars = if bar_secs > 0.0 {
+            scheduler::scheduler::LOOKAHEAD_SECS / bar_secs
+        } else {
+            0.0
+        };
+        (eng.clock.now_bars(), beat_bars, lookahead_bars)
+    };
+
+    controls::press(&name, controls::arm_at(now, beat_bars, lookahead_bars));
+    Ok(())
+}
+
 /// Every MIDI port on this machine, with the number a program may name it by.
 ///
 /// The numbers are the whole reason this reaches the panel. A MIDI port is
@@ -1670,6 +1707,7 @@ pub fn run() {
             midi_ports,
             controls,
             set_control,
+            press_control,
             midi_clock_status,
             audio_levels,
             set_input_device,
