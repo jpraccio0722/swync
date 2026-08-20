@@ -51,9 +51,10 @@ export interface TransportState {
 }
 
 interface TransportProps {
-  /** Evaluate the active tab and hand the result to the engine. Whether it
-   *  compiled is of no interest here — the problems panel has already been
-   *  told — so the answer is discarded rather than typed away. */
+  /** Evaluate the project — its `main.swync`, or the tab in front when it has
+   *  none — and hand the result to the engine. Whether it compiled is of no
+   *  interest here — the problems panel has already been told — so the answer
+   *  is discarded rather than typed away. */
   play: () => unknown;
   /** Silence everything the engine and scheduler are holding. */
   stop: () => void | Promise<void>;
@@ -159,7 +160,13 @@ export function Transport({
     <div className="flex items-center gap-1">
       <button
         onClick={() => void play()}
-        title={lit ? "Playing — run again (⌘,)" : "Run (⌘,)"}
+        // Which file it runs is worth saying on the button, because it is not
+        // the one being looked at: ⇧⌘, is how you play what is in front, and
+        // nothing else in the app mentions it.
+        title={
+          (lit ? "Playing — run again (⌘,)" : "Run the project (⌘,)") +
+          " — ⇧⌘, runs the file you are in"
+        }
         aria-pressed={lit}
         className={
           "rounded-md p-1.5 text-xs transition-colors " +
@@ -189,7 +196,7 @@ export function Transport({
         title={
           recording
             ? "Stop — the music stops and the file is finished and saved"
-            : "Record — runs the file and captures everything you hear"
+            : "Record — runs the project and captures everything you hear"
         }
         aria-pressed={recording !== null}
         className={

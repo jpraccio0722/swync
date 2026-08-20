@@ -7,6 +7,10 @@ The simplest way to make a sound, simply type:
 and press **CMD + ,** (comma) or press play.  
 **CMD + .** stops the audio
 
+Once you are in a project, **CMD + ,** runs that project's `main.swync` — the
+one file a project is played from — rather than the tab you are looking at.
+**CMD + SHIFT + ,** plays the file you are in, whatever the project says.
+
 `sin(440)*0.1`
 
 multiplying a signal will reduce the volume (amplitude).

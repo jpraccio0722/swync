@@ -489,19 +489,39 @@ fn open_project(
 
 /// Start a project in a folder, which is what File ▸ New Project… does.
 ///
-/// The only difference from opening one is that this writes the file: a folder
-/// that already has settings is adopted exactly as `open_project` would adopt
-/// it, and one that does not gets the transport as it stands written into a new
-/// file. That is the whole of what "new" means here — there is nothing else to
-/// create, since a project is still just a folder.
+/// The difference from opening one is the two files this writes: the settings,
+/// with the transport as it stands, and the `main.swync` the play button runs.
+/// A folder that already has either is adopted exactly as `open_project` would
+/// adopt it — neither write lands on top of something already there.
+///
+/// The program is written second and separately because it is the one a
+/// performer edits: `create_main` refuses to overwrite, so New Project on a
+/// folder that has been worked in before adds the settings it was missing and
+/// leaves the piece alone.
 #[tauri::command]
 fn create_project(
     root: String,
     engine: tauri::State<Mutex<AudioEngine>>,
 ) -> Result<ProjectFile, Diagnostic> {
     let file = open_project(root.clone(), engine)?;
-    project::write(std::path::Path::new(&root), &file.project)?;
+    let root = std::path::Path::new(&root);
+    project::write(root, &file.project)?;
+    project::create_main(root)?;
     Ok(file)
+}
+
+/// The file this project's play button runs, if it has one.
+///
+/// The path comes back from here rather than being composed in the editor for
+/// the reason the patterns file's does: one answer to where the file is, and
+/// one the editor can recognise an open tab by.
+///
+/// `None` is not a failure — it is every project made before this file
+/// existed, and the editor answers it by playing the tab in front, as it
+/// always did.
+#[tauri::command]
+fn main_file(root: String) -> Option<String> {
+    project::main_file(std::path::Path::new(&root)).map(|path| path.display().to_string())
 }
 
 /// Watch a project's folder, or stop watching when it closes.
@@ -1508,6 +1528,7 @@ pub fn run() {
             write_patterns,
             open_project,
             create_project,
+            main_file,
             save_project,
             recent_session,
             set_recent_session,
