@@ -45,6 +45,55 @@ mod samples;
 mod settings;
 mod watcher;
 
+/// What an eval found already playing.
+///
+/// The bar that performance began at, the clock epoch that bar was measured
+/// in, and the bar its last binding falls silent at — `None` for a set with
+/// something open-ended in it, which is most of them.
+struct Playing {
+    origin: f64,
+    epoch: u64,
+    ends_by: Option<f64>,
+}
+
+/// The bar an eval's bindings count their bars from, or `None` for an eval
+/// that is starting a performance rather than editing one — the caller resets
+/// the clock and stamps the present.
+///
+/// A performance has one origin and keeps it. Anything that was *placed* —
+/// `play_once`, `playn`, a rate curve, every section chain — measures itself
+/// from this bar, so stamping the current bar on each eval dealt the whole
+/// arrangement again from wherever the edit happened to land: changing an
+/// oscillator in one instrument sent a chain four bars into its second section
+/// back to its first note. Carrying the origin across means an edit is heard
+/// where the piece already is. A plain `play` never read this and is unmoved
+/// either way.
+///
+/// What that costs is a `play_once` added mid-performance whose bar has gone
+/// by: it is anchored in the past like everything else and is not heard until
+/// the next start from silence. That is the deliberate half of the trade — a
+/// one-shot dropped in late is a one-shot missed, and it is not worth
+/// restarting the arrangement to catch.
+///
+/// Two things end a performance rather than edit it, and both have to be
+/// looked for here because neither empties the bindings:
+///
+/// - **The arrangement ran out.** A finite set — `play_once`, a chain of
+///   counted sections — is still published long after its last bar has gone
+///   by, so an eval that only asked whether anything was published would find
+///   silence indistinguishable from a piece in progress, carry an origin
+///   whose every window has closed, and play nothing. Pressing play on a piece
+///   that has finished has to start it again.
+/// - **The clock moved.** A followed `Start` resets it without touching these
+///   bindings (see `midi::follow`), so bar time has jumped and an origin
+///   measured against the old epoch is unreadable. The present is the only
+///   honest answer.
+fn origin_for(playing: Option<Playing>, epoch: u64, now_bars: f64) -> Option<f64> {
+    let playing = playing?;
+    let over = playing.ends_by.is_some_and(|end| end <= now_bars);
+    (playing.epoch == epoch && !over).then_some(playing.origin)
+}
+
 /// Backend hook for the editor's "play" button.
 ///
 /// Produces two artifacts from one program: the persistent graph, which is
@@ -168,35 +217,46 @@ fn run_code(
         .map_err(|_| Diagnostic::message(Stage::Engine, "instruments lock poisoned"))? =
         Instruments::from_program(&ast).with_samples(loaded);
 
-    let starting_from_silence = sched
-        .patterns
-        .lock()
-        .map_err(|_| Diagnostic::message(Stage::Engine, "patterns lock poisoned"))?
-        .is_empty();
+    let playing = {
+        let published = sched
+            .patterns
+            .lock()
+            .map_err(|_| Diagnostic::message(Stage::Engine, "patterns lock poisoned"))?;
+        (!published.is_empty()).then(|| Playing {
+            origin: published.origin,
+            epoch: published.epoch,
+            ends_by: published.ends_by(),
+        })
+    };
 
-    // Starting from silence should begin a pattern at its first step, but a
-    // re-eval of something already playing must not jolt the groove. The clock
-    // moves *before* the patterns are published, so the scheduler can never
-    // see the new bindings against the old origin.
+    // Starting a performance should begin a pattern at its first step, but a
+    // re-eval of one already playing must not jolt the groove. The clock moves
+    // *before* the patterns are published, so the scheduler can never see the
+    // new bindings against the old origin.
     //
-    // Whatever bar that leaves us on is the origin the bounded bindings —
-    // `play_once`, `playn` — count from, read under the same lock as the reset
-    // so the two can never disagree.
-    let origin = {
+    // The origin those bindings count their bars from is settled here too,
+    // under the same lock as the reset so the two can never disagree — and
+    // read *after* it, since a reset moves both the origin and the epoch it
+    // means anything against.
+    let (origin, epoch) = {
         let eng = engine
             .lock()
             .map_err(|_| Diagnostic::message(Stage::Engine, "audio engine poisoned"))?;
-        if starting_from_silence && !lowered.bindings.is_empty() {
+        let carried = origin_for(playing, eng.clock.epoch(), eng.clock.now_bars());
+        if carried.is_none() && !lowered.bindings.is_empty() {
             eng.clock.reset();
         }
-        eng.clock.now_bars()
+        (
+            carried.unwrap_or_else(|| eng.clock.now_bars()),
+            eng.clock.epoch(),
+        )
     };
 
     *sched
         .patterns
         .lock()
         .map_err(|_| Diagnostic::message(Stage::Engine, "patterns lock poisoned"))? =
-        Patterns { bindings: lowered.bindings, origin, choices: lowered.choices };
+        Patterns { bindings: lowered.bindings, origin, epoch, choices: lowered.choices };
 
     let mut eng = engine
         .lock()
@@ -1838,5 +1898,50 @@ mod session_tests {
     fn an_empty_record_is_no_project() {
         assert_eq!(usable_project(""), None);
         assert_eq!(usable_project("   \n"), None);
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    fn playing(origin: f64, epoch: u64, ends_by: Option<f64>) -> Option<Playing> {
+        Some(Playing { origin, epoch, ends_by })
+    }
+
+    /// The first eval of a session has nothing to carry, and says so — its
+    /// caller is the one that resets the clock.
+    #[test]
+    fn a_performance_starting_from_silence_has_no_origin_to_carry() {
+        assert_eq!(origin_for(None, 0, 0.0), None);
+    }
+
+    /// The one this whole thing is for: an edit made while a piece is playing
+    /// leaves the arrangement where it is, however far in it happened.
+    #[test]
+    fn re_evaluating_while_playing_keeps_the_origin_the_performance_began_at() {
+        assert_eq!(origin_for(playing(4.0, 7, None), 7, 39.6), Some(4.0));
+    }
+
+    /// A finite arrangement stays published after its last bar, so the bar
+    /// count is what tells silence from a piece in progress. Play on a piece
+    /// that has finished starts it again.
+    #[test]
+    fn an_arrangement_that_has_run_out_is_started_again_rather_than_edited() {
+        assert_eq!(origin_for(playing(4.0, 7, Some(12.0)), 7, 39.6), None);
+    }
+
+    /// The same set a bar before its end is still a performance being edited.
+    #[test]
+    fn an_arrangement_still_running_is_edited_rather_than_started_again() {
+        assert_eq!(origin_for(playing(4.0, 7, Some(12.0)), 7, 11.0), Some(4.0));
+    }
+
+    /// A followed `Start` resets the clock without clearing the bindings, so
+    /// bar time has moved out from under the origin those bindings were
+    /// published with and only the present means anything.
+    #[test]
+    fn an_origin_measured_in_an_older_epoch_is_not_carried_across() {
+        assert_eq!(origin_for(playing(39.0, 7, None), 8, 0.1), None);
     }
 }
