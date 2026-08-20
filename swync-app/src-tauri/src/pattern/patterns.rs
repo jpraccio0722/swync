@@ -267,6 +267,19 @@ pub struct Binding {
     /// worth rerolling — without somewhere to come back to, a branch would be
     /// picked once and that would be the end of it.
     pub repeat: Option<f64>,
+    /// Which button arms this binding, if a button does.
+    ///
+    /// A triggered section's bindings are lowered like any other — at eval
+    /// time, in full — and then gated on a press, exactly as a `wthen`'s arms
+    /// are gated on a draw. Nothing here is a callback and the scheduler runs
+    /// no code of the program's: it reads one number per button and decides
+    /// whether a window has opened yet.
+    ///
+    /// `start` is counted from the **press** rather than from the origin for
+    /// these, which is the whole difference. A section written to a button is
+    /// lowered at offset zero because there is no bar yet at which it begins;
+    /// the bar arrives when somebody hits the button.
+    pub button: Option<usize>,
     /// Which arm of which choice this binding belongs to, if it belongs to
     /// one. The window is gated on the arm being the one drawn for that
     /// repetition, so of a choice's arms exactly one sounds each time around.
@@ -408,8 +421,14 @@ struct Window {
 /// pattern was laid on before sections existed — so a re-eval does not re-phase
 /// a loop that is already running. Everything else is a section, and a section
 /// begins where it begins.
+///
+/// A binding on a **button** is never one of these however it was written. It
+/// has not been playing — it has not started at all until somebody presses it,
+/// and a press is as much a beginning as a `.then` is. Without this a section
+/// written as a plain `play` would take the shortcut below and sound from the
+/// moment it was lowered, which is the one thing a button is there to prevent.
 fn joins_in_progress(b: &Binding) -> bool {
-    b.start == 0.0 && b.bars.is_none()
+    b.button.is_none() && b.start == 0.0 && b.bars.is_none()
 }
 
 /// An event with its instrument attached — what the scheduler consumes.
@@ -549,7 +568,16 @@ impl Patterns {
         // where it begins to accelerate — and a repeating binding takes its
         // current repetition's, so a curve runs afresh each time around rather
         // than sitting at its end rate forever after the first pass.
-        let opens = self.origin.ceil() + b.start;
+        //
+        // A **button's** section counts from the press instead of from the
+        // origin, which is the whole of what a trigger does to this. Until
+        // somebody presses it that bar is `NEVER`, so `opens` is infinite and
+        // every window below closes before it opens — a section nobody has
+        // fired needs no branch of its own to stay silent.
+        let opens = match b.button {
+            None => self.origin.ceil() + b.start,
+            Some(slot) => crate::controls::armed_at(slot) + b.start,
+        };
 
         // A plain `play` was never placed anywhere, so it has no beginning of
         // its own to lay a grid from and keeps the transport's.
@@ -558,7 +586,7 @@ impl Patterns {
         // The one window everything that does not repeat gets: opening once,
         // and starting its clock there.
         let once = || {
-            self.window(b.start, b.bars, span)
+            self.window(b, opens, b.bars, span)
                 .map(|span| Window { span, anchor: opens, grid })
                 .into_iter()
                 .collect()
@@ -628,16 +656,19 @@ impl Patterns {
     /// heard from its first step rather than joining halfway through. Playing
     /// from silence puts the origin a lead-in *before* bar 0, which rounds up
     /// to 0 — the one-shot starts at once.
-    fn window(&self, start: f64, bars: Option<f64>, span: Span) -> Option<Span> {
+    fn window(&self, b: &Binding, opens: f64, bars: Option<f64>, span: Span) -> Option<Span> {
         // Plain `play` with nothing before it joins the performance already in
         // progress, so a re-eval mid-bar does not gap until the next downbeat.
         // The same binding keeps the performance's grid, for the same reason —
-        // see `joins_in_progress`.
-        if start == 0.0 && bars.is_none() {
+        // see `joins_in_progress`, which is also where a button's section is
+        // excluded from this.
+        if joins_in_progress(b) {
             return Some(span);
         }
 
-        let opens = self.origin.ceil() + start;
+        // Handed in rather than computed here, because where a binding opens
+        // is not always the origin plus its start: a button's section counts
+        // from the press. See `windows`.
         let begin = span.begin.max(opens);
         let end = match bars {
             None => span.end,
@@ -663,13 +694,13 @@ mod tests {
                     source: Pattern::steps([Some(1.0), None]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
-                    bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
+                    bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) },
                 Binding {
                     target: "hat".into(),
                     source: Pattern::steps([Some(1.0), Some(1.0)]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
-                    bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
+                    bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) },
             ],
             ..Default::default()
         };
@@ -691,7 +722,7 @@ mod tests {
 
     fn bound(pattern: Pattern, lanes: Vec<Lane>) -> Vec<super::BoundEvent> {
         Patterns {
-            bindings: vec![Binding { target: "i".into(), source: pattern.into(), lanes, start: 0.0, bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+            bindings: vec![Binding { target: "i".into(), source: pattern.into(), lanes, start: 0.0, bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         }
         .query(Span::new(0.0, 1.0))
@@ -756,7 +787,7 @@ mod tests {
                 source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: vec![lane("cut", (1..=6).map(|i| Some(i as f64 * 100.0)).collect())],
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
 
@@ -783,7 +814,7 @@ mod tests {
                 source: Pattern::steps([Some(1.0), Some(2.0), Some(3.0), Some(4.0)]).into(),
                 lanes: vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
 
@@ -808,7 +839,7 @@ mod tests {
                 source: Pattern::fast(2.0, Pattern::steps([Some(1.0), Some(2.0)])).into(),
                 lanes: vec![lane("cut", vec![Some(10.0), Some(20.0), Some(30.0)])],
                 start: 0.0,
-                bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             ..Default::default()
         };
 
@@ -902,7 +933,7 @@ mod tests {
                 source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start: 0.0,
-                bars, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             origin, epoch: 0, choices: Vec::new() }
         .query(span)
         .iter()
@@ -969,7 +1000,7 @@ mod tests {
             start,
             bars,
             repeat,
-            choice: None,
+            choice: None, button: None,
             rate: Rate::Fixed(1.0),
         }
     }
@@ -1049,13 +1080,13 @@ mod tests {
                     source: Pattern::steps([Some(1.0)]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
-                    bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) },
+                    bars: Some(1.0), repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) },
                 Binding {
                     target: "loop".into(),
                     source: Pattern::steps([Some(1.0)]).into(),
                     lanes: Vec::new(),
                     start: 0.0,
-                    bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
+                    bars: None, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) },
             ],
             origin: 0.0, epoch: 0, choices: Vec::new() };
 
@@ -1086,7 +1117,7 @@ mod tests {
                 source: Pattern::steps([Some(1.0), Some(2.0)]).into(),
                 lanes: Vec::new(),
                 start,
-                bars, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars, repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             origin: 0.0, epoch: 0, choices: Vec::new() }
         .query(span)
         .iter()
@@ -1135,7 +1166,7 @@ mod tests {
                 source: Pattern::steps([Some(1.0)]).into(),
                 lanes: Vec::new(),
                 start: 2.0,
-                bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
+                bars: Some(1.0), repeat: None, choice: None, button: None, rate: Rate::Fixed(1.0) }],
             origin: 3.2, epoch: 0, choices: Vec::new() };
         // Origin 3.2 rounds up to 4, plus two bars of waiting.
         let onsets: Vec<f64> = pats
@@ -1160,7 +1191,7 @@ mod tests {
                 start,
                 bars: Some(4.0),
                 repeat,
-                choice: None,
+                choice: None, button: None,
                 // The same curve the pattern was folded with, which is what
                 // `play` writes: one of them places the notes and the other
                 // tells a voice how fast it is being played.
@@ -1245,7 +1276,7 @@ mod tests {
                 start,
                 bars: Some(2.5),
                 repeat: None,
-                choice: None,
+                choice: None, button: None,
                 rate: Rate::Fixed(1.0),
             }],
             origin: 0.0,
@@ -1296,7 +1327,7 @@ mod tests {
                 start: 0.0,
                 bars: None,
                 repeat: None,
-                choice: None,
+                choice: None, button: None,
                 rate: Rate::Fixed(1.0),
             }],
             origin,
@@ -1370,6 +1401,90 @@ mod tests {
         assert!(rates.iter().all(|r| *r == 2.0), "{rates:?}");
     }
 
+    // ---- buttons ----
+
+    /// One bar of one note, on a button, starting at the press.
+    fn fired(slot: usize, bars: Option<f64>) -> Patterns {
+        Patterns {
+            bindings: vec![Binding {
+                target: "snare".into(),
+                source: Pattern::steps([Some(1.0)]).into(),
+                lanes: Vec::new(),
+                start: 0.0,
+                bars,
+                repeat: None,
+                choice: None,
+                button: Some(slot),
+                rate: Rate::Fixed(1.0),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// The whole point: a section written to a button is lowered in full and
+    /// heard by nobody until it is fired.
+    #[test]
+    fn a_section_on_a_button_is_silent_until_it_is_pressed() {
+        let _controls = crate::controls::exclusive();
+        let slot = crate::controls::declare(
+            "fill", crate::controls::Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+        let pats = fired(slot, Some(1.0));
+
+        assert!(pats.query(Span::new(0.0, 8.0)).is_empty(), "unpressed, it should be silent");
+
+        crate::controls::press("fill", 4.0);
+        assert!(pats.query(Span::new(0.0, 4.0)).is_empty(), "not before the bar it was armed at");
+        assert_eq!(pats.query(Span::new(4.0, 5.0)).len(), 1, "and once from there");
+    }
+
+    /// A section written as a plain `play` has `start == 0` and no end, which
+    /// is the shape that "joins the performance in progress" — the shortcut
+    /// that would let it sound from the moment it was lowered. A button's
+    /// section has not been playing: it has not started at all.
+    #[test]
+    fn an_unbounded_section_on_a_button_does_not_join_in_progress() {
+        let _controls = crate::controls::exclusive();
+        let slot = crate::controls::declare(
+            "drone", crate::controls::Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+        let pats = fired(slot, None);
+
+        assert!(pats.query(Span::new(0.0, 8.0)).is_empty(), "unpressed, it should be silent");
+
+        crate::controls::press("drone", 2.0);
+        assert!(pats.query(Span::new(0.0, 2.0)).is_empty());
+        assert!(!pats.query(Span::new(2.0, 3.0)).is_empty(), "and then it keeps going");
+        assert!(!pats.query(Span::new(90.0, 91.0)).is_empty(), "with no end of its own");
+    }
+
+    /// `start` is counted from the press for these, which is what makes a
+    /// section's shape survive being fired at an arbitrary bar.
+    #[test]
+    fn a_fired_sections_own_offsets_are_counted_from_the_press() {
+        let _controls = crate::controls::exclusive();
+        let slot = crate::controls::declare(
+            "fill", crate::controls::Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+        let mut pats = fired(slot, Some(1.0));
+        pats.bindings[0].start = 2.0;
+
+        crate::controls::press("fill", 4.0);
+        assert!(pats.query(Span::new(4.0, 6.0)).is_empty(), "two bars into the section, not the bar");
+        assert_eq!(pats.query(Span::new(6.0, 7.0)).len(), 1);
+    }
+
+    /// Pressing again moves the window rather than adding a second one.
+    #[test]
+    fn pressing_again_restarts_the_section_rather_than_layering_it() {
+        let _controls = crate::controls::exclusive();
+        let slot = crate::controls::declare(
+            "fill", crate::controls::Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+        let pats = fired(slot, Some(1.0));
+
+        crate::controls::press("fill", 4.0);
+        crate::controls::press("fill", 6.0);
+        assert!(pats.query(Span::new(4.0, 5.0)).is_empty(), "the first press is not still standing");
+        assert_eq!(pats.query(Span::new(6.0, 7.0)).len(), 1);
+    }
+
     // ---- repeating windows and choice ----
 
     /// One arm of a two-armed choice, sounding once per bar.
@@ -1382,6 +1497,7 @@ mod tests {
             bars: Some(1.0),
             repeat: Some(period),
             choice: Some(ChoiceRef { group, arm: index }),
+            button: None,
             rate: Rate::Fixed(1.0),
         }
     }
@@ -1511,7 +1627,7 @@ mod tests {
                 // Sounds for one bar in every four.
                 bars: Some(1.0),
                 repeat: Some(4.0),
-                choice: None,
+                choice: None, button: None,
                 rate: Rate::Fixed(1.0),
             }],
             origin: 0.0,
@@ -1537,7 +1653,7 @@ mod tests {
                 start: 3.0,
                 bars: Some(1.0),
                 repeat: Some(2.0),
-                choice: None,
+                choice: None, button: None,
                 rate: Rate::Fixed(1.0),
             }],
             origin: 0.0,

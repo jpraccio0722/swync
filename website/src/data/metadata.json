@@ -2308,7 +2308,38 @@
       "category": "special",
       "receives": "text",
       "returns": "any",
-      "doc": "A control in the panel, named where it is used: `lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1)` draws a slider called cutoff in the controls panel and reads it at audio rate, so dragging it is heard immediately with nothing recompiled. The range defaults to 0 to 1, and a fourth number says where it starts — otherwise it starts at the bottom. The name is what labels the control and what makes it the same control after an edit, so writing one name in two places is one slider moving both; a second range for a name already declared is ignored, with a warning. A slider keeps its position across an evaluation and forgets it when the app quits, which is why the number written here is a starting point rather than a value: you dial a filter in, edit the line above it, play again, and the filter is where you left it. Smoothed over a few milliseconds, because a drag wired straight to a cutoff zippers. Written where the language wants a compile-time number — a `;` length, a pattern step, a delay time — it is the position it stood at when the program compiled; the panel marks those, and letting go of one runs the program again."
+      "doc": "A control in the panel, named where it is used: `lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1)` draws a slider called cutoff in the controls panel and reads it at audio rate, so dragging it is heard immediately with nothing recompiled. The range defaults to 0 to 1, and a fourth number says where it starts — otherwise it starts at the bottom. The name is what labels the control and what makes it the same control after an edit, so writing one name in two places is one slider moving both. Those two places need not agree on a range: what a slider holds is a position along its travel, and each place maps it into the range written there — at halfway `slider(\"cutoff\", 200, 5000)` reads 2600 while `slider(\"cutoff\", 0, 1)` reads 0.5, one hand moving both across their own ends. The panel draws the range declared first. A slider keeps its position across an evaluation and forgets it when the app quits, which is why the number written here is a starting point rather than a value. Smoothed over a few milliseconds, because a drag wired straight to a cutoff zippers. Written where the language wants a compile-time number — a `;` length, a pattern step, a delay time — it is the position it stood at when the program compiled; the panel marks those, and letting go of one runs the program again."
+    },
+    {
+      "name": "toggle",
+      "params": [
+        "name",
+        "start"
+      ],
+      "arities": [
+        1,
+        2
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "text",
+      "returns": "any",
+      "doc": "A switch in the panel, off or on, named where it is used: `sin(220) * toggle(\"mute\")` draws a toggle called mute and reads it at audio rate, so flipping it is heard immediately. It is 0 or 1, which makes multiplying by it the ordinary use — a part that is in or out without a number to choose. A second argument says which end it starts at: `toggle(\"lead\", 1)` starts on. Everything else is a `slider`: one name is one control wherever it is written, it keeps its state across an evaluation and forgets it when the app quits, and its ends are smoothed over a few milliseconds so switching something in does not click."
+    },
+    {
+      "name": "trigger",
+      "params": [
+        "name",
+        "section"
+      ],
+      "arities": [
+        2
+      ],
+      "variadic": false,
+      "category": "special",
+      "receives": "text",
+      "returns": "number",
+      "doc": "A button in the panel that starts a section when pressed: `trigger(\"fill\", fill)` draws a button called fill and plays `fill` each time it is hit. The section is a `fn` named rather than called, the same thing `.then` takes, and how long it lasts is what it says — a `play_once` or `playn` inside it is a one-shot, a plain `play` keeps going. It is lowered when the program runs, not when the button is pressed, so a press compiles nothing and can fail at nothing. A press starts the section on the next beat, and pressing again restarts it from the top. Nothing else stops: a fired section plays over what is already going, and its own notes are the only ones it decides."
     },
     {
       "name": "midiout",

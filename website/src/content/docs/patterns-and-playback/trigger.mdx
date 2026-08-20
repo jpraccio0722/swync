@@ -1,0 +1,32 @@
+---
+name: trigger
+params: [name, section]
+arities: [2]
+variadic: false
+receives: text
+returns: number
+---
+
+A button in the panel that starts a section when it is pressed:
+
+```swync
+fn fill() = play_once([38, 38, 40], snare)
+
+trigger("fill", fill)
+```
+
+That draws a button called fill, and hits of it play `fill`.
+
+The section is a `fn` named rather than called — the same thing
+[then](/docs/patterns-and-playback/then/) takes — so how long it lasts is what
+it says. A `play_once` or `playn` inside it is a one-shot; a plain `play` keeps
+going until something stops it.
+
+It is lowered **when the program runs**, not when the button is pressed. So a
+press compiles nothing, can fail at nothing, and costs the performance nothing:
+what the button does is arm a section that was written out in full a moment
+after you hit play.
+
+A press starts the section on the next beat, and pressing again restarts it
+from the top. Nothing else stops — a fired section plays over what is already
+going, and the only notes it decides are its own.

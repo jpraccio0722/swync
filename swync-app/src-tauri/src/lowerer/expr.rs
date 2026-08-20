@@ -490,7 +490,7 @@ impl Lowerer {
     /// have the value rather than the expression — a comparison, which has to
     /// look at both sides before it knows whether it is comparing tags at all.
     pub(crate) fn as_number(&mut self, v: Value, what: &str) -> Result<f64, String> {
-        if let Some(n) = slider_number(&v) {
+        if let Some(n) = control_number(&v) {
             return Ok(n);
         }
         if let Value::Number(n) = as_data(&v) {
@@ -607,7 +607,7 @@ impl Lowerer {
             // The ordinary use of a slider, and the one worth having: the node
             // in the graph, read at audio rate, so the drag is heard without
             // anything being compiled again.
-            Value::Slider { node, .. } => Ok(NodeInput::Node(node)),
+            Value::Control { node, .. } => Ok(NodeInput::Node(node)),
             Value::Function(_) => Err("cannot use a function as a signal".into()),
             Value::List(_) => Err("cannot use a list as a signal (iterate it with `for`)".into()),
             Value::Stack(_) => Err(
@@ -688,7 +688,7 @@ pub(crate) fn unwrap_enum(v: &Value) -> Option<&Value> {
 pub(crate) fn signal_node(v: &Value) -> Option<NodeId> {
     match v {
         Value::Signal(id) => Some(*id),
-        Value::Slider { node, .. } => Some(*node),
+        Value::Control { node, .. } => Some(*node),
         _ => None,
     }
 }
@@ -706,8 +706,8 @@ pub(crate) fn signal_node(v: &Value) -> Option<NodeId> {
 /// runs both its sides through: `slider("level") * 0.5` has to build a
 /// multiply in the graph, and a slider that answered as data there would fold
 /// it to a constant and go quiet under the finger.
-pub(crate) fn slider_number(v: &Value) -> Option<f64> {
-    let Value::Slider { slot, at, .. } = v else { return None };
+pub(crate) fn control_number(v: &Value) -> Option<f64> {
+    let Value::Control { slot, at, .. } = v else { return None };
     crate::controls::mark_baked(*slot);
     Some(*at)
 }
@@ -765,7 +765,7 @@ pub(crate) fn describe(v: &Value) -> &'static str {
     match v {
         Value::Number(_) => "a number",
         Value::Signal(_) => "a signal",
-        Value::Slider { .. } => "a slider",
+        Value::Control { .. } => "a slider",
         Value::Function(_) => "a function",
         Value::List(_) => "a list",
         Value::Stack(_) => "a stack",

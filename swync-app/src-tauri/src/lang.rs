@@ -1480,7 +1480,35 @@ pub static SPECIALS: &[ListBuiltin] = &[
         // wherever the language can only take a number. `sum` and `choice` are
         // `Any` for the same reason.
         returns: ValueKind::Any,
-        doc: "A control in the panel, named where it is used: `lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1)` draws a slider called cutoff in the controls panel and reads it at audio rate, so dragging it is heard immediately with nothing recompiled. The range defaults to 0 to 1, and a fourth number says where it starts — otherwise it starts at the bottom. The name is what labels the control and what makes it the same control after an edit, so writing one name in two places is one slider moving both; a second range for a name already declared is ignored, with a warning. A slider keeps its position across an evaluation and forgets it when the app quits, which is why the number written here is a starting point rather than a value: you dial a filter in, edit the line above it, play again, and the filter is where you left it. Smoothed over a few milliseconds, because a drag wired straight to a cutoff zippers. Written where the language wants a compile-time number — a `;` length, a pattern step, a delay time — it is the position it stood at when the program compiled; the panel marks those, and letting go of one runs the program again.",
+        doc: "A control in the panel, named where it is used: `lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1)` draws a slider called cutoff in the controls panel and reads it at audio rate, so dragging it is heard immediately with nothing recompiled. The range defaults to 0 to 1, and a fourth number says where it starts — otherwise it starts at the bottom. The name is what labels the control and what makes it the same control after an edit, so writing one name in two places is one slider moving both. Those two places need not agree on a range: what a slider holds is a position along its travel, and each place maps it into the range written there — at halfway `slider(\"cutoff\", 200, 5000)` reads 2600 while `slider(\"cutoff\", 0, 1)` reads 0.5, one hand moving both across their own ends. The panel draws the range declared first. A slider keeps its position across an evaluation and forgets it when the app quits, which is why the number written here is a starting point rather than a value. Smoothed over a few milliseconds, because a drag wired straight to a cutoff zippers. Written where the language wants a compile-time number — a `;` length, a pattern step, a delay time — it is the position it stood at when the program compiled; the panel marks those, and letting go of one runs the program again.",
+    },
+    ListBuiltin {
+        name: "toggle",
+        params: &["name", "start"],
+        arities: &[1, 2],
+        variadic: false,
+        // The name is written in quotes and read off the syntax, as `slider`'s
+        // is — so like `slider`, nothing can stand to the left of this dot.
+        receives: ValueKind::Text,
+        // Both, for the reason a `slider` is both: the node wherever a signal
+        // goes, and the 0 or 1 it stands at wherever only a number will do.
+        returns: ValueKind::Any,
+        doc: "A switch in the panel, off or on, named where it is used: `sin(220) * toggle(\"mute\")` draws a toggle called mute and reads it at audio rate, so flipping it is heard immediately. It is 0 or 1, which makes multiplying by it the ordinary use — a part that is in or out without a number to choose. A second argument says which end it starts at: `toggle(\"lead\", 1)` starts on. Everything else is a `slider`: one name is one control wherever it is written, it keeps its state across an evaluation and forgets it when the app quits, and its ends are smoothed over a few milliseconds so switching something in does not click.",
+    },
+    ListBuiltin {
+        name: "trigger",
+        params: &["name", "section"],
+        arities: &[2],
+        variadic: false,
+        // The name is written in quotes and read off the syntax, as the other
+        // controls' are — so nothing can stand to the left of this dot.
+        receives: ValueKind::Text,
+        // A statement about the panel, like `midiclock` is one about a port:
+        // writing it is the whole of what it says. It answers with a number
+        // for the reason `midiclock` does — every callable name answers with
+        // something, and zero is the least it can mean.
+        returns: ValueKind::Number,
+        doc: "A button in the panel that starts a section when pressed: `trigger(\"fill\", fill)` draws a button called fill and plays `fill` each time it is hit. The section is a `fn` named rather than called, the same thing `.then` takes, and how long it lasts is what it says — a `play_once` or `playn` inside it is a one-shot, a plain `play` keeps going. It is lowered when the program runs, not when the button is pressed, so a press compiles nothing and can fail at nothing. A press starts the section on the next beat, and pressing again restarts it from the top. Nothing else stops: a fired section plays over what is already going, and its own notes are the only ones it decides.",
     },
     ListBuiltin {
         name: "midiout",
@@ -2114,7 +2142,8 @@ mod tests {
                 || Lowerer::is_midiin(b.name)
                 || Lowerer::is_midi_control(b.name)
                 || Lowerer::is_midiclock(b.name)
-                || Lowerer::is_slider(b.name)
+                || Lowerer::is_control(b.name)
+                || Lowerer::is_trigger(b.name)
                 || Lowerer::is_buffer_builtin(b.name)
                 || Lowerer::is_rate(b.name);
             assert_eq!(
@@ -2337,6 +2366,9 @@ mod receives_tests {
             "times" => "2",
             "buffer" => "load(\"test.wav\")",
             "path" => "\"test.wav\"",
+            // A control's name, which is read off the syntax and so has to be
+            // written out — the same reason `path` is.
+            "name" => "\"probe\"",
             "channel" => "0",
             // `dot` is the only name taking a written note value, so this
             // filler had no reason to exist until it did.
@@ -2437,6 +2469,11 @@ mod receives_tests {
         // slot into whichever keyboard test happens to be running beside them,
         // and it is that test which fails.
         let _bus = crate::midi::input::exclusive();
+        // And the controls' guard, for the same reason one line up: `slider`,
+        // `toggle` and `trigger` intern a slot out of a table the process
+        // shares, so a probe that lowers them without this leaks into whatever
+        // control test is running beside it.
+        let _controls = crate::controls::exclusive();
         for Entry { name, params, method_arity, receives, .. } in callables() {
             if receives == ValueKind::Nothing {
                 continue;
@@ -2471,6 +2508,7 @@ mod receives_tests {
                 "section" => "section",
                 "buffer" => "load(\"test.wav\")",
                 "path" => "\"test.wav\"",
+                "name" => "\"probe\"",
                 // The only name receiving a written note value is `dot`.
                 "value" => "q",
                 _ => "1",
@@ -2521,6 +2559,11 @@ mod receives_tests {
         // slot into whichever keyboard test happens to be running beside them,
         // and it is that test which fails.
         let _bus = crate::midi::input::exclusive();
+        // And the controls' guard, for the same reason one line up: `slider`,
+        // `toggle` and `trigger` intern a slot out of a table the process
+        // shares, so a probe that lowers them without this leaks into whatever
+        // control test is running beside it.
+        let _controls = crate::controls::exclusive();
         for Entry { name, params, arity, callable, returns, .. } in callables() {
             // `Any` is the honest answer where the result follows the input;
             // there is nothing single-valued to check it against. A name that

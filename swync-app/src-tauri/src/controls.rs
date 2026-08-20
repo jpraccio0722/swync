@@ -39,12 +39,27 @@
 //! already had. Quitting forgets, and the value written in the program is what
 //! a fresh session starts from.
 //!
-//! Interning also **clamps** a remembered position into the range the program
-//! now asks for, since an edited range can leave last minute's position
-//! outside it — and a slider reading past its own top is a lie the panel has
-//! no way to draw.
+//! ## A position is a fraction, and the range belongs to the call
+//!
+//! What a slot holds is **0 to 1**, and each place a name is written maps that
+//! into the range written *there*. One name is therefore one control however
+//! many times it appears, and two places that ask for different ranges are not
+//! in conflict: at halfway `slider("cutoff", 200, 5000)` reads 2600 and
+//! `slider("cutoff", 0, 1)` reads 0.5, and one hand moves both across their own
+//! travel.
+//!
+//! This is `cc`'s design and not a new one. A controller is one physical knob
+//! sending 0 to 1, and `cc("push", 74, 1, 200, 5000)` maps it at the read site;
+//! a slider is the same thing with the panel where the knob was. Storing the
+//! *value* instead — which this did at first — makes a second range a mistake
+//! to be warned about rather than a second reading of one control.
+//!
+//! Two things fall out of it. A range edited between runs needs no clamping,
+//! because a fraction is inside every range there is. And the panel keeps
+//! drawing the range the program declares first, which is exact for that place
+//! and proportional everywhere else.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use fundsp::prelude64::*;
@@ -52,8 +67,38 @@ use serde::Serialize;
 
 use crate::parser::parser::{Arg, Expr, SwyncItem};
 
-/// The name, which is also what a diagnostic calls it.
+/// The names, which are also what a diagnostic calls them.
 pub const SLIDER: &str = "slider";
+pub const TOGGLE: &str = "toggle";
+pub const TRIGGER: &str = "trigger";
+
+/// Which control a name declares.
+///
+/// One table holds both, because everything that makes a control a control is
+/// the same for either: a slot, a position an atomic holds, a session that
+/// remembers it, a node that reads it at audio rate. What differs is only the
+/// travel — a slider has a range and a toggle has two ends — and the panel is
+/// the only thing that has to care, since it is the only thing that draws one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// `slider(name, lo, hi, start)` — anywhere along its range.
+    Slider,
+    /// `toggle(name, start)` — off or on, which is 0 or 1.
+    ///
+    /// Not a slider with a coarse step, and the difference is what it *means*
+    /// rather than how it moves: a toggle answers a question the piece asked
+    /// with two answers, so a panel draws it as a switch and a program reads it
+    /// as the amount it is worth. Multiplying by one is the ordinary use.
+    Toggle,
+    /// `trigger(name, section)` — a button that starts a section when pressed.
+    ///
+    /// The odd one out, and the only one that is not a number: it answers with
+    /// nothing, and what a program does with it is not read but *written* —
+    /// the section named beside it. So it has no position, and what its slot
+    /// holds instead is the bar it was last armed at. See [`armed_at`].
+    Trigger,
+}
 
 /// What a slider covers when the program does not say: the range every other
 /// amount in the language is in.
@@ -71,6 +116,13 @@ pub const DEFAULT_HI: f64 = 1.0;
 /// without scrolling past usefulness, and a sixty-fifth is refused with a
 /// warning rather than silently sharing somebody else's slot.
 pub const MAX_SLIDERS: usize = 64;
+
+/// A trigger nobody has pressed.
+///
+/// Infinity rather than a flag beside the number, because every question the
+/// scheduler asks of it is "has this bar come yet?" — and against infinity the
+/// answer is no, forever, without a branch anywhere to forget.
+pub const NEVER: f64 = f64::INFINITY;
 
 /// What a node holds when the slider it named could not be given a slot. Reads
 /// as zero forever, which is what a program declaring a sixty-fifth slider
@@ -94,15 +146,42 @@ const SMOOTHING_SECS: f32 = 0.010;
 #[derive(Clone, Debug, PartialEq)]
 struct Shape {
     name: String,
+    kind: Kind,
     lo: f64,
     hi: f64,
     start: f64,
 }
 
-/// Every slider this session has: where each one is, and what the last run
+impl Kind {
+    /// The name a program writes to declare one, which is also what a
+    /// diagnostic has to call it.
+    pub fn written(self) -> &'static str {
+        match self {
+            Kind::Slider => SLIDER,
+            Kind::Toggle => TOGGLE,
+            Kind::Trigger => TRIGGER,
+        }
+    }
+
+    /// One written out, for a message that has to show rather than describe.
+    fn example(self) -> &'static str {
+        match self {
+            Kind::Slider => "slider(\"cutoff\", 200, 5000)",
+            Kind::Toggle => "toggle(\"mute\")",
+            Kind::Trigger => "trigger(\"fill\", fill)",
+        }
+    }
+}
+
+/// Every control this session has: where each one is, and what the last run
 /// said about them. One per process — see [`controls`].
 pub struct Controls {
-    /// Each slot's position, in the slider's own units, as `f32::to_bits`.
+    /// Each slot's position, 0 to 1, as `f32::to_bits`.
+    ///
+    /// A fraction of the travel rather than a value, so that one name written
+    /// with two ranges is one control and not a disagreement — see the module
+    /// note. Mapping into units is the reader's job, and every reader has its
+    /// own range to map into.
     ///
     /// Written by the panel on the main thread and read by the audio callback,
     /// so it is atomic and never locked against — exactly as a controller's
@@ -110,7 +189,7 @@ pub struct Controls {
     /// held by a graph node.
     at: Vec<AtomicU32>,
     /// Whether this slot has been read as a **number** rather than as a signal
-    /// — see [`Slider::baked`].
+    /// — see [`Control::baked`].
     ///
     /// A flag on the slot rather than something a pass returns, because the
     /// two places that discover it are far apart and on different threads: the
@@ -121,6 +200,17 @@ pub struct Controls {
     /// note plays — late, but never wrong, and the alternative is a return
     /// value neither of those callers has anywhere to hand back to.
     baked: Vec<AtomicBool>,
+    /// The bar each trigger was last armed at, as `f64::to_bits`.
+    ///
+    /// [`NEVER`] until somebody presses it, which reads as a window that never
+    /// opens — every comparison against it is false, so a section nobody has
+    /// fired simply does not sound and needs no second flag to say so.
+    ///
+    /// Written by the press on the main thread and read by the scheduler on
+    /// its own, so it is atomic like a position. It is the *whole* of what the
+    /// scheduler learns from a button: one number, and the arithmetic it
+    /// already does with the origin.
+    armed: Vec<AtomicU64>,
     /// What each slot is, in slot order. Also the interning table: a name's
     /// slot is its position in here. Only the setup path touches it, never the
     /// audio callback.
@@ -141,10 +231,12 @@ pub struct Controls {
 
 /// One slider, as the program declared it and the panel draws it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Slider {
+pub struct Control {
     /// What the program called it, which is also what the panel labels it and
     /// what the editor searches for when the label is clicked.
     pub name: String,
+    /// Which control this is, and so which way the panel draws it.
+    pub kind: Kind,
     pub slot: usize,
     pub lo: f64,
     pub hi: f64,
@@ -173,32 +265,52 @@ pub fn controls() -> &'static Controls {
     CONTROLS.get_or_init(|| Controls {
         at: (0..MAX_SLIDERS).map(|_| AtomicU32::new(0)).collect(),
         baked: (0..MAX_SLIDERS).map(|_| AtomicBool::new(false)).collect(),
+        armed: (0..MAX_SLIDERS).map(|_| AtomicU64::new(NEVER.to_bits())).collect(),
         shapes: Mutex::new(Vec::new()),
         taken: AtomicUsize::new(0),
         declared: Mutex::new(Vec::new()),
     })
 }
 
-/// Where a slot stands, in the slider's own units.
+/// Where a slot stands, as a fraction of its travel.
 ///
 /// Called per sample from the audio callback, so it is one relaxed load. A
-/// slot past the end of the table answers zero rather than panicking, which is
-/// what [`NO_SLOT`] relies on.
+/// slot past the end of the table answers zero, which is what [`NO_SLOT`]
+/// relies on.
 #[inline]
-pub fn position(slot: usize) -> f32 {
+pub fn fraction(slot: usize) -> f32 {
     match controls().at.get(slot) {
         Some(cell) => f32::from_bits(cell.load(Ordering::Relaxed)),
         None => 0.0,
     }
 }
 
-/// Move a slider, from the panel.
+/// Where a slot stands, in the units of one particular place that reads it.
 ///
-/// Clamped into the range the program gave it, since a position outside it is
-/// one nothing could have asked for. Answers whether the name is one this
-/// session knows: an unknown name is not an error worth raising anywhere,
-/// because the panel draws what the last run declared and a run in between may
-/// have taken it away.
+/// The whole of what "one control, two ranges" means: the fraction is shared
+/// and the mapping is not.
+#[inline]
+pub fn value_at(slot: usize, lo: f64, hi: f64) -> f64 {
+    lo + fraction(slot) as f64 * (hi - lo)
+}
+
+/// The fraction a value sits at within a range, for the way back in.
+fn fraction_of(value: f64, lo: f64, hi: f64) -> f64 {
+    if !(hi - lo).is_finite() || hi == lo {
+        return 0.0;
+    }
+    ((value - lo) / (hi - lo)).clamp(0.0, 1.0)
+}
+
+/// Move a control, from the panel.
+///
+/// The value arrives in the units of the range the panel is drawing — the
+/// first one the program declares — and is stored as the fraction of it, which
+/// is what every other place reading this name will map through its own range.
+///
+/// Answers whether the name is one this session knows. An unknown name is not
+/// an error worth raising anywhere, because the panel draws what the last run
+/// declared and a run in between may have taken it away.
 pub fn set(name: &str, value: f64) -> bool {
     let controls = controls();
     let Ok(shapes) = controls.shapes.lock() else {
@@ -208,13 +320,86 @@ pub fn set(name: &str, value: f64) -> bool {
         return false;
     };
     let shape = &shapes[slot];
-    let clamped = value.clamp(shape.lo.min(shape.hi), shape.lo.max(shape.hi));
-    controls.at[slot].store((clamped as f32).to_bits(), Ordering::Relaxed);
+    let at = fraction_of(value, shape.lo, shape.hi) as f32;
+    controls.at[slot].store(at.to_bits(), Ordering::Relaxed);
+    true
+}
+
+/// The bar a trigger's section starts from, or [`NEVER`].
+///
+/// Read by the scheduler on every pass, so it is one relaxed load. A slot past
+/// the end of the table answers `NEVER`, which is what a binding pointing at
+/// nothing should sound like.
+#[inline]
+pub fn armed_at(slot: usize) -> f64 {
+    match controls().armed.get(slot) {
+        Some(cell) => f64::from_bits(cell.load(Ordering::Relaxed)),
+        None => NEVER,
+    }
+}
+
+/// Which bar a press should arm, given where the transport is.
+///
+/// The next beat — but the next beat **the scheduler has not already been
+/// asked about**, which is not always the same one. It works a lookahead ahead
+/// of the audio clock, so a beat inside that horizon has already been decided:
+/// its notes were computed as not sounding, and some were pushed. Arming there
+/// would ask a window to open in the past, and what came out would be a section
+/// that started late and clipped.
+///
+/// So the horizon is crossed first and the grid is found after. At ordinary
+/// tempos a beat is far longer than the lookahead and this is simply the next
+/// beat; at fast ones it is occasionally the beat after, which is the honest
+/// cost of quantising something that has to be decided before it is heard.
+///
+/// Pure, and separate from [`press`], because it is the part worth testing and
+/// the part that needs no clock to test.
+pub fn arm_at(now_bars: f64, beat_bars: f64, lookahead_bars: f64) -> f64 {
+    if !(beat_bars > 0.0) || !beat_bars.is_finite() {
+        // A signature nothing can be divided by. The horizon is still an
+        // honest answer — it starts the section as soon as it can be heard.
+        return now_bars + lookahead_bars.max(0.0);
+    }
+    let horizon = now_bars + lookahead_bars.max(0.0);
+    let beats = (horizon / beat_bars).ceil();
+    // A horizon landing exactly on a beat is already that beat's, and the
+    // scheduler has been asked about it — so take the next one.
+    let beats = if beats * beat_bars <= horizon { beats + 1.0 } else { beats };
+    beats * beat_bars
+}
+
+/// Press a trigger: arm its section from `at_bar`.
+///
+/// The bar is decided by the caller, because deciding it needs the clock and
+/// the meter and this module has neither. See `lib.rs`, which quantises it —
+/// and which has to quantise past the scheduler's lookahead, not merely onto
+/// the grid, for the reason [`crate::pattern::patterns::Patterns::windows`]
+/// gives: an answer the scheduler has already given must not change.
+///
+/// Pressing again simply overwrites, which is what makes a second press
+/// restart the section rather than queue behind it. What it cannot take back
+/// is a voice already pushed into the sequencer — up to a lookahead of the old
+/// pass may still sound past the new one's start, which is the difference
+/// between cutting a section off and never having played it.
+///
+/// Answers whether the name is a trigger this session knows.
+pub fn press(name: &str, at_bar: f64) -> bool {
+    let controls = controls();
+    let Ok(shapes) = controls.shapes.lock() else {
+        return false;
+    };
+    let Some(slot) = shapes.iter().position(|s| s.name == name) else {
+        return false;
+    };
+    if shapes[slot].kind != Kind::Trigger {
+        return false;
+    }
+    controls.armed[slot].store(at_bar.to_bits(), Ordering::Relaxed);
     true
 }
 
 /// Say that this slot's value has been read as a number rather than as a
-/// signal — see [`Slider::baked`].
+/// signal — see [`Control::baked`].
 pub fn mark_baked(slot: usize) {
     if let Some(cell) = controls().baked.get(slot) {
         cell.store(true, Ordering::Relaxed);
@@ -240,11 +425,11 @@ pub fn clear_baked() {
 /// with one range — the first declaration's. Answering from the table rather
 /// than from what is written at this call site is what makes "the first one
 /// wins" true of the graph and not only of the warning.
-pub fn shape_of(name: &str) -> Option<(usize, f64, f64, f64)> {
+pub fn shape_of(name: &str) -> Option<(usize, Kind, f64, f64, f64)> {
     let shapes = controls().shapes.lock().ok()?;
     let slot = shapes.iter().position(|s| s.name == name)?;
     let shape = &shapes[slot];
-    Some((slot, shape.lo, shape.hi, shape.start))
+    Some((slot, shape.kind, shape.lo, shape.hi, shape.start))
 }
 
 /// Give this name a slot and this shape, keeping wherever it is already
@@ -258,7 +443,7 @@ pub fn shape_of(name: &str) -> Option<(usize, f64, f64, f64)> {
 /// A name already interned keeps the position it is holding, clamped into the
 /// range being asked for now. A new one starts where the program says. `None`
 /// when every slot is taken.
-pub fn declare(name: &str, lo: f64, hi: f64, start: f64) -> Option<usize> {
+pub fn declare(name: &str, kind: Kind, lo: f64, hi: f64, start: f64) -> Option<usize> {
     // The same complaint `midi::input::slot_for` makes, for the same reason:
     // interning without the guard leaks a slot into whatever test is running
     // beside this one, and the failure lands on that test rather than on this
@@ -266,21 +451,20 @@ pub fn declare(name: &str, lo: f64, hi: f64, start: f64) -> Option<usize> {
     #[cfg(test)]
     assert!(
         guarded(),
-        "interning slider {name:?} without holding `controls::exclusive()`. A test that \
-         lowers a program declaring a slider has to hold the guard — see `exclusive` — or \
-         the slots it takes leak into whatever is running beside it.",
+        "interning control {name:?} without holding `controls::exclusive()`. A test that \
+         lowers a program declaring a slider or a toggle has to hold the guard — see \
+         `exclusive` — or the slots it takes leak into whatever is running beside it.",
     );
 
     let controls = controls();
     let mut shapes = controls.shapes.lock().ok()?;
-    let shape = Shape { name: name.to_string(), lo, hi, start };
+    let shape = Shape { name: name.to_string(), kind, lo, hi, start };
 
     if let Some(slot) = shapes.iter().position(|s| s.name == name) {
-        let held = f32::from_bits(controls.at[slot].load(Ordering::Relaxed)) as f64;
-        let clamped = held.clamp(lo.min(hi), lo.max(hi));
-        if clamped != held {
-            controls.at[slot].store((clamped as f32).to_bits(), Ordering::Relaxed);
-        }
+        // The position is left exactly as it is. It is a *fraction*, and a
+        // fraction is inside every range there is — so a range edited narrower
+        // between runs needs no clamping and the control stays where the hand
+        // left it, proportionally.
         shapes[slot] = shape;
         return Some(slot);
     }
@@ -290,7 +474,10 @@ pub fn declare(name: &str, lo: f64, hi: f64, start: f64) -> Option<usize> {
     }
     shapes.push(shape);
     let slot = shapes.len() - 1;
-    controls.at[slot].store((start as f32).to_bits(), Ordering::Relaxed);
+    // Where the program says it starts, as the fraction of its own range that
+    // is — so the same starting point means the same thing at every place the
+    // name is written, whatever range each of them asked for.
+    controls.at[slot].store((fraction_of(start, lo, hi) as f32).to_bits(), Ordering::Relaxed);
     controls.taken.store(shapes.len(), Ordering::Release);
     Some(slot)
 }
@@ -308,49 +495,61 @@ pub fn declare(name: &str, lo: f64, hi: f64, start: f64) -> Option<usize> {
 /// there are slots. Both are warnings rather than errors, for the reason a
 /// missing MIDI port is one — they are things worth knowing about a program
 /// that ran, and refusing to make sound over either would be the wrong trade.
-pub fn declare_in(items: &[SwyncItem]) -> (Vec<Slider>, Vec<String>) {
-    let mut found: Vec<Slider> = Vec::new();
+pub fn declare_in(items: &[SwyncItem]) -> (Vec<Control>, Vec<String>) {
+    let mut found: Vec<Control> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
     crate::parser::walk::calls_in(items, &mut |func, args| {
-        if func.0 != SLIDER {
-            return;
-        }
-        let Ok(decl) = parse(args) else { return };
+        let kind = match func.0.as_str() {
+            SLIDER => Kind::Slider,
+            TOGGLE => Kind::Toggle,
+            TRIGGER => Kind::Trigger,
+            _ => return,
+        };
+        // A trigger's second argument is its section, which this pass has no
+        // business reading — only the name, which is the first. The lowerer
+        // refuses a call shaped wrongly, with the line in front of the reader.
+        let read = if kind == Kind::Trigger { &args[..Ord::min(args.len(), 1)] } else { args };
+        let Ok(decl) = parse(kind, read) else { return };
 
-        if let Some(first) = found.iter().find(|s| s.name == decl.name) {
-            // One name is one slider wherever it is written — that is what
+        if let Some(first) = found.iter().find(|c| c.name == decl.name) {
+            // One name is one control wherever it is written — that is what
             // makes `slider("cutoff")` in two instruments one control moving
-            // both, which is usually exactly what was meant. What cannot be
-            // honoured twice is the *shape*, so the first one wins and the
-            // second is worth a word: a range typed differently in two places
-            // is as often a stale copy as a decision.
-            if (first.lo, first.hi, first.start) != (decl.lo, decl.hi, decl.start) {
+            // both. Two *ranges* are no longer a disagreement to warn about:
+            // the slot holds a fraction and each place maps it into what it
+            // asked for, so both readings are honoured at once. See the module
+            // note. The panel draws the first, which is exact for that place
+            // and proportional everywhere else.
+            //
+            // What still cannot be honoured twice is the *kind*, since a slot
+            // has one travel and a switch is not a range.
+            if first.kind != decl.kind {
                 warnings.push(format!(
-                    "{SLIDER}(\"{}\") is declared more than once with different \
-                     settings — {} to {} starting at {} is the one being used, since it \
-                     is written first. One name is one slider, so give the other a name \
-                     of its own or make the two agree.",
-                    decl.name, first.lo, first.hi, first.start));
+                    "\"{}\" is declared as a {} and also as a {} — the {} is the one \
+                     being used, since it is written first. One name is one control, so \
+                     give the other a name of its own.",
+                    decl.name, first.kind.written(), decl.kind.written(),
+                    first.kind.written()));
             }
             return;
         }
 
-        match declare(&decl.name, decl.lo, decl.hi, decl.start) {
-            Some(slot) => found.push(Slider {
+        match declare(&decl.name, decl.kind, decl.lo, decl.hi, decl.start) {
+            Some(slot) => found.push(Control {
                 name: decl.name,
+                kind: decl.kind,
                 slot,
                 lo: decl.lo,
                 hi: decl.hi,
                 start: decl.start,
-                at: position(slot) as f64,
+                at: value_at(slot, decl.lo, decl.hi),
                 baked: false,
             }),
             None => warnings.push(format!(
-                "{SLIDER}(\"{}\"): a session may have {MAX_SLIDERS} sliders and this is \
-                 one more, so it will read as zero and stay off the panel. Nothing else \
+                "{}(\"{}\"): a session may have {MAX_SLIDERS} controls and this is one \
+                 more, so it will read as zero and stay off the panel. Nothing else \
                  about the program changes.",
-                decl.name)),
+                decl.kind.written(), decl.name)),
         }
     });
 
@@ -362,7 +561,7 @@ pub fn declare_in(items: &[SwyncItem]) -> (Vec<Slider>, Vec<String>) {
 /// Published by `run_code` on the success path only, beside the graph and the
 /// patterns: a program that did not compile leaves the panel alone for the
 /// same reason it leaves the music alone.
-pub fn publish(sliders: &[Slider]) {
+pub fn publish(sliders: &[Control]) {
     if let Ok(mut declared) = controls().declared.lock() {
         *declared = sliders.iter().map(|s| s.slot).collect();
     }
@@ -370,7 +569,7 @@ pub fn publish(sliders: &[Slider]) {
 
 /// What the panel draws: the last run's sliders, each carrying where it
 /// actually stands and whether it is one a drag can be heard through.
-pub fn declared() -> Vec<Slider> {
+pub fn declared() -> Vec<Control> {
     let controls = controls();
     let (Ok(declared), Ok(shapes)) = (controls.declared.lock(), controls.shapes.lock()) else {
         return Vec::new();
@@ -379,13 +578,14 @@ pub fn declared() -> Vec<Slider> {
         .iter()
         .filter_map(|&slot| {
             let shape = shapes.get(slot)?;
-            Some(Slider {
+            Some(Control {
                 name: shape.name.clone(),
+                kind: shape.kind,
                 slot,
                 lo: shape.lo,
                 hi: shape.hi,
                 start: shape.start,
-                at: position(slot) as f64,
+                at: value_at(slot, shape.lo, shape.hi),
                 baked: controls.baked[slot].load(Ordering::Relaxed),
             })
         })
@@ -393,7 +593,7 @@ pub fn declared() -> Vec<Slider> {
 }
 
 /// Whether this name has been read as a number rather than as a signal —
-/// [`Slider::baked`], asked by name rather than by slot.
+/// [`Control::baked`], asked by name rather than by slot.
 ///
 /// Only tests ask it this way; the panel gets it with everything else in
 /// [`declared`].
@@ -409,12 +609,14 @@ pub(crate) fn baked_by_name(name: &str) -> bool {
 #[derive(Debug)]
 pub struct Decl {
     pub name: String,
+    pub kind: Kind,
     pub lo: f64,
     pub hi: f64,
     pub start: f64,
 }
 
-/// `slider(name)`, `slider(name, lo, hi)`, `slider(name, lo, hi, start)`.
+/// `slider(name)`, `slider(name, lo, hi)`, `slider(name, lo, hi, start)`, and
+/// `toggle(name)`, `toggle(name, start)`.
 ///
 /// Read off the arguments **as written** rather than as evaluated, and both
 /// callers need it that way: the declaration pass runs before anything has
@@ -424,88 +626,124 @@ pub struct Decl {
 /// computed range is refused rather than silently taken from one of the two
 /// readings.
 ///
-/// The name is first because it is the only part that is never optional: a
-/// slider with no name is a control nothing can label, nothing can find twice,
-/// and nothing can remember the position of.
-pub fn parse(args: &[Arg]) -> Result<Decl, String> {
+/// The name is first for both, because it is the only part that is never
+/// optional: a control with no name is one nothing can label, nothing can find
+/// twice, and nothing can remember the position of.
+pub fn parse(kind: Kind, args: &[Arg]) -> Result<Decl, String> {
+    let called = kind.written();
+
     if let Some(named) = args.iter().find(|a| a.name.is_some()) {
         let name = named.name.as_ref().map(|n| n.0.as_str()).unwrap_or_default();
         return Err(format!(
-            "{SLIDER}: `{name}:` is a named argument, and a slider's parts are written in \
-             order — {SLIDER}(\"cutoff\", 200, 5000)"));
+            "{called}: `{name}:` is a named argument, and a control's parts are written \
+             in order — {}", kind.example()));
     }
 
     let Some((first, rest)) = args.split_first() else {
-        return Err(format!(
-            "{SLIDER} expects a name: {SLIDER}(\"cutoff\") is a slider in the panel, 0 to 1"));
+        return Err(format!("{called} expects a name: {}", kind.example()));
     };
     let Expr::Str(name) = &first.value else {
         return Err(format!(
-            "{SLIDER}: the name is written in quotes — {SLIDER}(\"cutoff\"). It is what the \
-             panel labels the control and what makes it the same slider after an edit, so \
-             it cannot be worked out while the program runs"));
+            "{called}: the name is written in quotes — {called}(\"cutoff\"). It is what \
+             the panel labels the control and what makes it the same control after an \
+             edit, so it cannot be worked out while the program runs"));
     };
     if name.trim().is_empty() {
         return Err(format!(
-            "{SLIDER}: the name is what labels the control, so it cannot be empty"));
+            "{called}: the name is what labels the control, so it cannot be empty"));
     }
 
-    let (lo, hi) = match rest {
-        [] => (DEFAULT_LO, DEFAULT_HI),
-        [lo, hi, ..] => (number(&lo.value, "lo")?, number(&hi.value, "hi")?),
-        [_] => return Err(format!(
-            "{SLIDER}: a range is both ends or neither — {SLIDER}(\"cutoff\", 200, 5000) \
-             covers a filter, and no range at all is {DEFAULT_LO} to {DEFAULT_HI}")),
-    };
-    if !(hi > lo) {
-        return Err(format!(
-            "{SLIDER}(\"{name}\"): the range {lo} to {hi} is empty. A slider needs somewhere \
-             to travel, so the top has to be above the bottom"));
-    }
+    match kind {
+        // A trigger takes a section, and a section is not a value: it is
+        // lowered where it is *placed*, which is the lowerer's business and
+        // not this pass's. All this needs off the syntax is the name, so the
+        // panel can draw a button before anything has run.
+        Kind::Trigger => Ok(Decl { name: name.clone(), kind, lo: 0.0, hi: 1.0, start: 0.0 }),
 
-    // Where it starts is where it starts *the first time this session sees the
-    // name*; after that the slider remembers, which is the point of it. So the
-    // default is the bottom of the range rather than the middle: a control
-    // nobody has touched yet should be doing nothing, and for a level, a send
-    // or a depth the bottom is nothing.
-    let start = match rest {
-        [_, _, start] => number(&start.value, "start")?,
-        [_, _, _, extra, ..] => return Err(format!(
-            "{SLIDER} takes a name, a range and where it starts — {} is one argument too \
-             many. {SLIDER}(\"cutoff\", 200, 5000, 800) is all of it",
-            described(&extra.value))),
-        _ => lo,
-    };
-    if start < lo || start > hi {
-        return Err(format!(
-            "{SLIDER}(\"{name}\"): it starts at {start}, which is outside the {lo} to {hi} it \
-             can travel"));
-    }
+        Kind::Toggle => {
+            // Two ends, so there is no range to write — only which one it
+            // starts at, and only as `0` or `1`. Anything else is a number
+            // somebody expected to mean something, and guessing which end
+            // they meant would be guessing at the sound.
+            let start = match rest {
+                [] => 0.0,
+                [start] => match number(TOGGLE, &start.value, "the starting state")? {
+                    n if n == 0.0 || n == 1.0 => n,
+                    n => return Err(format!(
+                        "{TOGGLE}(\"{name}\"): a toggle is off or on, so it starts at 0 or \
+                         1 — got {n}")),
+                },
+                _ => return Err(format!(
+                    "{TOGGLE} takes a name and which end it starts at — \
+                     {TOGGLE}(\"{name}\", 1) starts it on. A toggle has no range to give \
+                     it, since its ends are 0 and 1")),
+            };
+            Ok(Decl { name: name.clone(), kind, lo: 0.0, hi: 1.0, start })
+        }
 
-    Ok(Decl { name: name.clone(), lo, hi, start })
+        Kind::Slider => {
+            let (lo, hi) = match rest {
+                [] => (DEFAULT_LO, DEFAULT_HI),
+                [lo, hi, ..] => (
+                    number(SLIDER, &lo.value, "lo")?,
+                    number(SLIDER, &hi.value, "hi")?,
+                ),
+                [_] => return Err(format!(
+                    "{SLIDER}: a range is both ends or neither — {SLIDER}(\"cutoff\", 200, \
+                     5000) covers a filter, and no range at all is {DEFAULT_LO} to \
+                     {DEFAULT_HI}")),
+            };
+            if !(hi > lo) {
+                return Err(format!(
+                    "{SLIDER}(\"{name}\"): the range {lo} to {hi} is empty. A slider needs \
+                     somewhere to travel, so the top has to be above the bottom"));
+            }
+
+            // Where it starts is where it starts *the first time this session
+            // sees the name*; after that the control remembers, which is the
+            // point of it. So the default is the bottom of the range rather
+            // than the middle: a control nobody has touched yet should be
+            // doing nothing, and for a level, a send or a depth the bottom is
+            // nothing.
+            let start = match rest {
+                [_, _, start] => number(SLIDER, &start.value, "start")?,
+                [_, _, _, extra, ..] => return Err(format!(
+                    "{SLIDER} takes a name, a range and where it starts — {} is one \
+                     argument too many. {SLIDER}(\"cutoff\", 200, 5000, 800) is all of it",
+                    described(&extra.value))),
+                _ => lo,
+            };
+            if start < lo || start > hi {
+                return Err(format!(
+                    "{SLIDER}(\"{name}\"): it starts at {start}, which is outside the {lo} \
+                     to {hi} it can travel"));
+            }
+            Ok(Decl { name: name.clone(), kind, lo, hi, start })
+        }
+    }
 }
 
 /// A number written at the call, which is the only kind there is here.
-fn number(e: &Expr, what: &str) -> Result<f64, String> {
+fn number(called: &str, e: &Expr, what: &str) -> Result<f64, String> {
     let n = match e {
         Expr::Num(n) => *n,
         Expr::Neg { expr } => match expr.as_ref() {
             Expr::Num(n) => -n,
-            _ => return Err(written_out(what)),
+            _ => return Err(written_out(called, what)),
         },
-        _ => return Err(written_out(what)),
+        _ => return Err(written_out(called, what)),
     };
     if !n.is_finite() {
-        return Err(format!("{SLIDER}: {what} must be a real number, got {n}"));
+        return Err(format!("{called}: {what} must be a real number, got {n}"));
     }
     Ok(n)
 }
 
-fn written_out(what: &str) -> String {
+fn written_out(called: &str, what: &str) -> String {
     format!(
-        "{SLIDER}: {what} is written out as a number — {SLIDER}(\"cutoff\", 200, 5000). The \
-         panel is drawn before the program is run, so a range it would have to run the \
-         program to know is one it cannot draw")
+        "{called}: {what} is written out as a number — {SLIDER}(\"cutoff\", 200, 5000). The \
+         panel is drawn before the program is run, so a control it would have to run the \
+         program to describe is one it cannot draw")
 }
 
 /// A short noun for what was written where nothing should have been, so the
@@ -535,8 +773,15 @@ fn described(e: &Expr) -> &'static str {
 /// the slider is rather than sliding up to it from wherever the last note left
 /// off.
 #[derive(Clone)]
-pub struct SliderNode {
+pub struct PanelNode {
     slot: usize,
+    /// The bottom and top of what this place reads out as, as it was written
+    /// there.
+    lo: f32,
+    hi: f32,
+    /// The smoothed value, as the **fraction** rather than as the mapped
+    /// number — mapped on the way out, so a range edited between runs does not
+    /// jump the filter.
     held: f32,
     /// How much of the distance is closed per sample, from the rate.
     coeff: f32,
@@ -546,25 +791,25 @@ pub struct SliderNode {
     fresh: bool,
 }
 
-impl SliderNode {
-    pub fn new(slot: usize) -> SliderNode {
-        SliderNode { slot, held: 0.0, coeff: 1.0, fresh: true }
+impl PanelNode {
+    pub fn new(slot: usize, lo: f32, hi: f32) -> PanelNode {
+        PanelNode { slot, lo, hi, held: 0.0, coeff: 1.0, fresh: true }
     }
 
     #[inline]
     fn next(&mut self) -> f32 {
-        let target = position(self.slot);
+        let target = fraction(self.slot);
         if self.fresh {
             self.fresh = false;
             self.held = target;
         } else {
             self.held += (target - self.held) * self.coeff;
         }
-        self.held
+        self.lo + self.held * (self.hi - self.lo)
     }
 }
 
-impl AudioNode for SliderNode {
+impl AudioNode for PanelNode {
     // Beside `InputNode` at 201 and `ControlNode` at 202, from the far end of
     // fundsp's own range.
     const ID: u64 = 203;
@@ -645,6 +890,9 @@ pub(crate) fn exclusive() -> std::sync::MutexGuard<'static, ()> {
     for cell in &controls.baked {
         cell.store(false, Ordering::Relaxed);
     }
+    for cell in &controls.armed {
+        cell.store(NEVER.to_bits(), Ordering::Relaxed);
+    }
     guard
 }
 
@@ -653,15 +901,28 @@ mod tests {
     use super::*;
     use crate::parser::parser::parse as parse_program;
 
-    fn sliders(src: &str) -> (Vec<Slider>, Vec<String>) {
+    fn sliders(src: &str) -> (Vec<Control>, Vec<String>) {
         declare_in(&parse_program(src.to_string()).expect("parse failed"))
     }
 
     #[test]
     fn a_slider_starts_where_the_program_says_it_does() {
         let _controls = exclusive();
-        let slot = declare("cutoff", 200.0, 5000.0, 800.0).unwrap();
-        assert_eq!(position(slot), 800.0);
+        let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0).unwrap();
+        assert_eq!(value_at(slot, 200.0, 5000.0), 800.0);
+    }
+
+    /// The point of holding a fraction: one hand, and every place reading it
+    /// across its own travel. Halfway is halfway wherever it is written.
+    #[test]
+    fn one_name_read_through_two_ranges_moves_both_together() {
+        let _controls = exclusive();
+        let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 200.0).unwrap();
+        set("cutoff", 2600.0);
+
+        assert_eq!(value_at(slot, 200.0, 5000.0), 2600.0);
+        assert_eq!(value_at(slot, 0.0, 1.0), 0.5);
+        assert_eq!(value_at(slot, -1.0, 1.0), 0.0);
     }
 
     #[test]
@@ -678,23 +939,24 @@ mod tests {
     #[test]
     fn a_slider_keeps_its_position_across_a_re_evaluation() {
         let _controls = exclusive();
-        let slot = declare("cutoff", 200.0, 5000.0, 800.0).unwrap();
+        let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0).unwrap();
         set("cutoff", 3200.0);
 
-        assert_eq!(declare("cutoff", 200.0, 5000.0, 800.0), Some(slot));
-        assert_eq!(position(slot), 3200.0);
+        assert_eq!(declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0), Some(slot));
+        assert_eq!(value_at(slot, 200.0, 5000.0), 3200.0);
     }
 
-    /// An edited range can leave last minute's position outside it, and a
-    /// slider reading past its own top is something the panel cannot draw.
+    /// A range edited between runs needs no clamping, because what survives
+    /// is the fraction and a fraction is inside every range there is. The
+    /// control stays where the hand left it, proportionally.
     #[test]
-    fn a_remembered_position_is_clamped_into_a_range_that_has_narrowed() {
+    fn a_remembered_position_keeps_its_fraction_when_the_range_is_edited() {
         let _controls = exclusive();
-        let slot = declare("cutoff", 200.0, 5000.0, 800.0).unwrap();
-        set("cutoff", 4800.0);
+        let slot = declare("cutoff", Kind::Slider, 0.0, 100.0, 0.0).unwrap();
+        set("cutoff", 25.0);
 
-        declare("cutoff", 200.0, 1000.0, 800.0);
-        assert_eq!(position(slot), 1000.0);
+        declare("cutoff", Kind::Slider, 0.0, 400.0, 0.0);
+        assert_eq!(value_at(slot, 0.0, 400.0), 100.0, "a quarter of the way, still");
     }
 
     /// A range is edited like any other part of a program, so the newest
@@ -703,18 +965,18 @@ mod tests {
     #[test]
     fn a_range_the_program_has_edited_replaces_the_one_before_it() {
         let _controls = exclusive();
-        declare("cutoff", 200.0, 5000.0, 800.0);
-        declare("cutoff", 40.0, 400.0, 100.0);
-        assert_eq!(shape_of("cutoff").map(|(_, lo, hi, _)| (lo, hi)), Some((40.0, 400.0)));
+        declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0);
+        declare("cutoff", Kind::Slider, 40.0, 400.0, 100.0);
+        assert_eq!(shape_of("cutoff").map(|(_, _, lo, hi, _)| (lo, hi)), Some((40.0, 400.0)));
     }
 
     #[test]
     fn two_names_are_two_slots_and_one_name_is_one() {
         let _controls = exclusive();
-        let cutoff = declare("cutoff", 0.0, 1.0, 0.0).unwrap();
-        let room = declare("room", 0.0, 1.0, 0.0).unwrap();
+        let cutoff = declare("cutoff", Kind::Slider, 0.0, 1.0, 0.0).unwrap();
+        let room = declare("room", Kind::Slider, 0.0, 1.0, 0.0).unwrap();
         assert_ne!(cutoff, room);
-        assert_eq!(declare("cutoff", 0.0, 1.0, 0.0), Some(cutoff));
+        assert_eq!(declare("cutoff", Kind::Slider, 0.0, 1.0, 0.0), Some(cutoff));
     }
 
     /// Refused rather than silently sharing somebody else's slot, which would
@@ -723,9 +985,9 @@ mod tests {
     fn a_slider_past_the_last_slot_is_refused() {
         let _controls = exclusive();
         for i in 0..MAX_SLIDERS {
-            assert!(declare(&format!("s{i}"), 0.0, 1.0, 0.0).is_some());
+            assert!(declare(&format!("s{i}"), Kind::Slider, 0.0, 1.0, 0.0).is_some());
         }
-        assert_eq!(declare("one more", 0.0, 1.0, 0.0), None);
+        assert_eq!(declare("one more", Kind::Slider, 0.0, 1.0, 0.0), None);
     }
 
     /// The point of the pass being a syntax walk: an instrument is not lowered
@@ -761,15 +1023,24 @@ mod tests {
         assert!(warnings.is_empty(), "got: {warnings:?}");
     }
 
+    /// Two ranges under one name are two readings of one control, not a
+    /// disagreement: the panel draws the first, and the second is honoured
+    /// where it is written.
     #[test]
-    fn one_name_declared_twice_with_different_ranges_keeps_the_first_and_says_so() {
+    fn one_name_declared_twice_with_different_ranges_is_one_control_and_no_complaint() {
         let _controls = exclusive();
         let (found, warnings) = sliders(
-            "out(lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1) * slider(\"cutoff\", 0, 1))\n");
+            "lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1) * slider(\"cutoff\", 0, 1)\n");
+
         assert_eq!(found.len(), 1);
-        assert_eq!((found[0].lo, found[0].hi), (200.0, 5000.0));
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("declared more than once"), "got: {}", warnings[0]);
+        assert_eq!((found[0].lo, found[0].hi), (200.0, 5000.0), "the panel draws the first");
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+
+        // And one hand moves both, each across its own travel.
+        set("cutoff", 2600.0);
+        let slot = found[0].slot;
+        assert_eq!(value_at(slot, 200.0, 5000.0), 2600.0);
+        assert_eq!(value_at(slot, 0.0, 1.0), 0.5);
     }
 
     /// The lowerer refuses these with the line in front of the reader, so the
@@ -785,7 +1056,7 @@ mod tests {
 
     #[test]
     fn a_range_that_goes_nowhere_is_refused() {
-        let err = parse(&[
+        let err = parse(Kind::Slider, &[
             Arg::positional(Expr::Str("cutoff".into())),
             Arg::positional(Expr::Num(1.0)),
             Arg::positional(Expr::Num(1.0)),
@@ -796,7 +1067,7 @@ mod tests {
 
     #[test]
     fn a_slider_that_starts_outside_its_own_range_is_refused() {
-        let err = parse(&[
+        let err = parse(Kind::Slider, &[
             Arg::positional(Expr::Str("cutoff".into())),
             Arg::positional(Expr::Num(200.0)),
             Arg::positional(Expr::Num(5000.0)),
@@ -811,7 +1082,7 @@ mod tests {
     /// guessing at the sound.
     #[test]
     fn half_a_range_is_refused() {
-        let err = parse(&[
+        let err = parse(Kind::Slider, &[
             Arg::positional(Expr::Str("cutoff".into())),
             Arg::positional(Expr::Num(200.0)),
         ])
@@ -821,13 +1092,13 @@ mod tests {
 
     #[test]
     fn a_slider_with_no_name_is_refused() {
-        let err = parse(&[]).expect_err("a nameless slider should be refused");
+        let err = parse(Kind::Slider, &[]).expect_err("a nameless slider should be refused");
         assert!(err.contains("expects a name"), "got: {err}");
     }
 
     #[test]
     fn a_negative_range_is_read_the_way_it_is_written() {
-        let decl = parse(&[
+        let decl = parse(Kind::Slider, &[
             Arg::positional(Expr::Str("bend".into())),
             Arg::positional(Expr::Neg { expr: Box::new(Expr::Num(1.0)) }),
             Arg::positional(Expr::Num(1.0)),
@@ -870,6 +1141,57 @@ mod tests {
         assert!((declared()[0].at - 0.9).abs() < 1e-6, "got: {}", declared()[0].at);
     }
 
+    /// An ordinary tempo: a beat is a quarter of a bar and the lookahead is a
+    /// fraction of one, so this really is the next beat.
+    #[test]
+    fn a_press_is_armed_at_the_next_beat() {
+        assert_eq!(arm_at(2.1, 0.25, 0.02), 2.25);
+        assert_eq!(arm_at(2.3, 0.25, 0.02), 2.5);
+    }
+
+    /// The beat is already inside the horizon, so it has been decided: opening
+    /// a window there would ask for notes the scheduler has already said no to.
+    #[test]
+    fn a_press_too_close_to_the_next_beat_takes_the_one_after() {
+        assert_eq!(arm_at(2.24, 0.25, 0.05), 2.5);
+    }
+
+    /// A press landing exactly on the horizon is landing on a beat the
+    /// scheduler has just been asked about, so it takes the next.
+    #[test]
+    fn a_press_landing_exactly_on_the_horizon_takes_the_next_beat() {
+        assert_eq!(arm_at(2.0, 0.25, 0.25), 2.5);
+    }
+
+    #[test]
+    fn a_trigger_nobody_has_pressed_is_armed_at_never() {
+        let _controls = exclusive();
+        let slot = declare("fill", Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+        assert_eq!(armed_at(slot), NEVER);
+    }
+
+    #[test]
+    fn pressing_a_trigger_arms_it_and_pressing_again_moves_it() {
+        let _controls = exclusive();
+        let slot = declare("fill", Kind::Trigger, 0.0, 1.0, 0.0).unwrap();
+
+        assert!(press("fill", 4.0));
+        assert_eq!(armed_at(slot), 4.0);
+
+        assert!(press("fill", 9.0));
+        assert_eq!(armed_at(slot), 9.0, "a second press restarts rather than queues");
+    }
+
+    /// A slider is not something that can be fired, and pressing one would be
+    /// a panel asking for something the program never declared.
+    #[test]
+    fn only_a_trigger_can_be_pressed() {
+        let _controls = exclusive();
+        declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0);
+        assert!(!press("cutoff", 4.0));
+        assert!(!press("never written", 4.0));
+    }
+
     /// The panel draws the program on screen, and a run may have deleted the
     /// line — so a name it no longer knows is not an error, just a no.
     #[test]
@@ -881,8 +1203,8 @@ mod tests {
     #[test]
     fn a_slider_cannot_be_moved_past_the_range_it_was_given() {
         let _controls = exclusive();
-        let slot = declare("cutoff", 200.0, 5000.0, 800.0).unwrap();
+        let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0).unwrap();
         set("cutoff", 99999.0);
-        assert_eq!(position(slot), 5000.0);
+        assert_eq!(value_at(slot, 200.0, 5000.0), 5000.0);
     }
 }

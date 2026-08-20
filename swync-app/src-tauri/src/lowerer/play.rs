@@ -17,7 +17,7 @@
 
 use crate::lang::Beats;
 use crate::swync_graph::environment::{Item, Length, Source, Value};
-use crate::lowerer::expr::slider_number;
+use crate::lowerer::expr::control_number;
 use crate::lowerer::lower::Lowerer;
 use crate::parser::parser::{Arg, Expr, Ident};
 use crate::pattern::pattern::{Pattern, Slot, Step, UNIT};
@@ -173,7 +173,7 @@ impl Lowerer {
                 // clock, so a rate it could read while a hand moved would
                 // have to be a rate it can see into the future of — which is
                 // the same reason a signal is refused below.
-                v @ Value::Slider { .. } => Rate::Fixed(slider_number(&v).unwrap_or_default()),
+                v @ Value::Control { .. } => Rate::Fixed(control_number(&v).unwrap_or_default()),
                 Value::Rate(r) => r,
                 _ => return Err(format!(
                     "{name}: rate must be a compile-time number or an `accel`")),
@@ -328,7 +328,7 @@ impl Lowerer {
             // Written once and never chosen between: only `wthen` and `maybe`
             // set these, and they set them on bindings this call already made.
             repeat: None,
-            choice: None,
+            choice: None, button: None,
             // Kept as well as folded in: the pattern above needs it to place
             // its notes, and a voice needs it to know how long a beat is here.
             rate,
@@ -396,7 +396,7 @@ impl Lowerer {
             // is the transport, or the next eval not naming it.
             bars: None,
             repeat: None,
-            choice: None,
+            choice: None, button: None,
             rate: Rate::Fixed(1.0),
         });
 
@@ -663,8 +663,8 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
         // A slider is the number it stands at, like everything else a pattern
         // holds — see `to_step`, which says why a pattern is the one place a
         // signal can never reach.
-        Value::Slider { .. } => Ok((
-            Pattern::seq([Step::Value(slider_number(v).unwrap_or_default())]),
+        Value::Control { .. } => Ok((
+            Pattern::seq([Step::Value(control_number(v).unwrap_or_default())]),
             1.0,
         )),
         Value::Rest => Ok((Pattern::Silence, 1.0)),
@@ -862,7 +862,7 @@ fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
         // read a note at a time on the scheduler's thread, a fifth of a second
         // ahead of the audio clock, so a step is a number or it is nothing.
         // The panel marks it as one whose drag is heard at the next run.
-        Value::Slider { .. } => Ok(Step::Value(slider_number(v).unwrap_or_default())),
+        Value::Control { .. } => Ok(Step::Value(control_number(v).unwrap_or_default())),
         Value::Destination(_) => Err(
             "a MIDI destination is not a step — `midiout(..)` goes where the \
              instrument goes, not in the pattern".into()),

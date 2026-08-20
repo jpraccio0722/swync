@@ -1,7 +1,7 @@
 use fundsp::prelude64::*;
 
 use crate::audio_in::InputNode;
-use crate::controls::SliderNode;
+use crate::controls::PanelNode;
 use crate::midi::input::{Control, ControlNode};
 use crate::swync_graph::{
     graph::SwyncGraph,
@@ -91,13 +91,16 @@ fn constant(graph: &SwyncGraph, n: &UGenNode, idx: usize) -> Option<f64> {
         NodeInput::Const(v) => Some(*v),
         NodeInput::Node(id) => {
             let behind = graph.nodes.get(id.0)?;
-            if behind.kind != NodeKind::Slider {
+            if behind.kind != NodeKind::Control {
                 return None;
             }
-            let NodeInput::Const(slot) = behind.inputs.first()? else { return None };
-            let slot = *slot as usize;
+            let [NodeInput::Const(slot), NodeInput::Const(lo), NodeInput::Const(hi)] =
+                behind.inputs[..] else { return None };
+            let slot = slot as usize;
             crate::controls::mark_baked(slot);
-            Some(crate::controls::position(slot) as f64)
+            // Through this place's own range, like every other reading of it:
+            // the slot holds a fraction. See `crate::controls`.
+            Some(crate::controls::value_at(slot, lo, hi))
         }
     }
 }
@@ -656,8 +659,12 @@ pub fn realize_gated(
             // audio callback and cannot hash a name — and unlike a controller
             // it needs no range here, because what the slot holds is already
             // in the slider's own units. See `crate::controls`.
-            NodeKind::Slider => (
-                Box::new(An(SliderNode::new(control_slot(graph, n, 0)?))),
+            NodeKind::Control => (
+                Box::new(An(PanelNode::new(
+                    control_slot(graph, n, 0)?,
+                    const_param(graph, n, 1, "control low")?,
+                    const_param(graph, n, 2, "control high")?,
+                ))),
                 0,
             ),
             NodeKind::SoftSaw => (Box::new(soft_saw()), 1),

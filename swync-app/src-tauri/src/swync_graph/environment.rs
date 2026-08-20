@@ -84,7 +84,7 @@ pub enum Value {
     /// It carries the slot as well as the node because the slot is what
     /// outlives the graph — it is the session's memory of where this control
     /// is, and it is what a reading-as-a-number has to mark.
-    Slider { node: NodeId, slot: usize, at: f64 },
+    Control { node: NodeId, slot: usize, at: f64 },
     /// A loaded audio file, as `load` answers with it. Not a signal — nothing
     /// comes out of a buffer until `sample` reads it at a position.
     Buffer(Arc<Wave>),
