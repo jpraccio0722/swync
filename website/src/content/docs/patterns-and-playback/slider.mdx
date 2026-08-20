@@ -19,8 +19,13 @@ defaults to 0 to 1, and a fourth number says where it starts — otherwise it
 starts at the bottom.
 
 The name is what labels the control and what makes it the same control after an
-edit, so writing one name in two places is one slider moving both. A second
-range for a name already declared is ignored, with a warning.
+edit, so writing one name in two places is one slider moving both.
+
+Those two places need not agree on a range. What a slider holds is a position
+along its travel, and each place maps it into the range written there — so at
+halfway `slider("cutoff", 200, 5000)` reads 2600 while `slider("cutoff", 0, 1)`
+reads 0.5, one hand moving both across their own ends. The panel draws the range
+the program declares first.
 
 A slider keeps its position across an evaluation and forgets it when the app
 quits, which is why the number written here is a starting point rather than a

@@ -39,10 +39,25 @@
 //! already had. Quitting forgets, and the value written in the program is what
 //! a fresh session starts from.
 //!
-//! Interning also **clamps** a remembered position into the range the program
-//! now asks for, since an edited range can leave last minute's position
-//! outside it — and a slider reading past its own top is a lie the panel has
-//! no way to draw.
+//! ## A position is a fraction, and the range belongs to the call
+//!
+//! What a slot holds is **0 to 1**, and each place a name is written maps that
+//! into the range written *there*. One name is therefore one control however
+//! many times it appears, and two places that ask for different ranges are not
+//! in conflict: at halfway `slider("cutoff", 200, 5000)` reads 2600 and
+//! `slider("cutoff", 0, 1)` reads 0.5, and one hand moves both across their own
+//! travel.
+//!
+//! This is `cc`'s design and not a new one. A controller is one physical knob
+//! sending 0 to 1, and `cc("push", 74, 1, 200, 5000)` maps it at the read site;
+//! a slider is the same thing with the panel where the knob was. Storing the
+//! *value* instead — which this did at first — makes a second range a mistake
+//! to be warned about rather than a second reading of one control.
+//!
+//! Two things fall out of it. A range edited between runs needs no clamping,
+//! because a fraction is inside every range there is. And the panel keeps
+//! drawing the range the program declares first, which is exact for that place
+//! and proportional everywhere else.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -161,7 +176,12 @@ impl Kind {
 /// Every control this session has: where each one is, and what the last run
 /// said about them. One per process — see [`controls`].
 pub struct Controls {
-    /// Each slot's position, in the slider's own units, as `f32::to_bits`.
+    /// Each slot's position, 0 to 1, as `f32::to_bits`.
+    ///
+    /// A fraction of the travel rather than a value, so that one name written
+    /// with two ranges is one control and not a disagreement — see the module
+    /// note. Mapping into units is the reader's job, and every reader has its
+    /// own range to map into.
     ///
     /// Written by the panel on the main thread and read by the audio callback,
     /// so it is atomic and never locked against — exactly as a controller's
@@ -252,26 +272,45 @@ pub fn controls() -> &'static Controls {
     })
 }
 
-/// Where a slot stands, in the slider's own units.
+/// Where a slot stands, as a fraction of its travel.
 ///
 /// Called per sample from the audio callback, so it is one relaxed load. A
-/// slot past the end of the table answers zero rather than panicking, which is
-/// what [`NO_SLOT`] relies on.
+/// slot past the end of the table answers zero, which is what [`NO_SLOT`]
+/// relies on.
 #[inline]
-pub fn position(slot: usize) -> f32 {
+pub fn fraction(slot: usize) -> f32 {
     match controls().at.get(slot) {
         Some(cell) => f32::from_bits(cell.load(Ordering::Relaxed)),
         None => 0.0,
     }
 }
 
-/// Move a slider, from the panel.
+/// Where a slot stands, in the units of one particular place that reads it.
 ///
-/// Clamped into the range the program gave it, since a position outside it is
-/// one nothing could have asked for. Answers whether the name is one this
-/// session knows: an unknown name is not an error worth raising anywhere,
-/// because the panel draws what the last run declared and a run in between may
-/// have taken it away.
+/// The whole of what "one control, two ranges" means: the fraction is shared
+/// and the mapping is not.
+#[inline]
+pub fn value_at(slot: usize, lo: f64, hi: f64) -> f64 {
+    lo + fraction(slot) as f64 * (hi - lo)
+}
+
+/// The fraction a value sits at within a range, for the way back in.
+fn fraction_of(value: f64, lo: f64, hi: f64) -> f64 {
+    if !(hi - lo).is_finite() || hi == lo {
+        return 0.0;
+    }
+    ((value - lo) / (hi - lo)).clamp(0.0, 1.0)
+}
+
+/// Move a control, from the panel.
+///
+/// The value arrives in the units of the range the panel is drawing — the
+/// first one the program declares — and is stored as the fraction of it, which
+/// is what every other place reading this name will map through its own range.
+///
+/// Answers whether the name is one this session knows. An unknown name is not
+/// an error worth raising anywhere, because the panel draws what the last run
+/// declared and a run in between may have taken it away.
 pub fn set(name: &str, value: f64) -> bool {
     let controls = controls();
     let Ok(shapes) = controls.shapes.lock() else {
@@ -281,8 +320,8 @@ pub fn set(name: &str, value: f64) -> bool {
         return false;
     };
     let shape = &shapes[slot];
-    let clamped = value.clamp(shape.lo.min(shape.hi), shape.lo.max(shape.hi));
-    controls.at[slot].store((clamped as f32).to_bits(), Ordering::Relaxed);
+    let at = fraction_of(value, shape.lo, shape.hi) as f32;
+    controls.at[slot].store(at.to_bits(), Ordering::Relaxed);
     true
 }
 
@@ -343,9 +382,7 @@ pub fn arm_at(now_bars: f64, beat_bars: f64, lookahead_bars: f64) -> f64 {
 /// pass may still sound past the new one's start, which is the difference
 /// between cutting a section off and never having played it.
 ///
-/// Answers whether the name is a trigger this session knows. An unknown name
-/// is not an error worth raising: the panel draws what the last run declared,
-/// and a run in between may have taken it away.
+/// Answers whether the name is a trigger this session knows.
 pub fn press(name: &str, at_bar: f64) -> bool {
     let controls = controls();
     let Ok(shapes) = controls.shapes.lock() else {
@@ -424,11 +461,10 @@ pub fn declare(name: &str, kind: Kind, lo: f64, hi: f64, start: f64) -> Option<u
     let shape = Shape { name: name.to_string(), kind, lo, hi, start };
 
     if let Some(slot) = shapes.iter().position(|s| s.name == name) {
-        let held = f32::from_bits(controls.at[slot].load(Ordering::Relaxed)) as f64;
-        let clamped = held.clamp(lo.min(hi), lo.max(hi));
-        if clamped != held {
-            controls.at[slot].store((clamped as f32).to_bits(), Ordering::Relaxed);
-        }
+        // The position is left exactly as it is. It is a *fraction*, and a
+        // fraction is inside every range there is — so a range edited narrower
+        // between runs needs no clamping and the control stays where the hand
+        // left it, proportionally.
         shapes[slot] = shape;
         return Some(slot);
     }
@@ -438,7 +474,10 @@ pub fn declare(name: &str, kind: Kind, lo: f64, hi: f64, start: f64) -> Option<u
     }
     shapes.push(shape);
     let slot = shapes.len() - 1;
-    controls.at[slot].store((start as f32).to_bits(), Ordering::Relaxed);
+    // Where the program says it starts, as the fraction of its own range that
+    // is — so the same starting point means the same thing at every place the
+    // name is written, whatever range each of them asked for.
+    controls.at[slot].store((fraction_of(start, lo, hi) as f32).to_bits(), Ordering::Relaxed);
     controls.taken.store(shapes.len(), Ordering::Release);
     Some(slot)
 }
@@ -476,16 +515,14 @@ pub fn declare_in(items: &[SwyncItem]) -> (Vec<Control>, Vec<String>) {
         if let Some(first) = found.iter().find(|c| c.name == decl.name) {
             // One name is one control wherever it is written — that is what
             // makes `slider("cutoff")` in two instruments one control moving
-            // both, which is usually exactly what was meant. What cannot be
-            // honoured twice is the *shape*, so the first one wins and the
-            // second is worth a word: a range typed differently in two places
-            // is as often a stale copy as a decision.
+            // both. Two *ranges* are no longer a disagreement to warn about:
+            // the slot holds a fraction and each place maps it into what it
+            // asked for, so both readings are honoured at once. See the module
+            // note. The panel draws the first, which is exact for that place
+            // and proportional everywhere else.
             //
-            // A name declared once as a slider and once as a toggle is the
-            // same collision and gets the same answer, since the two share a
-            // slot and a slot has one travel. The message names both kinds,
-            // because "declared twice" would send somebody looking for a
-            // second `slider` that is not there.
+            // What still cannot be honoured twice is the *kind*, since a slot
+            // has one travel and a switch is not a range.
             if first.kind != decl.kind {
                 warnings.push(format!(
                     "\"{}\" is declared as a {} and also as a {} — the {} is the one \
@@ -493,13 +530,6 @@ pub fn declare_in(items: &[SwyncItem]) -> (Vec<Control>, Vec<String>) {
                      give the other a name of its own.",
                     decl.name, first.kind.written(), decl.kind.written(),
                     first.kind.written()));
-            } else if (first.lo, first.hi, first.start) != (decl.lo, decl.hi, decl.start) {
-                warnings.push(format!(
-                    "{}(\"{}\") is declared more than once with different settings — \
-                     {} to {} starting at {} is the one being used, since it is written \
-                     first. One name is one control, so give the other a name of its own \
-                     or make the two agree.",
-                    decl.kind.written(), decl.name, first.lo, first.hi, first.start));
             }
             return;
         }
@@ -512,7 +542,7 @@ pub fn declare_in(items: &[SwyncItem]) -> (Vec<Control>, Vec<String>) {
                 lo: decl.lo,
                 hi: decl.hi,
                 start: decl.start,
-                at: position(slot) as f64,
+                at: value_at(slot, decl.lo, decl.hi),
                 baked: false,
             }),
             None => warnings.push(format!(
@@ -555,7 +585,7 @@ pub fn declared() -> Vec<Control> {
                 lo: shape.lo,
                 hi: shape.hi,
                 start: shape.start,
-                at: position(slot) as f64,
+                at: value_at(slot, shape.lo, shape.hi),
                 baked: controls.baked[slot].load(Ordering::Relaxed),
             })
         })
@@ -745,6 +775,13 @@ fn described(e: &Expr) -> &'static str {
 #[derive(Clone)]
 pub struct PanelNode {
     slot: usize,
+    /// The bottom and top of what this place reads out as, as it was written
+    /// there.
+    lo: f32,
+    hi: f32,
+    /// The smoothed value, as the **fraction** rather than as the mapped
+    /// number — mapped on the way out, so a range edited between runs does not
+    /// jump the filter.
     held: f32,
     /// How much of the distance is closed per sample, from the rate.
     coeff: f32,
@@ -755,20 +792,20 @@ pub struct PanelNode {
 }
 
 impl PanelNode {
-    pub fn new(slot: usize) -> PanelNode {
-        PanelNode { slot, held: 0.0, coeff: 1.0, fresh: true }
+    pub fn new(slot: usize, lo: f32, hi: f32) -> PanelNode {
+        PanelNode { slot, lo, hi, held: 0.0, coeff: 1.0, fresh: true }
     }
 
     #[inline]
     fn next(&mut self) -> f32 {
-        let target = position(self.slot);
+        let target = fraction(self.slot);
         if self.fresh {
             self.fresh = false;
             self.held = target;
         } else {
             self.held += (target - self.held) * self.coeff;
         }
-        self.held
+        self.lo + self.held * (self.hi - self.lo)
     }
 }
 
@@ -872,7 +909,20 @@ mod tests {
     fn a_slider_starts_where_the_program_says_it_does() {
         let _controls = exclusive();
         let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0).unwrap();
-        assert_eq!(position(slot), 800.0);
+        assert_eq!(value_at(slot, 200.0, 5000.0), 800.0);
+    }
+
+    /// The point of holding a fraction: one hand, and every place reading it
+    /// across its own travel. Halfway is halfway wherever it is written.
+    #[test]
+    fn one_name_read_through_two_ranges_moves_both_together() {
+        let _controls = exclusive();
+        let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 200.0).unwrap();
+        set("cutoff", 2600.0);
+
+        assert_eq!(value_at(slot, 200.0, 5000.0), 2600.0);
+        assert_eq!(value_at(slot, 0.0, 1.0), 0.5);
+        assert_eq!(value_at(slot, -1.0, 1.0), 0.0);
     }
 
     #[test]
@@ -893,19 +943,20 @@ mod tests {
         set("cutoff", 3200.0);
 
         assert_eq!(declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0), Some(slot));
-        assert_eq!(position(slot), 3200.0);
+        assert_eq!(value_at(slot, 200.0, 5000.0), 3200.0);
     }
 
-    /// An edited range can leave last minute's position outside it, and a
-    /// slider reading past its own top is something the panel cannot draw.
+    /// A range edited between runs needs no clamping, because what survives
+    /// is the fraction and a fraction is inside every range there is. The
+    /// control stays where the hand left it, proportionally.
     #[test]
-    fn a_remembered_position_is_clamped_into_a_range_that_has_narrowed() {
+    fn a_remembered_position_keeps_its_fraction_when_the_range_is_edited() {
         let _controls = exclusive();
-        let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0).unwrap();
-        set("cutoff", 4800.0);
+        let slot = declare("cutoff", Kind::Slider, 0.0, 100.0, 0.0).unwrap();
+        set("cutoff", 25.0);
 
-        declare("cutoff", Kind::Slider, 200.0, 1000.0, 800.0);
-        assert_eq!(position(slot), 1000.0);
+        declare("cutoff", Kind::Slider, 0.0, 400.0, 0.0);
+        assert_eq!(value_at(slot, 0.0, 400.0), 100.0, "a quarter of the way, still");
     }
 
     /// A range is edited like any other part of a program, so the newest
@@ -972,15 +1023,24 @@ mod tests {
         assert!(warnings.is_empty(), "got: {warnings:?}");
     }
 
+    /// Two ranges under one name are two readings of one control, not a
+    /// disagreement: the panel draws the first, and the second is honoured
+    /// where it is written.
     #[test]
-    fn one_name_declared_twice_with_different_ranges_keeps_the_first_and_says_so() {
+    fn one_name_declared_twice_with_different_ranges_is_one_control_and_no_complaint() {
         let _controls = exclusive();
         let (found, warnings) = sliders(
-            "out(lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1) * slider(\"cutoff\", 0, 1))\n");
+            "lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1) * slider(\"cutoff\", 0, 1)\n");
+
         assert_eq!(found.len(), 1);
-        assert_eq!((found[0].lo, found[0].hi), (200.0, 5000.0));
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("declared more than once"), "got: {}", warnings[0]);
+        assert_eq!((found[0].lo, found[0].hi), (200.0, 5000.0), "the panel draws the first");
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+
+        // And one hand moves both, each across its own travel.
+        set("cutoff", 2600.0);
+        let slot = found[0].slot;
+        assert_eq!(value_at(slot, 200.0, 5000.0), 2600.0);
+        assert_eq!(value_at(slot, 0.0, 1.0), 0.5);
     }
 
     /// The lowerer refuses these with the line in front of the reader, so the
@@ -1145,6 +1205,6 @@ mod tests {
         let _controls = exclusive();
         let slot = declare("cutoff", Kind::Slider, 200.0, 5000.0, 800.0).unwrap();
         set("cutoff", 99999.0);
-        assert_eq!(position(slot), 5000.0);
+        assert_eq!(value_at(slot, 200.0, 5000.0), 5000.0);
     }
 }

@@ -150,8 +150,16 @@ impl Lowerer {
                 .unwrap_or(controls::NO_SLOT),
         };
 
-        let node = self.push_node(NodeKind::Control, vec![NodeInput::Const(slot as f64)]);
-        Ok(Value::Control { node, slot, at: controls::position(slot) as f64 })
+        // The range written **here** rather than the one the panel draws: the
+        // slot holds a fraction, and this is the place that says what it is
+        // worth. Two call sites with two ranges are two readings of one
+        // control — see `crate::controls`.
+        let node = self.push_node(NodeKind::Control, vec![
+            NodeInput::Const(slot as f64),
+            NodeInput::Const(decl.lo),
+            NodeInput::Const(decl.hi),
+        ]);
+        Ok(Value::Control { node, slot, at: controls::value_at(slot, decl.lo, decl.hi) })
     }
 }
 
@@ -268,7 +276,12 @@ mod tests {
         set("speed", 3.0);
 
         let lowered = lower(&items).expect("lowering failed");
-        assert!(matches!(lowered.bindings[0].rate, Rate::Fixed(r) if r == 3.0),
+        // Within a float of 3: a position is held as the `f32` fraction of its
+        // own range, so a value put in and read back has been through one
+        // normalise and one map. That is the cost of one control reading
+        // through several ranges, and it is a good deal smaller than anything
+        // it could change about the sound.
+        assert!(matches!(lowered.bindings[0].rate, Rate::Fixed(r) if (r - 3.0).abs() < 1e-6),
                 "got: {:?}", lowered.bindings[0].rate);
     }
 
@@ -318,11 +331,11 @@ mod tests {
     fn a_toggle_starts_off_unless_the_program_says_otherwise() {
         let _controls = exclusive();
         lower_src("sin(220) * toggle(\"mute\")\n").unwrap();
-        assert_eq!(controls::position(0), 0.0);
+        assert_eq!(controls::value_at(0, 0.0, 1.0), 0.0);
 
         let _ = lower_src("sin(220) * toggle(\"lead\", 1)\n");
         let (slot, ..) = controls::shape_of("lead").expect("declared");
-        assert_eq!(controls::position(slot), 1.0);
+        assert_eq!(controls::value_at(slot, 0.0, 1.0), 1.0);
     }
 
     /// Two ends and nothing in between, so a number that is neither is a
