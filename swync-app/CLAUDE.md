@@ -46,6 +46,8 @@ Every stage returns `Result<_, Diagnostic>` tagged with a `Stage`, and nothing i
 
 **Two things make sound, by different routes.** The graph is continuous and lives in `engine.slot`, replaced by a 0.2s crossfade. Patterns are discrete: the scheduler thread (`scheduler/scheduler.rs`) free-runs from app start, wakes every 25ms, and pushes voices into a `Sequencer` 0.2s ahead of the audio clock. An eval never "triggers" the scheduler — it swaps the state the scheduler reads on its next pass. Ordering inside `run_code` matters and is commented where it does: instruments before patterns, clock reset before patterns are published.
 
+**A performance has one origin, and an eval joins it rather than starting it.** Everything *placed* — `play_once`, `playn`, a rate curve, every section chain — counts its bars from `Patterns::origin`, so which bar that is decides whether an edit is heard where the piece already is or deals the arrangement out again from the bar the edit landed on. `origin_for` in `lib.rs` is the whole rule: an eval carries across the origin it finds already playing, and only three things start a new one — silence, an arrangement whose last bar has gone by (`Patterns::ends_by`, since a finished piece stays published), and a clock whose epoch has moved, which is what a followed `Start` does to bindings it never touches. A plain `play` reads none of this and keeps the transport's grid either way (`joins_in_progress`). The cost is deliberate: a `play_once` typed into a performance whose bar has passed is not heard until the piece is started again.
+
 ## Recording
 
 `src-tauri/src/recorder/` — the record button's other half. The tap is in
