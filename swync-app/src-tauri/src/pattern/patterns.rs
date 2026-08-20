@@ -358,15 +358,26 @@ fn unit_hash(seed: u64, group: u64, n: u64) -> f64 {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Patterns {
     pub bindings: Vec<Binding>,
-    /// Bar time when this set was published — what a bounded binding counts
-    /// its bars from, so a one-shot fires at the eval that wrote it rather
-    /// than at wherever the free-running clock happens to be.
+    /// Bar time the performance now playing began at — what a bounded binding
+    /// counts its bars from, so a section chain knows where in itself it is.
     ///
-    /// Safe to hold as a bare number because the only thing that moves bar
-    /// time under it is `Clock::reset`, and both callers of that either
-    /// republish immediately after (an eval from silence) or clear the
-    /// bindings entirely (stop).
+    /// It belongs to the *performance* rather than to the eval that wrote it:
+    /// an eval that finds something already playing carries the origin it
+    /// finds across, or editing an instrument would deal the whole arrangement
+    /// again from the current bar. Only starting from silence sets a new one.
+    /// See `origin_for` in `lib.rs`, which is where that is decided.
     pub origin: f64,
+    /// The clock epoch `origin` was measured in.
+    ///
+    /// A bar time means nothing against a different one, and an origin is held
+    /// across evals now, so it has to carry the epoch that makes it readable —
+    /// the same pairing the scheduler's `Mark` makes, for the same reason. A
+    /// followed `Start` resets the clock without touching these bindings
+    /// (`midi::follow`), which is exactly the case a bare number could not
+    /// survive: bar time drops back to zero underneath an origin still forty
+    /// bars out, and every bounded binding waits for a bar that will not come
+    /// round again for a long time.
+    pub epoch: u64,
     /// The choices this set's bindings refer to by index. Empty for a program
     /// with no `wthen` in it, which is most of them.
     pub choices: Vec<ChoiceGroup>,
@@ -420,6 +431,31 @@ pub struct BoundEvent {
 impl Patterns {
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
+    }
+
+    /// The bar after which nothing here can sound again, or `None` if
+    /// something plays on for as long as the transport does.
+    ///
+    /// An arrangement that has run out is still published — the bindings are
+    /// only replaced by the next eval or cleared by a stop — so this is how
+    /// `run_code` tells a finished piece from one in progress, which decides
+    /// whether play starts it again or edits it where it stands.
+    ///
+    /// The two open-ended shapes are the ones `windows` treats as open-ended,
+    /// and for the same reasons: a binding with no bar count runs until it is
+    /// replaced, and a repeating one covers every later repetition of itself.
+    pub fn ends_by(&self) -> Option<f64> {
+        let mut last = f64::NEG_INFINITY;
+        for b in &self.bindings {
+            let repeats_for_ever = b.repeat.is_some_and(|p| p.is_finite() && p > 0.0);
+            match b.bars {
+                Some(bars) if !repeats_for_ever => {
+                    last = last.max(self.origin.ceil() + b.start + bars)
+                }
+                _ => return None,
+            }
+        }
+        last.is_finite().then_some(last)
     }
 
     pub fn query(&self, span: Span) -> Vec<BoundEvent> {
@@ -867,7 +903,7 @@ mod tests {
                 lanes: Vec::new(),
                 start: 0.0,
                 bars, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
-            origin, choices: Vec::new() }
+            origin, epoch: 0, choices: Vec::new() }
         .query(span)
         .iter()
         .map(|e| e.event.begin)
@@ -901,6 +937,78 @@ mod tests {
     #[test]
     fn a_one_shot_started_mid_cycle_begins_at_the_next_one() {
         assert_eq!(bounded(Some(1.0), 3.2, Span::new(3.2, 6.0)), vec![4.0, 4.5]);
+    }
+
+    /// The other half of `a_one_shot_started_mid_cycle_begins_at_the_next_one`,
+    /// and the reason an eval carries its origin across rather than stamping
+    /// the current bar (`origin_for` in `lib.rs`). A `playn` of three bars,
+    /// published at bar 0, has said what it had to say by bar 3 — and an edit
+    /// to the instrument playing it at bar 6 must not deal it out again.
+    #[test]
+    fn a_counted_binding_that_has_finished_stays_finished_across_a_re_eval() {
+        let after = Span::new(6.0, 8.0);
+        assert!(bounded(Some(3.0), 0.0, after).is_empty(), "the origin it began at");
+        assert_eq!(
+            bounded(Some(3.0), 6.0, after),
+            vec![6.0, 6.5, 7.0, 7.5],
+            "and what re-stamping the bar of the edit would have played instead",
+        );
+    }
+
+    // ---- when a set of bindings has said everything it has to say ----
+
+    fn set(bindings: Vec<Binding>, origin: f64) -> Patterns {
+        Patterns { bindings, origin, epoch: 0, choices: Vec::new() }
+    }
+
+    fn binding(start: f64, bars: Option<f64>, repeat: Option<f64>) -> Binding {
+        Binding {
+            target: "i".into(),
+            source: Pattern::steps([Some(1.0)]).into(),
+            lanes: Vec::new(),
+            start,
+            bars,
+            repeat,
+            choice: None,
+            rate: Rate::Fixed(1.0),
+        }
+    }
+
+    /// A `playn` of three bars from bar 4 is over at bar 7, and stays
+    /// published saying so until the next eval replaces it.
+    #[test]
+    fn a_counted_binding_ends_where_its_bars_run_out() {
+        assert_eq!(set(vec![binding(0.0, Some(3.0), None)], 4.0).ends_by(), Some(7.0));
+    }
+
+    /// A chain is several bindings placed at different bars, and the piece is
+    /// over when the last of them is.
+    #[test]
+    fn a_set_of_bindings_ends_at_the_last_of_them() {
+        let chain = vec![binding(0.0, Some(4.0), None), binding(4.0, Some(2.0), None)];
+        assert_eq!(set(chain, 0.0).ends_by(), Some(6.0));
+    }
+
+    /// A plain `play` runs until something replaces it, so nothing in the set
+    /// with it has an end either.
+    #[test]
+    fn a_set_with_a_plain_play_in_it_never_ends() {
+        let mixed = vec![binding(0.0, Some(4.0), None), binding(0.0, None, None)];
+        assert_eq!(set(mixed, 0.0).ends_by(), None);
+    }
+
+    /// A repeating binding covers every later repetition of itself, which is
+    /// exactly what `windows` does with one.
+    #[test]
+    fn a_repeating_binding_never_ends() {
+        assert_eq!(set(vec![binding(0.0, Some(2.0), Some(2.0))], 0.0).ends_by(), None);
+    }
+
+    /// A period nothing could repeat on is not a repetition, and `windows`
+    /// gives such a binding its single window. Its bars are still its end.
+    #[test]
+    fn a_binding_whose_period_is_unusable_ends_with_its_bars() {
+        assert_eq!(set(vec![binding(0.0, Some(2.0), Some(0.0))], 0.0).ends_by(), Some(2.0));
     }
 
     /// The scheduler queries in small spans, so the window has to be assembled
@@ -949,7 +1057,7 @@ mod tests {
                     start: 0.0,
                     bars: None, repeat: None, choice: None, rate: Rate::Fixed(1.0) },
             ],
-            origin: 0.0, choices: Vec::new() };
+            origin: 0.0, epoch: 0, choices: Vec::new() };
 
         let names: Vec<_> = pats
             .query(Span::new(5.0, 6.0))
@@ -979,7 +1087,7 @@ mod tests {
                 lanes: Vec::new(),
                 start,
                 bars, repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
-            origin: 0.0, choices: Vec::new() }
+            origin: 0.0, epoch: 0, choices: Vec::new() }
         .query(span)
         .iter()
         .map(|e| e.event.begin)
@@ -1028,7 +1136,7 @@ mod tests {
                 lanes: Vec::new(),
                 start: 2.0,
                 bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
-            origin: 3.2, choices: Vec::new() };
+            origin: 3.2, epoch: 0, choices: Vec::new() };
         // Origin 3.2 rounds up to 4, plus two bars of waiting.
         let onsets: Vec<f64> = pats
             .query(Span::new(3.2, 9.0))
@@ -1059,6 +1167,7 @@ mod tests {
                 rate: Rate::accel(1.0, 3.0, 4.0),
             }],
             origin,
+            epoch: 0,
             choices: Vec::new(),
         }
     }
@@ -1140,6 +1249,7 @@ mod tests {
                 rate: Rate::Fixed(1.0),
             }],
             origin: 0.0,
+            epoch: 0,
             choices: Vec::new(),
         }
     }
@@ -1190,6 +1300,7 @@ mod tests {
                 rate: Rate::Fixed(1.0),
             }],
             origin,
+            epoch: 0,
             choices: Vec::new(),
         };
 
@@ -1279,6 +1390,7 @@ mod tests {
         Patterns {
             bindings: vec![arm("a", 0, 0, 1.0), arm("b", 0, 1, 1.0)],
             origin: 0.0,
+            epoch: 0,
             choices: vec![ChoiceGroup { weights, seed }],
         }
     }
@@ -1376,6 +1488,7 @@ mod tests {
         let pats = Patterns {
             bindings: vec![arm("a", 0, 0, 1.0)],
             origin: 0.0,
+            epoch: 0,
             // Arm 1 is silence: nothing refers to it.
             choices: vec![ChoiceGroup { weights: vec![0.25, 0.75], seed: 7 }],
         };
@@ -1402,6 +1515,7 @@ mod tests {
                 rate: Rate::Fixed(1.0),
             }],
             origin: 0.0,
+            epoch: 0,
             choices: Vec::new(),
         };
         let onsets: Vec<f64> = pats
@@ -1427,6 +1541,7 @@ mod tests {
                 rate: Rate::Fixed(1.0),
             }],
             origin: 0.0,
+            epoch: 0,
             choices: Vec::new(),
         };
         let onsets: Vec<f64> = pats

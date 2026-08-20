@@ -2071,7 +2071,7 @@ mod start_position_tests {
                 lanes: Vec::new(),
                 start: 0.0,
                 bars: Some(1.0), repeat: None, choice: None, rate: Rate::Fixed(1.0) }],
-            origin: clock.now_bars(), choices: Vec::new() };
+            origin: clock.now_bars(), epoch: 0, choices: Vec::new() };
 
         // One bar is two seconds at this tempo.
         assert_eq!(steps_over(&s, &clock, 2.0), vec![1.0, 2.0]);

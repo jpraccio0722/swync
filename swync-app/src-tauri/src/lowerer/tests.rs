@@ -1163,7 +1163,7 @@ fn ramp() = play_once(for i in 0..=16 { 220;e }, breath, vol: 0..=16)
 fn lead(n) = sin(n)
 playn([220], lead, 8).then(ramp)
 ";
-    let pats = Patterns { bindings: bindings_of(src), origin: 0.0, choices: Vec::new() };
+    let pats = Patterns { bindings: bindings_of(src), origin: 0.0, epoch: 0, choices: Vec::new() };
     let vols: Vec<f64> = (0..14)
         .flat_map(|bar| pats.query(Span::new(bar as f64, bar as f64 + 1.0)))
         .filter(|e| e.target == "breath")
@@ -1182,7 +1182,7 @@ fn a_long_lane_is_played_through_from_source() {
     use crate::pattern::patterns::Patterns;
 
     let bs = bindings_of(&format!("{BASS}play([220, 330], bass, cut: 1..=20)\n"));
-    let pats = Patterns { bindings: bs, origin: 0.0, choices: Vec::new() };
+    let pats = Patterns { bindings: bs, origin: 0.0, epoch: 0, choices: Vec::new() };
 
     let cuts: Vec<f64> = (0..10)
         .flat_map(|c| pats.query(Span::new(c as f64, c as f64 + 1.0)))
