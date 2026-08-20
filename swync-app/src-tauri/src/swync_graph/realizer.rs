@@ -1317,6 +1317,46 @@ mod reverb_tests {
         assert!(err.contains("must be a constant"), "got: {err}");
     }
 
+
+    /// What a slider does to a *realized* graph, which is the only place the
+    /// smoothing is real: `coeff` comes from the sample rate, and a node that
+    /// never got one would step rather than glide.
+    ///
+    /// The first sample is the part that matters to a re-eval. A net built
+    /// mid-performance is crossfaded in over 0.2s (`engine::swap_program`), and
+    /// its slider nodes are new — so if they began at zero and approached, a
+    /// re-eval would add a ten-millisecond sweep underneath every crossfade.
+    /// They begin *at* the position instead, which is what `fresh` is for.
+    #[test]
+    fn a_slider_starts_where_it_is_and_glides_to_where_it_is_put() {
+        let _controls = crate::controls::exclusive();
+        let items = parse("slider(\"level\", 0, 1, 0.25)\n".to_string()).unwrap();
+        crate::controls::declare_in(&items);
+        let g = lower(&items).unwrap().graph;
+        let mut net = realize(&g).unwrap();
+        net.set_sample_rate(44100.0);
+
+        let mut out = [0.0f32; 2];
+        net.tick(&[], &mut out);
+        assert_eq!(out[0], 0.25, "a fresh node takes the position whole");
+
+        crate::controls::set("level", 0.75);
+        net.tick(&[], &mut out);
+        assert!(out[0] < 0.26, "one sample later it has barely moved: {}", out[0]);
+
+        // One time constant is most of the way there — 1 - 1/e of the
+        // distance, which is what `SMOOTHING_SECS` means.
+        for _ in 0..441 {
+            net.tick(&[], &mut out);
+        }
+        assert!((0.55..0.58).contains(&out[0]), "10ms later: {}", out[0]);
+
+        for _ in 0..4410 {
+            net.tick(&[], &mut out);
+        }
+        assert!((out[0] - 0.75).abs() < 1e-3, "settled at: {}", out[0]);
+    }
+
     /// A slider is the one signal such a parameter accepts, and what it
     /// accepts is the number the slider stands at. There is nothing better
     /// available — the parameter is not a port — so what is owed is the mark

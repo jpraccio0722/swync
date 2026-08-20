@@ -193,6 +193,37 @@ mod tests {
                 "got: {:?}", lowered.bindings[0].rate);
     }
 
+    /// A slider is a signal wherever a signal goes, and the top of a file is
+    /// one of those places. Matching `Value::Signal` here used to drop it, and
+    /// what that sounded like was a line that did nothing at all.
+    #[test]
+    fn a_slider_written_as_the_whole_of_a_line_reaches_the_output() {
+        let _controls = exclusive();
+        let g = lower_src("slider(\"level\")\n").unwrap();
+        assert_eq!(g.output.map(|id| g.nodes[id.0].kind), Some(NodeKind::Slider));
+    }
+
+    /// The same rule one level down: any signal in a loop makes the loop
+    /// audio, and a slider is one.
+    #[test]
+    fn a_loop_answering_with_sliders_is_audio_like_any_other_signal() {
+        let _controls = exclusive();
+        let g = lower_src("for i in 0..=1 { sin(220) * slider(\"a\") }\n").unwrap();
+        // A node per pass, as every inlined body gets — and both reading the
+        // one slot, because the name is what a slider is.
+        assert_eq!(slots(&g), vec![NodeInput::Const(0.0), NodeInput::Const(0.0)]);
+        assert!(g.output.is_some(), "the loop should have summed into the output");
+    }
+
+    /// An enum member is read once, where the enum is written, so a control
+    /// named there would stop moving anything.
+    #[test]
+    fn an_enum_member_cannot_be_a_slider() {
+        let _controls = exclusive();
+        let message = err("enum Filters { low = slider(\"low\", 100, 400) }\nsin(220)\n");
+        assert!(message.contains("is a slider"), "got: {message}");
+    }
+
     #[test]
     fn a_slider_needs_a_name_written_in_quotes() {
         let _controls = exclusive();

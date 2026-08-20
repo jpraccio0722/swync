@@ -62,8 +62,12 @@ pub enum Value {
     ///
     /// Both a signal and a number, and it has to be both. As a **signal** it is
     /// the node the graph reads at audio rate, which is what makes dragging one
-    /// audible without recompiling anything — that is the ordinary use, and
-    /// every place a signal goes takes it through [`Value::Signal`]'s own road.
+    /// audible without recompiling anything — that is the ordinary use, and it
+    /// reaches the graph through `as_input` like any other signal. A site that
+    /// asks "is this audio?" by matching the *variant* has to ask
+    /// `expr::signal_node` instead, or it silently drops a slider: the output
+    /// rule and the `for` loop both did, and what that sounded like was a line
+    /// that did nothing.
     /// As a **number** it is where the slider was standing when the program
     /// compiled, which is the only answer available where the language demands
     /// a compile-time number: a pattern's rate, a `;` length, anything that
