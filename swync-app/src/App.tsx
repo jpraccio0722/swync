@@ -34,7 +34,7 @@ import {
   type Settings,
 } from "./SettingsPanel";
 import { SearchPanel, type Results as SearchResults } from "./SearchPanel";
-import { SlidersPanel, type Slider } from "./SlidersPanel";
+import { ControlsPanel, type Control } from "./ControlsPanel";
 import { SidePanel, type SideTab } from "./SidePanel";
 import { toDiagnostic, type Diagnostic } from "./diagnostics";
 import { TransportPanel } from "./TransportPanel";
@@ -208,7 +208,7 @@ interface LibraryManifest {
 }
 
 /** How wide either side panel may be dragged. The floor is what a pattern's
- *  grid and the sliders need; the ceiling keeps the editor from vanishing. */
+ *  grid and the controls need; the ceiling keeps the editor from vanishing. */
 const MIN_PANEL = 240;
 /** The icon tray's width, which stands between a panel's outer edge and the
  *  window's. A drag reads the pointer against the window, so without taking
@@ -218,7 +218,7 @@ const TRAY = 44;
 const MAX_PANEL = 720;
 const DEFAULT_PANEL = 288;
 /** The left panel holds wrapped prose, a snippet and a file tree, all of which
- *  want a little more room than the transport's sliders do. */
+ *  want a little more room than the transport's controls do. */
 const DEFAULT_SIDE_PANEL = 340;
 
 /**
@@ -299,8 +299,8 @@ function App() {
   // The controls the last run declared. The app owns their positions between
   // runs because it is the only thing that writes them — the backend's copy is
   // what the audio graph reads, and the two agree because every move is sent
-  // there as it happens. See `SlidersPanel`.
-  const [sliders, setSliders] = useState<Slider[]>([]);
+  // there as it happens. See `ControlsPanel`.
+  const [controls, setControls] = useState<Control[]>([]);
 
   // The left panel starts shut, on the project: there is nothing for it to say
   // until a folder is open or something has been run, and either of those
@@ -1544,8 +1544,8 @@ function App() {
         // wholesale rather than merged: a run is the one moment the backend
         // knows more about a slider's position than this side does, because a
         // range edited narrower clamps whatever was dialled in under it.
-        void invoke<Slider[]>("sliders").then(setSliders).catch((e) =>
-          console.error("could not read the sliders:", e));
+        void invoke<Control[]>("controls").then(setControls).catch((e) =>
+          console.error("could not read the controls:", e));
         // The engine is holding this program until something stops it, which
         // is what the lit play button says. Here rather than beside the
         // `return` below, because that answers true for a file never run.
@@ -1605,11 +1605,11 @@ function App() {
    * recompiled and nothing is crossfaded, which is why a drag is heard under
    * the finger.
    */
-  const moveSlider = useCallback((name: string, value: number) => {
-    setSliders((all) =>
+  const moveControl = useCallback((name: string, value: number) => {
+    setControls((all) =>
       all.map((s) => (s.name === name ? { ...s, at: value } : s)));
-    void invoke("set_slider", { name, value }).catch((e) =>
-      console.error(`could not move the ${name} slider:`, e));
+    void invoke("set_control", { name, value }).catch((e) =>
+      console.error(`could not move the ${name} control:`, e));
   }, []);
 
   /**
@@ -1628,9 +1628,9 @@ function App() {
    * Only while something is playing: a run is how a program is heard, and
    * starting one from a panel would be a play button nobody pressed.
    */
-  const commitSlider = useCallback(
-    (slider: Slider) => {
-      if (!slider.baked || !playing) return;
+  const commitControl = useCallback(
+    (control: Control) => {
+      if (!control.baked || !playing) return;
       // What is playing, which is not always what is in front — play runs the
       // project's `main.swync`, and ⇧⌘, runs the tab. Re-running the file the
       // last run was of is the only reading that cannot surprise anybody.
@@ -1657,7 +1657,7 @@ function App() {
    * that exists so nothing downstream has to know about files. A name written
    * once, which is the ordinary case, is found exactly by looking for it.
    */
-  const revealSlider = useCallback(
+  const revealControl = useCallback(
     async (name: string) => {
       if (projectRoot === null) return;
       try {
@@ -1845,9 +1845,9 @@ function App() {
 
     const tick = async () => {
       try {
-        const fresh = await invoke<Slider[]>("sliders");
+        const fresh = await invoke<Control[]>("controls");
         if (!live) return;
-        setSliders((all) =>
+        setControls((all) =>
           fresh.map((s) => {
             const known = all.find((k) => k.name === s.name);
             return known ? { ...s, at: known.at } : s;
@@ -2378,11 +2378,11 @@ function App() {
             />
           }
           controls={
-            <SlidersPanel
-              sliders={sliders}
-              onChange={moveSlider}
-              onCommit={commitSlider}
-              onReveal={projectRoot === null ? null : (name) => void revealSlider(name)}
+            <ControlsPanel
+              controls={controls}
+              onChange={moveControl}
+              onCommit={commitControl}
+              onReveal={projectRoot === null ? null : (name) => void revealControl(name)}
               hasRun={runStatus !== "idle"}
             />
           }

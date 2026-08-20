@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 
 use crate::swync_graph::environment::{Item, Value};
 use crate::swync_graph::ugen_nodes::NodeKind;
-use crate::lowerer::expr::{as_data, not_this_member, slider_number};
+use crate::lowerer::expr::{as_data, not_this_member, control_number};
 use crate::lowerer::lower::Lowerer;
 
 pub(crate) fn as_list(func: &str, v: &Value) -> Result<Rc<Vec<Item>>, String> {
@@ -34,7 +34,7 @@ fn as_values(func: &str, v: &Value) -> Result<Vec<Value>, String> {
 fn as_number(func: &str, what: &str, v: &Value) -> Result<f64, String> {
     // As in `math::number`: a list builtin folds during lowering, so a slider
     // here is the number it is standing at.
-    if let Some(n) = slider_number(v) {
+    if let Some(n) = control_number(v) {
         return Ok(n);
     }
     match as_data(v) {

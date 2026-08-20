@@ -29,20 +29,22 @@ use crate::swync_graph::ugen_nodes::{NodeInput, NodeKind};
 
 impl Lowerer {
     /// True when this call declares a control in the panel.
-    pub fn is_slider(name: &str) -> bool {
-        name == controls::SLIDER
+    pub fn is_control(name: &str) -> bool {
+        name == controls::SLIDER || name == controls::TOGGLE
     }
 
-    /// `slider("cutoff")`, `slider("cutoff", 200, 5000)`,
-    /// `slider("cutoff", 200, 5000, 800)`.
+    /// `slider("cutoff", 200, 5000, 800)` and `toggle("mute", 1)`.
     ///
-    /// The node holds the **slot** and nothing else, which is the same trick
-    /// `cc` plays with a port and for the same reason: a node reads its
+    /// One function for both because the two differ only in what the panel
+    /// draws: the node holds the **slot** and nothing else, which is the same
+    /// trick `cc` plays with a port and for the same reason — a node reads its
     /// control on the audio callback and cannot hash a name, so the name
     /// becomes a small integer here and never appears in the graph again.
-    /// Unlike `cc` it carries no range either — what the slot holds is already
-    /// in the slider's own units, because the panel knows the range it drew.
-    pub fn slider(&mut self, args: &[Arg], piped: Option<Value>) -> Result<Value, String> {
+    /// Unlike `cc` it carries no range either, since what the slot holds is
+    /// already in the control's own units.
+    pub fn control(&mut self, name: &str, args: &[Arg], piped: Option<Value>)
+        -> Result<Value, String>
+    {
         // A piped receiver is refused rather than folded in with the
         // arguments, and there is nothing it could have been: the first
         // parameter is the name, the name is written in quotes, and a string
@@ -50,12 +52,12 @@ impl Lowerer {
         // name cannot come from.
         if piped.is_some() {
             return Err(format!(
-                "{}: the name is written at the call rather than chained into it — \
-                 {}(\"cutoff\", 200, 5000)",
-                controls::SLIDER, controls::SLIDER));
+                "{name}: the name is written at the call rather than chained into it — \
+                 {name}(\"cutoff\")"));
         }
 
-        let decl = controls::parse(args)?;
+        let kind = if name == controls::TOGGLE { controls::Kind::Toggle } else { controls::Kind::Slider };
+        let decl = controls::parse(kind, args)?;
 
         // What the panel already has for this name, which is what the program
         // declared first. Only a program nothing has walked — a test lowering
@@ -66,13 +68,13 @@ impl Lowerer {
             // said so in the problems panel, and what is left to decide here
             // is what the program *sounds* like: silence at this one control
             // and everything else unchanged. Refusing to compile would take a
-            // whole piece down over a sixty-fifth slider.
-            None => controls::declare(&decl.name, decl.lo, decl.hi, decl.start)
+            // whole piece down over a sixty-fifth control.
+            None => controls::declare(&decl.name, decl.kind, decl.lo, decl.hi, decl.start)
                 .unwrap_or(controls::NO_SLOT),
         };
 
-        let node = self.push_node(NodeKind::Slider, vec![NodeInput::Const(slot as f64)]);
-        Ok(Value::Slider { node, slot, at: controls::position(slot) as f64 })
+        let node = self.push_node(NodeKind::Control, vec![NodeInput::Const(slot as f64)]);
+        Ok(Value::Control { node, slot, at: controls::position(slot) as f64 })
     }
 }
 
@@ -100,7 +102,7 @@ mod tests {
     fn slots(g: &SwyncGraph) -> Vec<NodeInput> {
         g.nodes
             .iter()
-            .filter(|n| n.kind == NodeKind::Slider)
+            .filter(|n| n.kind == NodeKind::Control)
             .map(|n| n.inputs[0].clone())
             .collect()
     }
@@ -163,7 +165,7 @@ mod tests {
 
         assert_eq!(slots(&g), vec![NodeInput::Const(0.0), NodeInput::Const(0.0)]);
         assert_eq!(
-            controls::shape_of("cutoff").map(|(_, lo, hi, _)| (lo, hi)),
+            controls::shape_of("cutoff").map(|(_, _, lo, hi, _)| (lo, hi)),
             Some((200.0, 5000.0)));
     }
 
@@ -200,7 +202,7 @@ mod tests {
     fn a_slider_written_as_the_whole_of_a_line_reaches_the_output() {
         let _controls = exclusive();
         let g = lower_src("slider(\"level\")\n").unwrap();
-        assert_eq!(g.output.map(|id| g.nodes[id.0].kind), Some(NodeKind::Slider));
+        assert_eq!(g.output.map(|id| g.nodes[id.0].kind), Some(NodeKind::Control));
     }
 
     /// The same rule one level down: any signal in a loop makes the loop
@@ -222,6 +224,59 @@ mod tests {
         let _controls = exclusive();
         let message = err("enum Filters { low = slider(\"low\", 100, 400) }\nsin(220)\n");
         assert!(message.contains("is a slider"), "got: {message}");
+    }
+
+    /// A toggle is a signal like any other, which is what makes multiplying
+    /// by it the ordinary use — a part in or out with no number to choose.
+    #[test]
+    fn a_toggle_is_a_node_the_graph_reads_like_a_slider() {
+        let _controls = exclusive();
+        let g = lower_src("sin(220) * toggle(\"mute\")\n").unwrap();
+
+        assert_eq!(slots(&g), vec![NodeInput::Const(0.0)]);
+        assert!(!controls::baked_by_name("mute"));
+    }
+
+    #[test]
+    fn a_toggle_starts_off_unless_the_program_says_otherwise() {
+        let _controls = exclusive();
+        lower_src("sin(220) * toggle(\"mute\")\n").unwrap();
+        assert_eq!(controls::position(0), 0.0);
+
+        let _ = lower_src("sin(220) * toggle(\"lead\", 1)\n");
+        let (slot, ..) = controls::shape_of("lead").expect("declared");
+        assert_eq!(controls::position(slot), 1.0);
+    }
+
+    /// Two ends and nothing in between, so a number that is neither is a
+    /// number somebody expected to mean something.
+    #[test]
+    fn a_toggle_that_starts_part_way_is_refused() {
+        let _controls = exclusive();
+        let message = err("sin(220) * toggle(\"mute\", 0.5)\n");
+        assert!(message.contains("off or on"), "got: {message}");
+    }
+
+    #[test]
+    fn a_toggle_has_no_range_to_give_it() {
+        let _controls = exclusive();
+        let message = err("sin(220) * toggle(\"mute\", 0, 1)\n");
+        assert!(message.contains("no range"), "got: {message}");
+    }
+
+    /// One name is one control and a slot has one travel, so the two kinds
+    /// collide exactly as two ranges do.
+    #[test]
+    fn one_name_cannot_be_both_a_slider_and_a_toggle() {
+        let _controls = exclusive();
+        let items = parse("sin(220) * toggle(\"level\") * slider(\"level\")\n".to_string())
+            .expect("parse failed");
+        let (found, warnings) = controls::declare_in(&items);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, controls::Kind::Toggle);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("also as a"), "got: {}", warnings[0]);
     }
 
     #[test]

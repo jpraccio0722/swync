@@ -355,7 +355,7 @@ impl Lowerer {
             // it is a thing that *moves*, which is the one property an enum
             // member cannot have. Nothing is lost by writing it at the place
             // it is used, which is where a control belongs anyway.
-            Value::Slider { .. } => Err(format!(
+            Value::Control { .. } => Err(format!(
                 "`{}.{member}` is a slider, and an enum member is a constant — it is \
                  read once, where the enum is written, so the control would stop \
                  moving anything the moment it was named here. Write the `slider` \

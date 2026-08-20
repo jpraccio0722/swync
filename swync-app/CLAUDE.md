@@ -431,9 +431,13 @@ twice.
 
 ## Controls in the panel
 
-`src-tauri/src/controls.rs`, `lowerer/controls.rs`, `src/SlidersPanel.tsx`. `slider("cutoff", 200, 5000)` draws a control in the right panel and reads it from inside the graph at audio rate. It is **MIDI in read from the screen instead of a wire**, and nearly all of it is the same design: one atomic per control, written by one side and read by the audio callback without a lock; a name interned to a **slot**, because a node cannot hash a string on the callback; and interning that touches no hardware and no window, so a thousand tests can lower a slider and a program compiles the same wherever it is opened.
+`src-tauri/src/controls.rs`, `lowerer/controls.rs`, `src/ControlsPanel.tsx`. `slider("cutoff", 200, 5000)` and `toggle("mute")` draw a control in the right panel and read it from inside the graph at audio rate. It is **MIDI in read from the screen instead of a wire**, and nearly all of it is the same design: one atomic per control, written by one side and read by the audio callback without a lock; a name interned to a **slot**, because a node cannot hash a string on the callback; and interning that touches no hardware and no window, so a thousand tests can lower a slider and a program compiles the same wherever it is opened.
 
 **The panel has no way to add one**, and that is the design rather than an omission. A control exists by being written at the place it is used, so the control and the thing it controls are one line of text and a piece that travels takes its controls with it. It is the claim `midiout` makes about a port and the opposite of the one an audio device makes.
+
+**One table holds every kind**, and `Kind` is the only thing that differs. A slider and a toggle share a slot, an atomic, the session's memory of where they were left, and one `NodeKind::Control` that reads and smooths — because everything that makes a control a control is the same for both. What differs is the travel: a slider has a range, a toggle has two ends, and only the panel has to care since it is the only thing that draws one. A toggle's ends are smoothed like everything else, which is what keeps switching a part in from clicking.
+
+One name is one control, so a name declared as both is the same collision two ranges are, and gets the same answer with its own words — a slot has one travel.
 
 Four things carry weight:
 

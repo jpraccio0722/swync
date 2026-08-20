@@ -35,8 +35,8 @@ impl Lowerer {
         // And `slider`, whose name is read off the syntax for the same reason
         // a port's is — with the addition that the panel has already read it,
         // before any of this ran. See `lowerer::controls`.
-        if Lowerer::is_slider(&func.0) {
-            return self.slider(args, piped);
+        if Lowerer::is_control(&func.0) {
+            return self.control(&func.0, args, piped);
         }
 
         // And the arrangement combinators, for a reason of the same shape: a

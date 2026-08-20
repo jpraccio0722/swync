@@ -709,7 +709,7 @@ fn midi_clock_status() -> ClockStatus {
     }
 }
 
-/// What the panel should be drawing: the sliders the last run declared, each
+/// What the panel should be drawing: the controls the last run declared, each
 /// carrying where it stands right now.
 ///
 /// Polled rather than pushed, like the recording clock and the meters, and for
@@ -718,23 +718,23 @@ fn midi_clock_status() -> ClockStatus {
 /// relaxed loads, and usually an empty list, since most programs declare no
 /// controls at all.
 #[tauri::command]
-fn sliders() -> Vec<controls::Slider> {
+fn controls() -> Vec<controls::Control> {
     controls::declared()
 }
 
-/// Move a slider, from the panel.
+/// Move a control, from the panel.
 ///
-/// The whole of what a drag does when the slider is a signal: one relaxed
-/// store, heard on the next audio block, with nothing recompiled and nothing
-/// crossfaded. A slider the program read as a *number* takes the same store —
-/// so the panel keeps tracking under the finger — and it is `App.tsx` that
-/// then asks for a run when the drag ends, because only that value was baked
-/// into the graph.
+/// The whole of what a drag or a flip does when the control is a signal: one
+/// relaxed store, heard on the next audio block, with nothing recompiled and
+/// nothing crossfaded. A control the program read as a *number* takes the same
+/// store — so the panel keeps tracking under the finger — and it is `App.tsx`
+/// that then asks for a run when the gesture ends, because only that value was
+/// baked into the graph.
 ///
 /// A name the session does not know is not an error: the panel draws what the
 /// last run declared, and a run in between may have deleted the line.
 #[tauri::command]
-fn set_slider(name: String, value: f64) {
+fn set_control(name: String, value: f64) {
     controls::set(&name, value);
 }
 
@@ -1668,8 +1668,8 @@ pub fn run() {
             recording_state,
             audio_devices,
             midi_ports,
-            sliders,
-            set_slider,
+            controls,
+            set_control,
             midi_clock_status,
             audio_levels,
             set_input_device,

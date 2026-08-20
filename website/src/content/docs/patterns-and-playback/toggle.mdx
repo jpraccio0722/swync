@@ -1,0 +1,29 @@
+---
+name: toggle
+params: [name, start]
+arities: [1, 2]
+variadic: false
+receives: text
+returns: any
+---
+
+A switch in the panel, off or on, named where it is used:
+
+```swync
+sin(220) * toggle("mute")
+```
+
+That draws a toggle called mute in the controls panel and reads it at audio
+rate, so flipping it is heard immediately with nothing recompiled.
+
+It is 0 or 1, which is what makes multiplying by it the ordinary use: a part
+that is in or out, with no number to choose. A second argument says which end
+it starts at — `toggle("lead", 1)` starts on — and it has no range to give it,
+since its ends are its two states.
+
+Everything else about it is a [slider](/docs/patterns-and-playback/slider/).
+One name is one control wherever it is written, so writing the same name in two
+places is one switch moving both. It keeps its state across an evaluation and
+forgets it when the app quits, which is why the number written here is a
+starting state rather than a value. And its ends are smoothed over a few
+milliseconds, so switching something in does not click.
