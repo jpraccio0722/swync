@@ -40,11 +40,12 @@ play([d2;q, f, g, e2;e, bf1], synth)
 So d2, f and g are all quarter notes and bf1 is an eighth note.
 
 
-We can modify rhythms in two ways:
+We can modify rhythms in three ways:
 
 | Marker | Meaning |
 |--------|---------|
 | `.dot` | Lengthens by half. Takes an optional count from 1 to 8 — `q.dot` is 3/2 beats, `q.dot(2)` is 7/4, following (2^(n+1) − 1)/2^n. |
+| `+` | Tie. Adds two values into a single held note — `h + e` is a half tied to an eighth. |
 | `;t` | Tuplet. Plays a bracketed group in the next lower power of two — three quarters in the time of two, five eighths in the time of four.
 
 
@@ -67,5 +68,17 @@ play([d2;q, f, g, e2;e, bf1, g2], synth)
 ```
 And yes, this produces a four and one half note pattern that would syncopate over the bar. 
 There are no guards to prevent interesting things like this.
+
+### Ties
+
+A dot lengthens a value and a tuplet divides one, but neither reaches every
+length.
+
+```swync
+play([d2;w + h, f;h], synth)
+```
+
+That's a note held for a bar and a half, then a half note to finish out the
+second bar.
 
 Ok, that's all, right? Well, how do we make silence? What about drums?
