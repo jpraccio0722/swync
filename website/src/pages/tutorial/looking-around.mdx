@@ -11,10 +11,18 @@ A **project** is a folder with a `swync-project.json` in it.
 
 Projects store the tempo, the signature and the volume of your session. 
 
+A project will compile and run its **`main.swync`** file. 
+Creating a new project will create an empty main file. 
+This allows you to break large projects over multiple files using imports with `use`.
+
+To hear the file you are *in* rather than the whole project press <kbd>⌘ ⇧ ,</kbd>.
+
+A folder with no `main.swync` in it plays the file you are currently working in.
 
 ## The transport
 
-* **play** <kbd>⌘ ,</kbd> is the same button and <kbd>⌘ .</kbd> is stop.
+* **play** <kbd>⌘ ,</kbd> runs the project's `main.swync`, <kbd>⌘ ⇧ ,</kbd> runs
+the file you are in, and <kbd>⌘ .</kbd> is stop.
 
 * **Tempo** runs from 40 to 240, and it is a quarter note per minute in any
 signature. 
@@ -32,6 +40,10 @@ new one, <kbd>⌘ N</kbd>.
 Worth knowing early: imports read what is *saved*, not what is on screen. A
 module with a dot on its tab is a module the file that `use`s it cannot see
 yet.
+
+The file you are *playing* is the exception — unsaved edits in it are heard, so
+a `main.swync` with a dot on its tab plays what you can see. It is the files it
+imports that have to be written down first.
 
 ## The panels
 

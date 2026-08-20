@@ -136,6 +136,37 @@ interface Tab {
   patternName?: string;
 }
 
+/**
+ * A program about to be run: the text, and where it came from.
+ *
+ * The text is separate from the path because they can disagree, and the
+ * disagreement is the point — an unsaved buffer is what you hear, while the
+ * path is what its `use` lines resolve against and what its diagnostics are
+ * attributed to.
+ */
+interface Target {
+  code: string;
+  /** Where the file is, or null for a tab never saved — which resolves no
+   *  imports and belongs to no project folder. */
+  path: string | null;
+  /** The tab holding it, or null for a file played without being open, which
+   *  is what a project's `main.swync` usually is. */
+  tabId: string | null;
+}
+
+/**
+ * Which file a set of diagnostics is about.
+ *
+ * Two names for one file, and both are needed. The path is what the problems
+ * panel can open and title, and it is the only name a file played without
+ * being open has; the tab id is the only name a buffer that has never been
+ * saved has. A run has at least one of them.
+ */
+interface Source {
+  tabId: string | null;
+  path: string | null;
+}
+
 /** One tab as `recent_session` remembers it: a file by path, or a composer by
  *  the name of the pattern it draws. */
 interface SessionTab {
@@ -289,9 +320,11 @@ function App() {
   // would only be able to answer the different question of whether anything is
   // audible, which a program that builds silence is not either way.
   const [playing, setPlaying] = useState(false);
-  // Which tab the diagnostics describe. They outlive the run, and the editor
-  // may well have moved to another file by the time they are read.
-  const [sourceTabId, setSourceTabId] = useState<string | null>(null);
+  // Which file the diagnostics describe. They outlive the run, and the editor
+  // may well have moved to another file by the time they are read — and since
+  // play runs the project's `main.swync` rather than the tab in front, the
+  // file they are about may not be open at all.
+  const [source, setSource] = useState<Source | null>(null);
 
   // Drawn patterns belong to the project rather than to any one tab: they live
   // in its `patterns.swync`, which every file in the project can name without
@@ -431,10 +464,13 @@ function App() {
   if (activeTab && isCode(activeTab)) lastCodeId.current = activeTab.id;
 
   /**
-   * The tab an eval runs. A composer holds no code, so playing from one runs
-   * the last file that was open instead of an empty buffer — drawing a pattern
-   * and pressing play should be heard, and the alternative is switching tabs
-   * every time to hear what you just drew.
+   * The tab meant by "the file in front" — what ⇧⌘, runs, and what play falls
+   * back to in a project with no `main.swync`.
+   *
+   * A composer holds no code, so playing from one runs the last file that was
+   * open instead of an empty buffer — drawing a pattern and pressing play
+   * should be heard, and the alternative is switching tabs every time to hear
+   * what you just drew.
    */
   const codeTab =
     activeTab && isCode(activeTab)
@@ -446,11 +482,11 @@ function App() {
   /** Show a set of failures. Everything that can fail comes through here or
    *  through `report`, so nothing can fail quietly — which is what this panel
    *  exists to prevent. */
-  const reportAll = useCallback((diagnostics: Diagnostic[], tabId: string | null) => {
+  const reportAll = useCallback((diagnostics: Diagnostic[], from: Source | null) => {
     if (diagnostics.length === 0) return;
     setDiagnostics(diagnostics);
     setRunStatus("error");
-    setSourceTabId(tabId);
+    setSource(from);
     // Both, since the panel may well be open on the project tree instead: an
     // open panel showing something else is as silent as a shut one.
     setSideOpen(true);
@@ -459,7 +495,7 @@ function App() {
 
   /** Show one failure, which is what almost everything has. */
   const report = useCallback(
-    (diagnostic: Diagnostic, tabId: string | null) => reportAll([diagnostic], tabId),
+    (diagnostic: Diagnostic, from: Source | null) => reportAll([diagnostic], from),
     [reportAll],
   );
 
@@ -1257,10 +1293,16 @@ function App() {
    * Start a project in a folder.
    *
    * The platform's own dialog is where a new folder gets made, so this is a
-   * folder chooser and then one write: the `swync-project.json` that is the
-   * whole difference between a folder and a project. It is written with the
+   * folder chooser and then two writes: the `swync-project.json` that is the
+   * whole difference between a folder and a project — written with the
    * transport as it stands, since picking a folder should not change what is
-   * playing.
+   * playing — and the empty `main.swync` the play button will run.
+   *
+   * Then that second file is opened, with the cursor in it. It is the file the
+   * project plays, so it is the file the project *is*: leaving it sitting in
+   * the tree would open a new project into whatever tab happened to be in
+   * front, where typing goes into somebody else's file and play does not run
+   * a note of it.
    */
   const newProject = useCallback(async () => {
     try {
@@ -1274,10 +1316,21 @@ function App() {
         report(toDiagnostic(e, "could not start a project there"), null);
       }
       chooseProject(selected);
+
+      try {
+        // Asked for rather than assumed: null is a folder the write above
+        // could not land in, which has already been reported and is not worth
+        // a second sentence about. A folder that already had a `main.swync`
+        // opens the one that was there, which is the file that project plays.
+        const path = await invoke<string | null>("main_file", { root: selected });
+        if (path !== null && (await openPath(path))) setPendingFocus(true);
+      } catch (e) {
+        report(toDiagnostic(e, "could not open the project's main.swync"), null);
+      }
     } catch (e) {
       report(toDiagnostic(e, "could not open that folder"), null);
     }
-  }, [chooseProject, report]);
+  }, [chooseProject, openPath, report]);
 
   /**
    * Open a project that already exists.
@@ -1401,7 +1454,47 @@ function App() {
   }, [projectRoot, report]);
 
   /**
-   * Evaluate the active tab.
+   * The file in front, as something to run.
+   *
+   * Null when nothing open holds code, which is nothing to run rather than a
+   * failure — the transport's buttons stay live for stop, which is about what
+   * the engine is holding and not about a tab.
+   */
+  const currentTarget = useCallback(
+    (): Target | null =>
+      codeTab ? { code: codeTab.content, path: codeTab.path, tabId: codeTab.id } : null,
+    [codeTab],
+  );
+
+  /**
+   * The project's `main.swync`, as something to run — null for a project that
+   * has none, and for no project at all.
+   *
+   * Where the folder's program lives is the backend's answer rather than a
+   * path composed here, for the reason the patterns file's is: one place knows
+   * what the file is called, and the path it gives back is the one an open tab
+   * can be recognised by.
+   *
+   * Read from that tab when there is one. An edit you can see is an edit you
+   * expect to hear, and a play button that ignored what is on screen would be
+   * the strangest thing in the app. Only `main.swync` gets that: a *module* is
+   * reached through `use`, and imports read what is saved.
+   *
+   * A file that is there and cannot be read throws, and the caller stops on
+   * it. Falling back to the tab in front would play something nobody asked
+   * for, at whatever volume the last thing was at.
+   */
+  const mainTarget = useCallback(async (): Promise<Target | null> => {
+    if (projectRoot === null) return null;
+    const path = await invoke<string | null>("main_file", { root: projectRoot });
+    if (path === null) return null;
+    const open = tabsRef.current.find((t) => t.path === path && isCode(t));
+    if (open) return { code: open.content, path, tabId: open.id };
+    return { code: await invoke<string>("read_file", { path }), path, tabId: null };
+  }, [projectRoot]);
+
+  /**
+   * Evaluate a file.
    *
    * A refusal from any compiler pass arrives here as a rejection, and every
    * one of them ends up in the problems panel: this used to be an unhandled
@@ -1410,47 +1503,86 @@ function App() {
    *
    * Answers whether the engine is playing what was asked for, which only
    * `toggleRecording` reads — a take that began with an eval nobody could
-   * compile is a recording of the silence that followed it. A tab that is not
-   * there is not a failure by that measure: nothing was asked for, and
-   * whatever was already playing still is.
+   * compile is a recording of the silence that followed it. Nothing to run is
+   * not a failure by that measure: nothing was asked for, and whatever was
+   * already playing still is.
+   */
+  const run = useCallback(
+    async (target: Target | null): Promise<boolean> => {
+      if (target === null) return true;
+      const from = { tabId: target.tabId, path: target.path };
+      try {
+        // The drawn patterns go with the code: they are bindings the program
+        // can name, and an eval is the only moment they mean anything.
+        //
+        // So does the workspace, for the same reason: a `use` resolves against
+        // the folder the file being run is saved in. What it finds there is
+        // what is on disk, so a module edited in another tab is heard once it
+        // is saved. A successful run may still have something to say — a
+        // `midiout` naming a port that is not plugged in tonight. Those come
+        // back on this path rather than as a rejection, because the program
+        // did run.
+        const warnings = await invoke<Diagnostic[]>("run_code", {
+          code: target.code,
+          // Null while the panel has nothing to say about this project —
+          // before its file has been read, or after a read that failed. An
+          // empty panel that *has* read the project is an empty list, and
+          // means it: only that may hide a patterns file sitting on disk.
+          patterns: patternsFrom.current === projectRoot ? toWire(patterns) : null,
+          workspace: { path: target.path, root: projectRoot },
+        });
+        setDiagnostics(warnings);
+        setRunStatus("ok");
+        setSource(from);
+        // The engine is holding this program until something stops it, which
+        // is what the lit play button says. Here rather than beside the
+        // `return` below, because that answers true for a file never run.
+        setPlaying(true);
+        return true;
+      } catch (e) {
+        report(toDiagnostic(e), from);
+        return false;
+      }
+    },
+    [patterns, projectRoot, report],
+  );
+
+  /**
+   * Play the piece: the project's `main.swync`, or the file in front when the
+   * project has none.
+   *
+   * One file is what a project plays, the way one file is what a crate builds,
+   * and the point of it is that play means the same thing wherever you happen
+   * to be editing — a project is a program in several files, and the pass over
+   * a module in the middle of one is not a piece of music. Every project made
+   * before this file existed has no `main.swync` and is played exactly as it
+   * always was.
    */
   const play = useCallback(async (): Promise<boolean> => {
-    // Nothing open is nothing to run — the transport's buttons stay live for
-    // stop, which is about what the engine is holding, not about a tab.
-    if (!codeTab) return true;
-    const tabId = codeTab.id;
+    let target: Target | null;
     try {
-      // The drawn patterns go with the code: they are bindings the program can
-      // name, and an eval is the only moment they mean anything.
-      //
-      // So does the workspace, for the same reason: a `use` resolves against
-      // the folder this tab is saved in. What it finds there is what is on
-      // disk, so a module edited in another tab is heard once it is saved.
-      // A successful run may still have something to say — a `midiout` naming
-      // a port that is not plugged in tonight. Those come back on this path
-      // rather than as a rejection, because the program did run.
-      const warnings = await invoke<Diagnostic[]>("run_code", {
-        code: codeTab.content,
-        // Null while the panel has nothing to say about this project — before
-        // its file has been read, or after a read that failed. An empty panel
-        // that *has* read the project is an empty list, and means it: only
-        // that may hide a patterns file sitting on disk.
-        patterns: patternsFrom.current === projectRoot ? toWire(patterns) : null,
-        workspace: { path: codeTab.path, root: projectRoot },
-      });
-      setDiagnostics(warnings);
-      setRunStatus("ok");
-      setSourceTabId(tabId);
-      // The engine is holding this program until something stops it, which is
-      // what the lit play button says. Here rather than beside the `return`
-      // below, because that answers true for a tab that was never run.
-      setPlaying(true);
-      return true;
+      target = await mainTarget();
     } catch (e) {
-      report(toDiagnostic(e), tabId);
+      // The project has a `main.swync` that could not be read. Playing the tab
+      // in front instead would be answering a question nobody asked, so this
+      // stops and says so.
+      report(toDiagnostic(e, "could not read the project's main.swync"), null);
       return false;
     }
-  }, [codeTab, patterns, projectRoot, report]);
+    return run(target ?? currentTarget());
+  }, [mainTarget, currentTarget, run, report]);
+
+  /**
+   * Play the file in front, whatever the project's `main.swync` says.
+   *
+   * ⇧⌘, and the only way to hear a module on its own: a file halfway down a
+   * project is worth auditioning while it is being written, and opening it is
+   * how you say which one.
+   */
+  const playCurrent = useCallback(
+    (): Promise<boolean> => run(currentTarget()),
+    [currentTarget, run],
+  );
 
   const stop = useCallback(async () => {
     try {
@@ -1731,7 +1863,10 @@ function App() {
       }
     } catch (e) {
       // Left dirty on purpose: the tab still differs from what is on disk.
-      report(toDiagnostic(e, `could not save ${tab.title}`), tab.id);
+      report(toDiagnostic(e, `could not save ${tab.title}`), {
+        tabId: tab.id,
+        path: tab.path,
+      });
     }
   }, [activeTab, patternsPath, projectPath, projectRoot, loadPatterns, loadProject, report]);
 
@@ -1795,31 +1930,61 @@ function App() {
     [diagnostics],
   );
 
-  // Marks belong to the tab that was run, so switching away clears them — the
+  /**
+   * Whether the file the diagnostics are about is the one on screen.
+   *
+   * By path where the run had one, and only by tab id where it did not — a
+   * `main.swync` played while it was shut has no tab to be, and answering
+   * that by id would leave the panel unable to say which file it is talking
+   * about, and leave the marks off the file once it is opened.
+   */
+  const sourceIsActive =
+    source === null
+      ? true
+      : source.path !== null
+        ? source.path === (activeTab?.path ?? null)
+        : source.tabId === activeId;
+
+  /** What to call the file the diagnostics came from: its tab's title, or the
+   *  file's own name when nothing has it open. */
+  const sourceTitle =
+    source === null
+      ? null
+      : (tabs.find((t) => t.id === source.tabId)?.title ??
+        (source.path === null ? null : basename(source.path)));
+
+  // Marks belong to the file that was run, so switching away clears them — the
   // same line number in another file means nothing. Switching back re-applies
   // them, since the remount gives the editor a fresh state.
   useEffect(() => {
     if (!activeView) return;
-    showErrorLines(activeView, sourceTabId === activeId ? errorLines : []);
-  }, [activeView, errorLines, sourceTabId, activeId]);
+    showErrorLines(activeView, sourceIsActive ? errorLines : []);
+  }, [activeView, errorLines, sourceIsActive]);
 
   const revealDiagnostic = useCallback(
     (diagnostic: Diagnostic) => {
       const at = { line: diagnostic.line, column: diagnostic.column };
-      // A diagnostic from an imported module is about that file, so the click
-      // opens it. The jump waits for the open: until the tab exists there is
-      // no editor to move the cursor in, and moving it in the old one would
-      // put it on an unrelated line.
-      if (diagnostic.file !== null) {
-        void openPath(diagnostic.file).then((opened) => {
+      // A diagnostic with no file of its own is about the file that was run,
+      // which is not necessarily the one on screen: play runs the project's
+      // `main.swync`, which may well not even be open. So both cases end in
+      // the same act — open the file it is about, then jump. The jump waits
+      // for the open: until the tab exists there is no editor to move the
+      // cursor in, and moving it in the old one would put it on an unrelated
+      // line.
+      const file = diagnostic.file ?? source?.path ?? null;
+      if (file !== null) {
+        void openPath(file).then((opened) => {
           if (opened) setPendingReveal(at);
         });
         return;
       }
-      if (sourceTabId && sourceTabId !== activeId) setActiveId(sourceTabId);
+      // Nothing has a path: a buffer that has never been saved, which only its
+      // tab can name.
+      const tabId = source?.tabId ?? null;
+      if (tabId && tabId !== activeId) setActiveId(tabId);
       setPendingReveal(at);
     },
-    [openPath, sourceTabId, activeId],
+    [openPath, source, activeId],
   );
 
   useEffect(() => {
@@ -1839,14 +2004,21 @@ function App() {
     setPendingFocus(false);
   }, [pendingFocus, activeView]);
 
-  // ⌘, plays, ⌘. stops. The file shortcuts aren't here: they hang off their
-  // menu items, whose accelerators fire before the key reaches the webview.
+  // ⌘, plays the project, ⇧⌘, plays the file in front, ⌘. stops. The file
+  // shortcuts aren't here: they hang off their menu items, whose accelerators
+  // fire before the key reaches the webview.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === ",") {
+      // Shifting a comma types `<` on most layouts, so `e.key` alone would
+      // find the plain shortcut and miss the shifted one. `e.code` is the key
+      // itself and answers both — with `e.key` kept beside it for the layouts
+      // that put a comma somewhere else, which is the case it was already
+      // getting right.
+      const comma = e.code === "Comma" || e.key === "," || e.key === "<";
+      if (mod && comma) {
         e.preventDefault();
-        void play();
+        void (e.shiftKey ? playCurrent() : play());
       } else if (mod && e.key === ".") {
         e.preventDefault();
         void stop();
@@ -1854,7 +2026,7 @@ function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [play, stop]);
+  }, [play, playCurrent, stop]);
 
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
@@ -1944,8 +2116,8 @@ function App() {
             <ProblemsPanel
               status={runStatus}
               diagnostics={diagnostics}
-              sourceTitle={tabs.find((t) => t.id === sourceTabId)?.title ?? null}
-              sourceIsActive={sourceTabId === activeId}
+              sourceTitle={sourceTitle}
+              sourceIsActive={sourceIsActive}
               onReveal={revealDiagnostic}
             />
           }

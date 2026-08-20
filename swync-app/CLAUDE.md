@@ -33,7 +33,7 @@ Three tests fail on a fresh clone and always have: `the_example_project_compiles
 
 ## The eval pipeline
 
-`run_code` in `src-tauri/src/lib.rs` is the spine — the editor's play key (`Cmd/Ctrl + ,`) lands there, and reading it explains most of the backend. In order:
+`run_code` in `src-tauri/src/lib.rs` is the spine — the editor's play key (`Cmd/Ctrl + ,`) lands there, and reading it explains most of the backend. What it is handed is the project's `main.swync` rather than whatever tab is in front; see Projects below. In order:
 
 1. **`parser::parse`** — `logos` lexer (`parser/lex.rs`), `chumsky` parser (`parser/parser.rs`) → `Vec<SwyncItem>`.
 2. **`imports::expand`** — resolves `use` into one flat program. After this pass no modules exist, only definitions with longer names, so nothing downstream knows about files. It is also the last moment anything knows *which* file a definition came out of, so it is where a module's `load` paths are made absolute (see Libraries below).
@@ -444,6 +444,8 @@ Two orderings are load-bearing. `set_bpm` converts through whatever meter is run
 So **adding a builtin means adding one entry to `UGENS` (or `LIST_BUILTINS`, etc.)** — the editor picks it up with no TypeScript change. `ValueKind` is mirrored by hand in `metadata.ts`; the Rust test `every_builtin_receives_what_it_declares` keeps the declarations honest against the compiler.
 
 ## Projects, patterns, imports
+
+**A project is played from its `main.swync`.** Play — the button, and `Cmd/Ctrl + ,` — runs that file, not the tab in front, so a project is a program in several files with one entry point the way a crate has a `main.rs`. `Cmd/Ctrl + Shift + ,` runs the file in front instead, which is how a module is auditioned while it is being written. Three things follow. The file is created empty by New Project and opened as the new project's first tab (`project::create_main`, with `create_new` so adopting a folder never writes over a piece — and `newProject` opens whatever `main_file` then names, which for an adopted folder is the piece that was already there); a project without one — every project made before it existed — plays the tab in front exactly as it always did, which is what `main_file` answering `None` means; and the file play runs may not be open, so `App.tsx` tracks the run's `Source` by *path* as well as by tab id, since the problems panel has to name a file nothing has on screen. `main.swync` is read from its tab when it has one, because an edit you can see is an edit you expect to hear — the one exception to imports reading what is saved.
 
 A project is a folder with a `swync-project.json` (name, bpm, meter, volume), written debounced as you change things. What belongs to the machine rather than the piece — the recording folder and format — is in the app config dir instead; see Recording above. `src-tauri/src/project.rs` and `files/` own it. Two other files may sit beside it — a `swync-library.json` naming what the project exports as, and a hidden `.swync/libraries/` holding vendored libraries — both covered below.
 

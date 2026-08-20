@@ -124,6 +124,52 @@ pub fn file_path(root: &Path) -> PathBuf {
     root.join(FILE)
 }
 
+/// The file a project is played from, in every project.
+///
+/// A project has an entry point the way a crate has a `main.rs`: play runs
+/// this file rather than whichever tab is in front, so editing a module and
+/// reaching for play still plays the piece rather than the fragment. What is
+/// in front is a keystroke away — the editor plays it with the shift of the
+/// same shortcut — and that is the one auditioning a module needs.
+pub const MAIN: &str = "main.swync";
+
+/// Where that file lives.
+pub fn main_path(root: &Path) -> PathBuf {
+    root.join(MAIN)
+}
+
+/// The project's `main.swync`, if the folder has one.
+///
+/// `None` for every project made before this file existed, and for a folder
+/// that happens to have a *directory* by that name. The editor answers both
+/// the same way — by playing the file in front, as it always did — so neither
+/// is a failure worth reporting.
+pub fn main_file(root: &Path) -> Option<PathBuf> {
+    let path = main_path(root);
+    path.is_file().then_some(path)
+}
+
+/// Start a project's `main.swync`, and leave one that is already there alone.
+///
+/// Empty rather than a starter program: what play runs is the piece, and a
+/// piece that opens with somebody else's two lines in it is a file whose first
+/// edit is a delete.
+///
+/// Created with `create_new`, which is the whole reason this is not a `write`.
+/// New Project on a folder that has been worked in before adopts it exactly as
+/// opening it would, and adopting must not write over the piece.
+pub fn create_main(root: &Path) -> Result<(), Diagnostic> {
+    let path = main_path(root);
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(Diagnostic::message(
+            Stage::Import,
+            format!("could not create {}: {e}", path.display()),
+        )),
+    }
+}
+
 /// Read a project's settings.
 ///
 /// `None` is a folder that has never been saved as a project, which is not a
@@ -272,6 +318,59 @@ mod tests {
         assert_eq!(read.bpm, default_bpm());
         assert_eq!(read.volume, 0.0);
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// What New Project does beyond writing the settings: the file play runs
+    /// exists from the first moment, so the button has something to play.
+    #[test]
+    fn a_new_project_gets_an_empty_file_to_play() {
+        let root = temp_project("main");
+        create_main(&root).expect("should create");
+
+        assert_eq!(main_file(&root), Some(main_path(&root)));
+        assert_eq!(
+            std::fs::read_to_string(main_path(&root)).expect("should read"),
+            "",
+            "a new project's program is the performer's to write"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// New Project on a folder that has been worked in is an adoption, and an
+    /// adoption that overwrote the piece would be the worst bug in the app.
+    #[test]
+    fn starting_a_project_where_one_is_playable_leaves_that_file_alone() {
+        let root = temp_project("main-exists");
+        std::fs::write(main_path(&root), "sin(440) * 0.1").expect("should write");
+
+        create_main(&root).expect("an existing file is not an error");
+
+        assert_eq!(
+            std::fs::read_to_string(main_path(&root)).expect("should read"),
+            "sin(440) * 0.1"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Every project made before this file existed, which plays the file in
+    /// front instead.
+    #[test]
+    fn a_project_without_that_file_has_nothing_of_its_own_to_play() {
+        let root = temp_project("no-main");
+        assert_eq!(main_file(&root), None);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A folder is not a program, and answering with one would have the editor
+    /// read it and report a failure nobody caused.
+    #[test]
+    fn a_folder_by_that_name_is_not_something_to_play() {
+        let root = temp_project("main-is-a-folder");
+        std::fs::create_dir(main_path(&root)).expect("should create");
+        assert_eq!(main_file(&root), None);
         std::fs::remove_dir_all(&root).ok();
     }
 
