@@ -21,7 +21,7 @@ pub enum NodeKind {
     Organ,
     Peak, Perc, Pink, Pinkpass, Pluck, PolyPulse, PolySaw, PolySquare, Pulse,
     Ramp, Resonator, Reverb, Reverb2, Reverb3, Reverb4, Rossler,
-    Sample, Saw, Sin, SoftSaw, Square, Sub,
+    Sample, Saw, Sin, Slider, SoftSaw, Square, Sub,
     Tap, Tick, Triangle,
 }
 

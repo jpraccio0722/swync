@@ -2,7 +2,7 @@ use std::fmt::format;
 use std::rc::Rc;
 
 use crate::swync_graph::environment::{Env, Item, Length, Value};
-use crate::swync_graph::ugen_nodes::{NodeInput, NodeKind};
+use crate::swync_graph::ugen_nodes::{NodeId, NodeInput, NodeKind};
 use crate::lowerer::lower::Lowerer;
 use crate::parser::parser::{CmpOp, Expr, Statement};
 use crate::parser::parser::Range;
@@ -126,7 +126,7 @@ impl Lowerer {
                 if length.is_some() {
                     if let Some(what) = out.iter().find_map(|item| match item.value {
                         Value::Play { .. } => Some("plays"),
-                        Value::Signal(_) => Some("audio"),
+                        _ if signal_node(&item.value).is_some() => Some("audio"),
                         _ => None,
                     }) {
                         return Err(format!(
@@ -171,7 +171,7 @@ impl Lowerer {
                     });
                 }
 
-                if out.iter().any(|item| matches!(item.value, Value::Signal(_))) {
+                if out.iter().any(|item| signal_node(&item.value).is_some()) {
                     // Any signal at all makes the loop audio: a number among
                     // them is a constant to be added, which is what `combine`
                     // already does.
@@ -490,6 +490,9 @@ impl Lowerer {
     /// have the value rather than the expression — a comparison, which has to
     /// look at both sides before it knows whether it is comparing tags at all.
     pub(crate) fn as_number(&mut self, v: Value, what: &str) -> Result<f64, String> {
+        if let Some(n) = slider_number(&v) {
+            return Ok(n);
+        }
         if let Value::Number(n) = as_data(&v) {
             return Ok(*n);
         }
@@ -601,6 +604,10 @@ impl Lowerer {
         match v {
             Value::Number(n) => Ok(NodeInput::Const(n)),
             Value::Signal(id) => Ok(NodeInput::Node(id)),
+            // The ordinary use of a slider, and the one worth having: the node
+            // in the graph, read at audio rate, so the drag is heard without
+            // anything being compiled again.
+            Value::Slider { node, .. } => Ok(NodeInput::Node(node)),
             Value::Function(_) => Err("cannot use a function as a signal".into()),
             Value::List(_) => Err("cannot use a list as a signal (iterate it with `for`)".into()),
             Value::Stack(_) => Err(
@@ -666,6 +673,45 @@ pub(crate) fn unwrap_enum(v: &Value) -> Option<&Value> {
     }
 }
 
+/// The node a value is in the graph, for the two kinds of value that are one.
+///
+/// A slider *is* a signal wherever a signal goes — that is the whole of what
+/// the variant claims — and the claim is only true if the places that ask "is
+/// this audio?" by matching the variant ask this instead. Matching
+/// [`Value::Signal`] directly is the mistake this exists to stop: it does not
+/// fail to compile, it silently drops a slider out of an output or out of a
+/// loop's summed audio, which sounds like nothing at all.
+///
+/// Not every such site should use it. A pattern refuses a signal and *accepts*
+/// a slider as the number it stands at, so `to_step` matches the two variants
+/// separately and means it.
+pub(crate) fn signal_node(v: &Value) -> Option<NodeId> {
+    match v {
+        Value::Signal(id) => Some(*id),
+        Value::Slider { node, .. } => Some(*node),
+        _ => None,
+    }
+}
+
+/// Where a slider is standing, for the places that demand a number and can
+/// take nothing else.
+///
+/// `None` for everything else, so a caller that wants a signal never sees this
+/// and a caller that wants a number always does. The reading is **baked**: it
+/// is the position at the moment the program compiled, and the slot is marked
+/// so that the panel can say as much rather than leaving somebody dragging a
+/// control that stopped being connected the moment it was written here.
+///
+/// Deliberately not folded into [`as_data`], which every arithmetic operator
+/// runs both its sides through: `slider("level") * 0.5` has to build a
+/// multiply in the graph, and a slider that answered as data there would fold
+/// it to a constant and go quiet under the finger.
+pub(crate) fn slider_number(v: &Value) -> Option<f64> {
+    let Value::Slider { slot, at, .. } = v else { return None };
+    crate::controls::mark_baked(*slot);
+    Some(*at)
+}
+
 /// A value as data: what an enum member stands for, or the value itself.
 ///
 /// The one function every consumer of a number or a list runs its argument
@@ -719,6 +765,7 @@ pub(crate) fn describe(v: &Value) -> &'static str {
     match v {
         Value::Number(_) => "a number",
         Value::Signal(_) => "a signal",
+        Value::Slider { .. } => "a slider",
         Value::Function(_) => "a function",
         Value::List(_) => "a list",
         Value::Stack(_) => "a stack",

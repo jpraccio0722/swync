@@ -1,6 +1,7 @@
 pub mod lower;
 pub mod expr;
 pub mod call;
+pub mod controls;
 
 #[cfg(test)]
 mod tests;

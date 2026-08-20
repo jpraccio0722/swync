@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use fundsp::wave::Wave;
 
-use crate::parser::parser::{Expr, SwyncItem, Statement};
+use crate::parser::parser::{Expr, SwyncItem};
 
 /// The builtin that names an audio file. Intercepted syntactically, like
 /// `play`: the path has to be a literal for it to be findable by the walk
@@ -176,132 +176,25 @@ impl Cache {
 ///
 /// A syntax walk rather than a lowering pass, because an instrument's body is
 /// not lowered until the scheduler builds a voice from it — by which time the
-/// file has to be in memory already. Duplicates come through; the caller drops
-/// them.
+/// file has to be in memory already. That reasoning belongs to more than this
+/// one question now, so the walk itself lives in [`crate::parser::walk`] and
+/// what is left here is only what `load` means. Duplicates come through; the
+/// caller drops them.
 ///
 /// Visible to the import tests, which have the same question in the other
 /// direction: what an expanded program will go looking for.
 pub(crate) fn paths_in(items: &[SwyncItem]) -> Vec<String> {
     let mut found = Vec::new();
-    for item in items {
-        match item {
-            SwyncItem::Function { body, .. } => walk(body, &mut found),
-            SwyncItem::Let { value, .. } => walk(value, &mut found),
-            SwyncItem::Expr(e) => walk(e, &mut found),
-            SwyncItem::Call { args, .. } => {
-                for arg in args {
-                    walk(&arg.value, &mut found);
+    crate::parser::walk::calls_in(items, &mut |func, args| {
+        if func.0 == LOAD {
+            if let [arg] = args {
+                if let Expr::Str(path) = &arg.value {
+                    found.push(path.clone());
                 }
             }
-            // A member's value is an ordinary expression, so an enum can name a
-            // file: `enum Kit { kick = load("kick.wav") }` is a buffer under a
-            // name, and the decode has to be queued from here like any other.
-            SwyncItem::Enum { members, .. } => {
-                for member in members {
-                    if let Some(value) = &member.value {
-                        walk(value, &mut found);
-                    }
-                }
-            }
-            // Expanded away before this runs; nothing of it survives to lower.
-            SwyncItem::Use(_) => {}
         }
-    }
+    });
     found
-}
-
-/// Collect from one expression and everything under it.
-///
-/// The arms are exhaustive on purpose: a new `Expr` variant that can hold a
-/// subexpression must be added here too, and a wildcard would let one be
-/// forgotten — which would not fail to compile, it would fail to find a file at
-/// runtime, on the audio thread, one note at a time.
-fn walk(e: &Expr, found: &mut Vec<String>) {
-    match e {
-        Expr::Call { func, args } => {
-            if func.0 == LOAD {
-                if let [arg] = args.as_slice() {
-                    if let Expr::Str(path) = &arg.value {
-                        found.push(path.clone());
-                    }
-                }
-            }
-            for arg in args {
-                walk(&arg.value, found);
-            }
-        }
-
-        Expr::Add { lhs, rhs }
-        | Expr::Sub { lhs, rhs }
-        | Expr::Mul { lhs, rhs }
-        | Expr::Div { lhs, rhs }
-        | Expr::Rem { lhs, rhs }
-        | Expr::Chain { lhs, rhs }
-        | Expr::Cmp { lhs, rhs, .. } => {
-            walk(lhs, found);
-            walk(rhs, found);
-        }
-
-        Expr::Block { stmts, tail } => {
-            for stmt in stmts {
-                match stmt {
-                    Statement::Let { value, .. } => walk(value, found),
-                    Statement::Expr(e) => walk(e, found),
-                }
-            }
-            walk(tail, found);
-        }
-
-        Expr::For { iter, body, length, .. } => {
-            walk(iter, found);
-            walk(body, found);
-            // The same rule as a list element's `;`: a `load` is as findable in
-            // the length as in the step it measures.
-            if let Some(length) = length {
-                walk(length, found);
-            }
-        }
-
-        Expr::If { cond, then, otherwise } => {
-            walk(cond, found);
-            walk(then, found);
-            if let Some(e) = otherwise {
-                walk(e, found);
-            }
-        }
-
-        Expr::Index { base, index } => {
-            walk(base, found);
-            walk(index, found);
-        }
-
-        Expr::Let { value, body, .. } => {
-            walk(value, found);
-            walk(body, found);
-        }
-
-        Expr::List(items) => {
-            // Both halves of an element: a `load` is as findable in the length
-            // a `;` gave a step as it is in the step itself.
-            for item in items {
-                walk(&item.value, found);
-                if let Some(length) = &item.length {
-                    walk(length, found);
-                }
-            }
-        }
-
-        Expr::Range { lo, hi } => {
-            walk(lo, found);
-            walk(hi, found);
-        }
-
-        Expr::Neg { expr } => walk(expr, found),
-        Expr::Quote { expr } => walk(expr, found),
-
-        // Leaves.
-        Expr::Num(_) | Expr::Str(_) | Expr::Rest | Expr::Trigger | Expr::Var(_) => {}
-    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use crate::lowerer::expr::signal_node;
 use crate::swync_graph::environment::{written, Env, EnumDef, EnumMemberDef, FunctionDef, Value};
 use crate::swync_graph::graph::SwyncGraph;
 use crate::swync_graph::ugen_nodes::{NodeId, NodeInput, NodeKind, UGenNode};
@@ -295,7 +296,11 @@ impl Lowerer {
 
             SwyncItem::Expr(e) => {
                 let v = self.expr(e)?;
-                if let Value::Signal(id) = v {
+                // Through `signal_node` rather than by matching the variant: a
+                // slider is a signal here too, and one written as the whole of
+                // a top-level expression used to be dropped on the floor —
+                // which sounds like a line that does nothing.
+                if let Some(id) = signal_node(&v) {
                     self.add_to_output(id);
                 }
                 Ok(())
@@ -303,7 +308,7 @@ impl Lowerer {
 
             SwyncItem::Call { func, args } => {
                 let v = self.call(func, args)?;
-                if let Value::Signal(id) = v {
+                if let Some(id) = signal_node(&v) {
                     self.add_to_output(id);
                 }
                 Ok(())
@@ -345,6 +350,16 @@ impl Lowerer {
                 "`{}.{member}` is a signal, and an enum member is a constant — it \
                  is read once, where the enum is written, and a signal only means \
                  something in the graph it is part of",
+                written(ty))),
+            // A slider is refused for the same reason and needs its own words:
+            // it is a thing that *moves*, which is the one property an enum
+            // member cannot have. Nothing is lost by writing it at the place
+            // it is used, which is where a control belongs anyway.
+            Value::Slider { .. } => Err(format!(
+                "`{}.{member}` is a slider, and an enum member is a constant — it is \
+                 read once, where the enum is written, so the control would stop \
+                 moving anything the moment it was named here. Write the `slider` \
+                 where it is used instead",
                 written(ty))),
             Value::EnumType(_) => Err(format!(
                 "`{}.{member}` is an enum rather than a value. An enum member \

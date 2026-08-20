@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 import { ActivityBar, ActivityIcon, PanelTitle, icons } from "./ActivityBar";
 
-/** Which of the panel's three views is on top. */
-export type RightTab = "transport" | "docs" | "settings";
+/** Which of the panel's four views is on top. */
+export type RightTab = "transport" | "controls" | "docs" | "settings";
 
 /** What each view is called, on its tooltip and in the panel's header. */
 const LABELS: Record<RightTab, string> = {
   transport: "Patterns",
+  controls: "Controls",
   docs: "Reference",
   settings: "Settings",
 };
@@ -15,6 +16,7 @@ const LABELS: Record<RightTab, string> = {
  *  icons are, since the two names differ for the pattern panel. */
 const GLYPHS: Record<RightTab, ReactNode> = {
   transport: icons.patterns,
+  controls: icons.controls,
   docs: icons.reference,
   settings: icons.settings,
 };
@@ -29,17 +31,21 @@ interface RightPanelProps {
   /** A tray icon was hit; the caller owns `open` and so decides what that means. */
   onSelect: (tab: RightTab) => void;
   transport: ReactNode;
+  controls: ReactNode;
   docs: ReactNode;
   settings: ReactNode;
 }
 
 /**
- * The right-hand panel: the drawn patterns, the language reference, and what
- * the app itself is set to.
+ * The right-hand panel: the drawn patterns, the program's own controls, the
+ * language reference, and what the app itself is set to.
  *
- * They share a panel because none of them is the program — they are the things
- * you reach for while writing one, and all of them want to be reachable
- * without giving up the file you are looking at.
+ * They share a panel because all of them are things you reach for *while*
+ * writing a program, and all of them want to be reachable without giving up
+ * the file you are looking at. They are not all the same kind of thing —
+ * settings belong to the app, the reference to the language, and the patterns
+ * and the sliders to the piece — but that difference is one the tray's icons
+ * carry, and it is not a reason to make either of the last two cost a window.
  *
  * Like the left panel, its tray of icons is pinned to the window's edge and
  * outlives the panel, and every view stays mounted with the hidden ones only
@@ -54,6 +60,7 @@ export function RightPanel({
   tab,
   onSelect,
   transport,
+  controls,
   docs,
   settings,
 }: RightPanelProps) {
@@ -91,6 +98,17 @@ export function RightPanel({
         >
           {transport}
         </div>
+        {/* Scrolls as a whole, like the patterns: a program may declare more
+            controls than a short window has room for, and a slider clipped off
+            the bottom is one that cannot be reached at all. */}
+        <div
+          className={
+            "min-h-0 flex-1 flex-col overflow-y-auto " +
+            (tab === "controls" ? "flex" : "hidden")
+          }
+        >
+          {controls}
+        </div>
         {/* The reference does its own scrolling, so its search box can stay put
             while the list moves under it — a search that scrolls away is one
             that has to be scrolled back to. */}
@@ -115,7 +133,7 @@ export function RightPanel({
       </aside>
 
       <ActivityBar side="right">
-        {(["transport", "docs", "settings"] as const).map((name) => (
+        {(["transport", "controls", "docs", "settings"] as const).map((name) => (
           <ActivityIcon
             key={name}
             side="right"

@@ -1,6 +1,7 @@
 use fundsp::prelude64::*;
 
 use crate::audio_in::InputNode;
+use crate::controls::SliderNode;
 use crate::midi::input::{Control, ControlNode};
 use crate::swync_graph::{
     graph::SwyncGraph,
@@ -65,10 +66,39 @@ const MAX_TAIL_SECS: f64 = 10.0;
 /// `None` for anything else, which is a graph the realizer is about to refuse
 /// or a time that would mean nothing anyway — either way not a reason to hold
 /// a voice open.
-fn const_secs(n: &UGenNode, idx: usize) -> Option<f64> {
-    match n.inputs.get(idx) {
-        Some(NodeInput::Const(v)) if v.is_finite() && *v >= 0.0 => Some(*v),
+fn const_secs(graph: &SwyncGraph, n: &UGenNode, idx: usize) -> Option<f64> {
+    match constant(graph, n, idx) {
+        Some(v) if v.is_finite() && v >= 0.0 => Some(v),
         _ => None,
+    }
+}
+
+/// What input `idx` is worth as a construction-time constant, or `None` when
+/// it is a signal and there is nothing constant to be had.
+///
+/// A **slider** answers here, and it is the one place in the realizer that
+/// looks past an input at the node behind it. `slider("time", 0, 1)` written
+/// where a delay wants a length is a number the moment one is asked for: the
+/// position it is standing at, baked into the unit like any other constant.
+/// Nothing better is available and nothing better is possible — these
+/// parameters are not ports, so a changing value would have nothing to be
+/// wired to. What is owed instead is honesty about it, so the slot is marked
+/// as read-as-a-number and the panel says as much; see
+/// [`crate::controls::Slider::baked`], and `App.tsx` for what the panel then
+/// does about a drag.
+fn constant(graph: &SwyncGraph, n: &UGenNode, idx: usize) -> Option<f64> {
+    match n.inputs.get(idx)? {
+        NodeInput::Const(v) => Some(*v),
+        NodeInput::Node(id) => {
+            let behind = graph.nodes.get(id.0)?;
+            if behind.kind != NodeKind::Slider {
+                return None;
+            }
+            let NodeInput::Const(slot) = behind.inputs.first()? else { return None };
+            let slot = *slot as usize;
+            crate::controls::mark_baked(slot);
+            Some(crate::controls::position(slot) as f64)
+        }
     }
 }
 
@@ -83,10 +113,10 @@ fn const_secs(n: &UGenNode, idx: usize) -> Option<f64> {
 ///
 /// Bounds the wrong way round is a graph `tap` is about to refuse, so the
 /// clamp is written to answer rather than to panic.
-fn tap_tail(n: &UGenNode) -> f64 {
-    let min = const_secs(n, TAP_MIN_INPUT).unwrap_or(0.0);
-    let max = const_secs(n, TAP_MAX_INPUT).unwrap_or(0.0);
-    match const_secs(n, TAP_DELAY_INPUT) {
+fn tap_tail(graph: &SwyncGraph, n: &UGenNode) -> f64 {
+    let min = const_secs(graph, n, TAP_MIN_INPUT).unwrap_or(0.0);
+    let max = const_secs(graph, n, TAP_MAX_INPUT).unwrap_or(0.0);
+    match const_secs(graph, n, TAP_DELAY_INPUT) {
         Some(t) => t.max(min).min(max),
         None => max,
     }
@@ -109,12 +139,12 @@ fn tap_tail(n: &UGenNode) -> f64 {
 ///
 /// Must be kept in step with the corresponding arms of `realize` below, which
 /// is where these input indices are read for real.
-fn own_tail(n: &UGenNode, dur_secs: f64) -> f64 {
+fn own_tail(graph: &SwyncGraph, n: &UGenNode, dur_secs: f64) -> f64 {
     match n.kind {
-        NodeKind::Env => const_secs(n, ENV_RELEASE_INPUT).unwrap_or(0.0),
+        NodeKind::Env => const_secs(graph, n, ENV_RELEASE_INPUT).unwrap_or(0.0),
         NodeKind::Perc => match (
-            const_secs(n, PERC_ATTACK_INPUT),
-            const_secs(n, PERC_RELEASE_INPUT),
+            const_secs(graph, n, PERC_ATTACK_INPUT),
+            const_secs(graph, n, PERC_RELEASE_INPUT),
         ) {
             (Some(a), Some(r)) => (a + r - dur_secs).max(0.0),
             _ => 0.0,
@@ -126,21 +156,21 @@ fn own_tail(n: &UGenNode, dur_secs: f64) -> f64 {
         // is still sounding when it arrives, so room for it would not be a tail
         // but a longer note.
         NodeKind::Line => match (
-            const_secs(n, LINE_DURATION_INPUT),
+            const_secs(graph, n, LINE_DURATION_INPUT),
             n.inputs.get(LINE_END_INPUT),
         ) {
             (Some(d), Some(NodeInput::Const(end))) if *end == 0.0 => (d - dur_secs).max(0.0),
             _ => 0.0,
         },
-        NodeKind::Delay => const_secs(n, DELAY_TIME_INPUT).unwrap_or(0.0),
-        NodeKind::Tap => tap_tail(n),
+        NodeKind::Delay => const_secs(graph, n, DELAY_TIME_INPUT).unwrap_or(0.0),
+        NodeKind::Tap => tap_tail(graph, n),
         // Every reverb's `time` is its decay to -60 dB, which is where it stops
         // being worth holding a voice open for. `reverb3` has no room size, so
         // its time sits one input earlier.
         NodeKind::Reverb | NodeKind::Reverb2 | NodeKind::Reverb4 => {
-            const_secs(n, REVERB_TIME_INPUT).unwrap_or(0.0)
+            const_secs(graph, n, REVERB_TIME_INPUT).unwrap_or(0.0)
         }
-        NodeKind::Reverb3 => const_secs(n, REVERB3_TIME_INPUT).unwrap_or(0.0),
+        NodeKind::Reverb3 => const_secs(graph, n, REVERB3_TIME_INPUT).unwrap_or(0.0),
         _ => 0.0,
     }
 }
@@ -176,7 +206,7 @@ pub fn tail_secs(graph: &SwyncGraph, dur_secs: f64) -> f64 {
                 NodeInput::Const(_) => None,
             })
             .fold(0.0, f64::max);
-        tails.push(upstream + own_tail(n, dur_secs));
+        tails.push(upstream + own_tail(graph, n, dur_secs));
     }
 
     tails.get(out.0).copied().unwrap_or(0.0).min(MAX_TAIL_SECS)
@@ -191,17 +221,30 @@ pub fn tail_secs(graph: &SwyncGraph, dur_secs: f64) -> f64 {
 /// `midi::input::slot_for` without touching hardware, and `NO_SLOT` — which is
 /// a program naming a ninth port — reads as silence rather than failing here.
 /// What this refuses is only what could not have come from the lowerer at all.
-fn slot(n: &UGenNode, at: usize) -> Result<usize, String> {
-    let raw = const_param(n, at, "midi slot")?;
+fn slot(graph: &SwyncGraph, n: &UGenNode, at: usize) -> Result<usize, String> {
+    let raw = const_param(graph, n, at, "midi slot")?;
     if raw < 0.0 || raw.fract() != 0.0 {
         return Err(format!("midi: slot must be a whole number, got {raw}"));
     }
     Ok(raw as usize)
 }
 
+/// A slider's slot, which the lowerer interned from its name.
+///
+/// Its own helper rather than [`slot`]'s because the two are unrelated tables
+/// that happen to be indexed the same way, and a slider erroring in MIDI's
+/// words would send a reader to the wrong module.
+fn control_slot(graph: &SwyncGraph, n: &UGenNode, at: usize) -> Result<usize, String> {
+    let raw = const_param(graph, n, at, "slider slot")?;
+    if raw < 0.0 || raw.fract() != 0.0 {
+        return Err(format!("slider: slot must be a whole number, got {raw}"));
+    }
+    Ok(raw as usize)
+}
+
 /// A MIDI channel, 1-16 as it is written.
-fn channel(n: &UGenNode, at: usize) -> Result<u8, String> {
-    let raw = const_param(n, at, "midi channel")?;
+fn channel(graph: &SwyncGraph, n: &UGenNode, at: usize) -> Result<u8, String> {
+    let raw = const_param(graph, n, at, "midi channel")?;
     if raw.fract() != 0.0 || !(1.0..=16.0).contains(&raw) {
         return Err(format!("midi: channel must be a whole number from 1 to 16, got {raw}"));
     }
@@ -209,19 +252,19 @@ fn channel(n: &UGenNode, at: usize) -> Result<u8, String> {
 }
 
 /// A controller number, which is seven bits.
-fn seven_bit(n: &UGenNode, at: usize, what: &str) -> Result<u8, String> {
-    let raw = const_param(n, at, what)?;
+fn seven_bit(graph: &SwyncGraph, n: &UGenNode, at: usize, what: &str) -> Result<u8, String> {
+    let raw = const_param(graph, n, at, what)?;
     if raw.fract() != 0.0 || !(0.0..=127.0).contains(&raw) {
         return Err(format!("{what} must be a whole number from 0 to 127, got {raw}"));
     }
     Ok(raw as u8)
 }
 
-fn const_param(n: &UGenNode, idx: usize, name: &str) -> Result<f32, String> {
-    match n.inputs.get(idx) {
-        Some(NodeInput::Const(v)) => Ok(*v as f32),
-        Some(NodeInput::Node(_)) => Err(format!("{name} must be a constant, not a signal")),
-        None => Err(format!("missing {name}")),
+fn const_param(graph: &SwyncGraph, n: &UGenNode, idx: usize, name: &str) -> Result<f32, String> {
+    match (constant(graph, n, idx), n.inputs.get(idx)) {
+        (Some(v), _) => Ok(v as f32),
+        (None, Some(_)) => Err(format!("{name} must be a constant, not a signal")),
+        (None, None) => Err(format!("missing {name}")),
     }
 }
 
@@ -230,8 +273,8 @@ fn const_param(n: &UGenNode, idx: usize, name: &str) -> Result<f32, String> {
 /// The reverbs derive their feedback gain from `time` and `room_size`; at zero
 /// or below that gain reaches 1 or more, which is unbounded feedback straight
 /// into the audio thread. Every other UGen's bad parameters merely sound wrong.
-fn positive_param(n: &UGenNode, idx: usize, name: &str) -> Result<f32, String> {
-    match const_param(n, idx, name)? {
+fn positive_param(graph: &SwyncGraph, n: &UGenNode, idx: usize, name: &str) -> Result<f32, String> {
+    match const_param(graph, n, idx, name)? {
         v if v > 0.0 => Ok(v),
         v => Err(format!("{name} must be above zero, got {v}")),
     }
@@ -304,17 +347,17 @@ pub fn realize_gated(
             NodeKind::Add => (Box::new(pass() + pass()), 2),
             NodeKind::ADSR => (
                 Box::new(adsr_live(
-                    const_param(n, 1, "adsr attack")?,
-                    const_param(n, 2, "adsr decay")?,
-                    const_param(n, 3, "adsr sustain")?,
-                    const_param(n, 4, "adsr release")?,
+                    const_param(graph, n, 1, "adsr attack")?,
+                    const_param(graph, n, 2, "adsr decay")?,
+                    const_param(graph, n, 3, "adsr sustain")?,
+                    const_param(graph, n, 4, "adsr release")?,
                 )),
                 1,
             ),
             NodeKind::Afollow => (
                 Box::new(afollow(
-                    const_param(n, 1, "afollow attack")?,
-                    const_param(n, 2, "afollow release")?,
+                    const_param(graph, n, 1, "afollow attack")?,
+                    const_param(graph, n, 2, "afollow release")?,
                 )),
                 1,
             ),
@@ -325,11 +368,11 @@ pub fn realize_gated(
             NodeKind::Bell => (Box::new(bell()), 4),
             NodeKind::Biquad => (
                 Box::new(biquad(
-                    const_param(n, 1, "biquad a1")?,
-                    const_param(n, 2, "biquad a2")?,
-                    const_param(n, 3, "biquad b0")?,
-                    const_param(n, 4, "biquad b1")?,
-                    const_param(n, 5, "biquad b2")?,
+                    const_param(graph, n, 1, "biquad a1")?,
+                    const_param(graph, n, 2, "biquad a2")?,
+                    const_param(graph, n, 3, "biquad b0")?,
+                    const_param(graph, n, 4, "biquad b1")?,
+                    const_param(graph, n, 5, "biquad b2")?,
                 )),
                 1,
             ),
@@ -337,24 +380,24 @@ pub fn realize_gated(
             NodeKind::Butterpass => (Box::new(butterpass()), 2),
             NodeKind::Chorus => (
                 Box::new(chorus(
-                    const_param(n, 1, "chorus seed")? as u64,
-                    const_param(n, 2, "chorus separation")?,
-                    const_param(n, 3, "chorus variation")?,
-                    const_param(n, 4, "chorus mod frequency")?,
+                    const_param(graph, n, 1, "chorus seed")? as u64,
+                    const_param(graph, n, 2, "chorus separation")?,
+                    const_param(graph, n, 3, "chorus variation")?,
+                    const_param(graph, n, 4, "chorus mod frequency")?,
                 )),
                 1,
             ),
             NodeKind::Clip => (Box::new(clip()), 1),
             NodeKind::ClipTo => (
                 Box::new(clip_to(
-                    const_param(n, 1, "clip_to minimum")?,
-                    const_param(n, 2, "clip_to maximum")?,
+                    const_param(graph, n, 1, "clip_to minimum")?,
+                    const_param(graph, n, 2, "clip_to maximum")?,
                 )),
                 1,
             ),
             NodeKind::Dcblock => (Box::new(dcblock()), 1),
             NodeKind::Declick => (Box::new(declick()), 1),
-            NodeKind::Delay => (Box::new(delay(const_param(n, 1, "delay time")?)), 1),
+            NodeKind::Delay => (Box::new(delay(const_param(graph, n, 1, "delay time")?)), 1),
             NodeKind::Div => (Box::new(map(|i: &Frame<f32, U2>| i[0] / i[1])), 2),
             NodeKind::DsfSaw => (Box::new(dsf_saw()), 2),
 
@@ -368,11 +411,11 @@ pub fn realize_gated(
             // means such a note releases from wherever it got to rather than
             // jumping to a level it never reached.
             NodeKind::Env => {
-                let attack = const_param(n, 0, "env attack")? as f64;
-                let decay = const_param(n, 1, "env decay")? as f64;
-                let sustain = const_param(n, 2, "env sustain")? as f64;
-                let release = const_param(n, 3, "env release")? as f64;
-                let written = (const_param(n, 4, "env duration")? as f64).max(0.0);
+                let attack = const_param(graph, n, 0, "env attack")? as f64;
+                let decay = const_param(graph, n, 1, "env decay")? as f64;
+                let sustain = const_param(graph, n, 2, "env sustain")? as f64;
+                let release = const_param(graph, n, 3, "env release")? as f64;
+                let written = (const_param(graph, n, 4, "env duration")? as f64).max(0.0);
                 // Written to last the whole note, on a voice whose note is a
                 // key being held: this is the envelope the key lets go of.
                 let keyed = match gate {
@@ -401,13 +444,13 @@ pub fn realize_gated(
                 )
             }
             NodeKind::DsfSquare => (Box::new(dsf_square()), 2),
-            NodeKind::Fir3 => (Box::new(fir3(const_param(n, 1, "fir3 gain")?)), 1),
-            NodeKind::Follow => (Box::new(follow(const_param(n, 1, "follow response time")?)), 1),
+            NodeKind::Fir3 => (Box::new(fir3(const_param(graph, n, 1, "fir3 gain")?)), 1),
+            NodeKind::Follow => (Box::new(follow(const_param(graph, n, 1, "follow response time")?)), 1),
             NodeKind::Hammond => (Box::new(hammond()), 1),
             NodeKind::Highpass => (Box::new(highpass()), 3),
             NodeKind::Highpole => (Box::new(highpole()), 2),
             NodeKind::Highshelf => (Box::new(highshelf()), 4),
-            NodeKind::Hold => (Box::new(hold(const_param(n, 2, "hold variability")?)), 2),
+            NodeKind::Hold => (Box::new(hold(const_param(graph, n, 2, "hold variability")?)), 2),
             NodeKind::Impulse => (Box::new(impulse::<U1>()), 0),
 
             // The live input. Which channels actually exist is a fact about
@@ -423,36 +466,36 @@ pub fn realize_gated(
             // at the call rather than computed.
             NodeKind::Cc => (
                 Box::new(An(ControlNode::new(
-                    slot(n, 0)?,
-                    channel(n, 2)?,
-                    Control::Controller(seven_bit(n, 1, "cc number")?),
-                    const_param(n, 3, "cc low")? as f32,
-                    const_param(n, 4, "cc high")? as f32,
+                    slot(graph, n, 0)?,
+                    channel(graph, n, 2)?,
+                    Control::Controller(seven_bit(graph, n, 1, "cc number")?),
+                    const_param(graph, n, 3, "cc low")? as f32,
+                    const_param(graph, n, 4, "cc high")? as f32,
                 ))),
                 0,
             ),
             NodeKind::Bend => (
                 Box::new(An(ControlNode::new(
-                    slot(n, 0)?,
-                    channel(n, 1)?,
+                    slot(graph, n, 0)?,
+                    channel(graph, n, 1)?,
                     Control::Bend,
-                    const_param(n, 2, "bend low")? as f32,
-                    const_param(n, 3, "bend high")? as f32,
+                    const_param(graph, n, 2, "bend low")? as f32,
+                    const_param(graph, n, 3, "bend high")? as f32,
                 ))),
                 0,
             ),
             NodeKind::Aftertouch => (
                 Box::new(An(ControlNode::new(
-                    slot(n, 0)?,
-                    channel(n, 1)?,
+                    slot(graph, n, 0)?,
+                    channel(graph, n, 1)?,
                     Control::Pressure,
-                    const_param(n, 2, "aftertouch low")? as f32,
-                    const_param(n, 3, "aftertouch high")? as f32,
+                    const_param(graph, n, 2, "aftertouch low")? as f32,
+                    const_param(graph, n, 3, "aftertouch high")? as f32,
                 ))),
                 0,
             ),
             NodeKind::Input => {
-                let channel = const_param(n, 0, "input channel")?;
+                let channel = const_param(graph, n, 0, "input channel")?;
                 if channel < 0.0 || channel.fract() != 0.0 {
                     return Err(format!(
                         "input: channel must be a whole number from 0, got {channel}"
@@ -468,8 +511,8 @@ pub fn realize_gated(
             }
             NodeKind::Limiter => (
                 Box::new(limiter(
-                    const_param(n, 1, "limiter attack")?,
-                    const_param(n, 2, "limiter release")?,
+                    const_param(graph, n, 1, "limiter attack")?,
+                    const_param(graph, n, 2, "limiter release")?,
                 )),
                 1,
             ),
@@ -479,9 +522,9 @@ pub fn realize_gated(
             // the shape's own limit — the segment takes no time, so the answer
             // is `end` from the first sample, which is what this already says.
             NodeKind::Line => {
-                let start = const_param(n, 0, "line start")? as f64;
-                let end = const_param(n, 1, "line end")? as f64;
-                let duration = (const_param(n, 2, "line duration")? as f64).max(0.0);
+                let start = const_param(graph, n, 0, "line start")? as f64;
+                let end = const_param(graph, n, 1, "line end")? as f64;
+                let duration = (const_param(graph, n, 2, "line duration")? as f64).max(0.0);
                 (
                     Box::new(An(Envelope::new(ENV_INTERVAL, move |t: f64| -> f64 {
                         if t >= duration {
@@ -499,7 +542,7 @@ pub fn realize_gated(
             NodeKind::Lowrez => (Box::new(lowrez()), 3),
             NodeKind::Lowshelf => (Box::new(lowshelf()), 4),
             NodeKind::Mls => (Box::new(mls()), 0),
-            NodeKind::MlsBits => (Box::new(mls_bits(const_param(n, 0, "mls_bits bits")? as u64)), 0),
+            NodeKind::MlsBits => (Box::new(mls_bits(const_param(graph, n, 0, "mls_bits bits")? as u64)), 0),
             NodeKind::Moog => (Box::new(moog()), 3),
             NodeKind::Morph => (Box::new(morph()), 4),
             NodeKind::Mul => (Box::new(pass() * pass()), 2),
@@ -512,8 +555,8 @@ pub fn realize_gated(
             // Self-contained percussive shape: rise, fall, silence. Needs no
             // note duration, so it works in a voice or the persistent graph.
             NodeKind::Perc => {
-                let attack = const_param(n, 0, "perc attack")? as f64;
-                let release = const_param(n, 1, "perc release")? as f64;
+                let attack = const_param(graph, n, 0, "perc attack")? as f64;
+                let release = const_param(graph, n, 1, "perc release")? as f64;
                 (
                     Box::new(An(Envelope::new(ENV_INTERVAL, move |t: f64| -> f64 {
                         if t < attack {
@@ -531,9 +574,9 @@ pub fn realize_gated(
             NodeKind::Pinkpass => (Box::new(pinkpass()), 1),
             NodeKind::Pluck => (
                 Box::new(pluck(
-                    const_param(n, 1, "pluck frequency")?,
-                    const_param(n, 2, "pluck gain per second")?,
-                    const_param(n, 3, "pluck damping")?,
+                    const_param(graph, n, 1, "pluck frequency")?,
+                    const_param(graph, n, 2, "pluck gain per second")?,
+                    const_param(graph, n, 3, "pluck damping")?,
                 )),
                 1,
             ),
@@ -552,34 +595,34 @@ pub fn realize_gated(
             NodeKind::Resonator => (Box::new(resonator()), 3),
             NodeKind::Reverb => (
                 mono(reverb_stereo(
-                    positive_param(n, 1, "reverb room size")?,
-                    positive_param(n, 2, "reverb time")?,
-                    const_param(n, 3, "reverb damping")?,
+                    positive_param(graph, n, 1, "reverb room size")?,
+                    positive_param(graph, n, 2, "reverb time")?,
+                    const_param(graph, n, 3, "reverb damping")?,
                 )),
                 1,
             ),
             NodeKind::Reverb2 => (
                 mono(reverb2_stereo(
-                    positive_param(n, 1, "reverb2 room size")?,
-                    positive_param(n, 2, "reverb2 time")?,
-                    const_param(n, 3, "reverb2 diffusion")?,
-                    const_param(n, 4, "reverb2 modulation")?,
-                    lowpole_hz(positive_param(n, 5, "reverb2 damping cutoff")?),
+                    positive_param(graph, n, 1, "reverb2 room size")?,
+                    positive_param(graph, n, 2, "reverb2 time")?,
+                    const_param(graph, n, 3, "reverb2 diffusion")?,
+                    const_param(graph, n, 4, "reverb2 modulation")?,
+                    lowpole_hz(positive_param(graph, n, 5, "reverb2 damping cutoff")?),
                 )),
                 1,
             ),
             NodeKind::Reverb3 => (
                 mono(reverb3_stereo(
-                    positive_param(n, 1, "reverb3 time")?,
-                    const_param(n, 2, "reverb3 diffusion")?,
-                    lowpole_hz(positive_param(n, 3, "reverb3 damping cutoff")?),
+                    positive_param(graph, n, 1, "reverb3 time")?,
+                    const_param(graph, n, 2, "reverb3 diffusion")?,
+                    lowpole_hz(positive_param(graph, n, 3, "reverb3 damping cutoff")?),
                 )),
                 1,
             ),
             NodeKind::Reverb4 => (
                 mono(reverb4_stereo(
-                    positive_param(n, 1, "reverb4 room size")?,
-                    positive_param(n, 2, "reverb4 time")?,
+                    positive_param(graph, n, 1, "reverb4 room size")?,
+                    positive_param(graph, n, 2, "reverb4 time")?,
                 )),
                 1,
             ),
@@ -588,14 +631,14 @@ pub fn realize_gated(
                 // The buffer is named by index into the graph's own table —
                 // the one construction-time parameter that is not a number the
                 // program wrote, so it is checked here rather than trusted.
-                let index = const_param(n, 1, "sample buffer")? as usize;
+                let index = const_param(graph, n, 1, "sample buffer")? as usize;
                 let Some(wave) = graph.samples.get(index) else {
                     return Err(format!(
                         "sample: buffer {index} is not in this graph (it has {})",
                         graph.samples.len()
                     ));
                 };
-                let channel = const_param(n, 2, "sample channel")?;
+                let channel = const_param(graph, n, 2, "sample channel")?;
                 if channel < 0.0 || channel.fract() != 0.0 {
                     return Err(format!(
                         "sample: channel must be a whole number from 0, got {channel}"));
@@ -607,13 +650,23 @@ pub fn realize_gated(
             }
             NodeKind::Saw => (Box::new(saw()), 1),
             NodeKind::Sin => (Box::new(sine()), 1),
+
+            // A slider in the panel. Its name was interned to a slot by the
+            // lowerer for the reason a MIDI port's is — a node reads it on the
+            // audio callback and cannot hash a name — and unlike a controller
+            // it needs no range here, because what the slot holds is already
+            // in the slider's own units. See `crate::controls`.
+            NodeKind::Slider => (
+                Box::new(An(SliderNode::new(control_slot(graph, n, 0)?))),
+                0,
+            ),
             NodeKind::SoftSaw => (Box::new(soft_saw()), 1),
             NodeKind::Square => (Box::new(square()), 1),
             NodeKind::Sub => (Box::new(pass() - pass()), 2),
             NodeKind::Tap => (
                 Box::new(tap(
-                    const_param(n, 2, "tap min delay")?,
-                    const_param(n, 3, "tap max delay")?,
+                    const_param(graph, n, 2, "tap min delay")?,
+                    const_param(graph, n, 3, "tap max delay")?,
                 )),
                 2,
             ),
@@ -1262,6 +1315,80 @@ mod reverb_tests {
             Ok(_) => panic!("expected a signal-valued reverb time to be an error"),
         };
         assert!(err.contains("must be a constant"), "got: {err}");
+    }
+
+
+    /// What a slider does to a *realized* graph, which is the only place the
+    /// smoothing is real: `coeff` comes from the sample rate, and a node that
+    /// never got one would step rather than glide.
+    ///
+    /// The first sample is the part that matters to a re-eval. A net built
+    /// mid-performance is crossfaded in over 0.2s (`engine::swap_program`), and
+    /// its slider nodes are new — so if they began at zero and approached, a
+    /// re-eval would add a ten-millisecond sweep underneath every crossfade.
+    /// They begin *at* the position instead, which is what `fresh` is for.
+    #[test]
+    fn a_slider_starts_where_it_is_and_glides_to_where_it_is_put() {
+        let _controls = crate::controls::exclusive();
+        let items = parse("slider(\"level\", 0, 1, 0.25)\n".to_string()).unwrap();
+        crate::controls::declare_in(&items);
+        let g = lower(&items).unwrap().graph;
+        let mut net = realize(&g).unwrap();
+        net.set_sample_rate(44100.0);
+
+        let mut out = [0.0f32; 2];
+        net.tick(&[], &mut out);
+        assert_eq!(out[0], 0.25, "a fresh node takes the position whole");
+
+        crate::controls::set("level", 0.75);
+        net.tick(&[], &mut out);
+        assert!(out[0] < 0.26, "one sample later it has barely moved: {}", out[0]);
+
+        // One time constant is most of the way there — 1 - 1/e of the
+        // distance, which is what `SMOOTHING_SECS` means.
+        for _ in 0..441 {
+            net.tick(&[], &mut out);
+        }
+        assert!((0.55..0.58).contains(&out[0]), "10ms later: {}", out[0]);
+
+        for _ in 0..4410 {
+            net.tick(&[], &mut out);
+        }
+        assert!((out[0] - 0.75).abs() < 1e-3, "settled at: {}", out[0]);
+    }
+
+    /// A slider is the one signal such a parameter accepts, and what it
+    /// accepts is the number the slider stands at. There is nothing better
+    /// available — the parameter is not a port — so what is owed is the mark
+    /// that lets the panel say the drag will not be heard until the next run.
+    #[test]
+    fn a_slider_in_a_baked_parameter_is_the_number_it_stands_at() {
+        let _controls = crate::controls::exclusive();
+        let items = parse("reverb(impulse(), 10, slider(\"room\", 1, 30, 12), 0.5)\n".to_string())
+            .unwrap();
+        crate::controls::declare_in(&items);
+        let g = lower(&items).unwrap().graph;
+
+        realize(&g).expect("a slider should be readable where a constant is wanted");
+        assert!(crate::controls::baked_by_name("room"), "it should be marked as baked");
+    }
+
+    /// The reverbs are the one family whose bad parameters are dangerous
+    /// rather than merely wrong, so the guard has to apply to a slider's
+    /// position as much as to a number written out.
+    #[test]
+    fn a_slider_cannot_drag_a_reverb_into_a_value_it_could_not_survive() {
+        let _controls = crate::controls::exclusive();
+        let items = parse("reverb(impulse(), 10, slider(\"room\", 0, 30, 0), 0.5)\n".to_string())
+            .unwrap();
+        crate::controls::declare_in(&items);
+        let g = lower(&items).unwrap().graph;
+
+        let err = match realize(&g) {
+            Err(e) => e,
+            Ok(_) => panic!("a room size of zero should be refused however it was written"),
+        };
+        assert!(err.contains("must be above zero"), "got: {err}");
     }
 }
 

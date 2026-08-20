@@ -17,6 +17,7 @@
 
 use crate::lang::Beats;
 use crate::swync_graph::environment::{Item, Length, Source, Value};
+use crate::lowerer::expr::slider_number;
 use crate::lowerer::lower::Lowerer;
 use crate::parser::parser::{Arg, Expr, Ident};
 use crate::pattern::pattern::{Pattern, Slot, Step, UNIT};
@@ -167,6 +168,12 @@ impl Lowerer {
             None => Rate::Fixed(1.0),
             Some(e) => match self.expr(e)? {
                 Value::Number(n) => Rate::Fixed(n),
+                // A slider is the number it stands at, baked in. The
+                // scheduler works a fifth of a second ahead of the audio
+                // clock, so a rate it could read while a hand moved would
+                // have to be a rate it can see into the future of — which is
+                // the same reason a signal is refused below.
+                v @ Value::Slider { .. } => Rate::Fixed(slider_number(&v).unwrap_or_default()),
                 Value::Rate(r) => r,
                 _ => return Err(format!(
                     "{name}: rate must be a compile-time number or an `accel`")),
@@ -653,6 +660,13 @@ pub fn to_pattern_timed(v: &Value, meter: Meter) -> Result<(Pattern, f64), Strin
             Ok((Pattern::Stack(out), if pass > 0.0 { pass } else { 1.0 }))
         }
         Value::Number(n) => Ok((Pattern::seq([Step::Value(*n)]), 1.0)),
+        // A slider is the number it stands at, like everything else a pattern
+        // holds — see `to_step`, which says why a pattern is the one place a
+        // signal can never reach.
+        Value::Slider { .. } => Ok((
+            Pattern::seq([Step::Value(slider_number(v).unwrap_or_default())]),
+            1.0,
+        )),
         Value::Rest => Ok((Pattern::Silence, 1.0)),
         Value::Trigger => Ok((Pattern::seq([Step::Value(1.0)]), 1.0)),
         // A written value on its own is a single sounding step of that length,
@@ -844,6 +858,11 @@ fn enum_not_a_step(v: &Value) -> String {
 fn to_step(v: &Value, meter: Meter) -> Result<Step, String> {
     match v {
         Value::Number(n) => Ok(Step::Value(*n)),
+        // Where the slider stood when this compiled, baked in — a pattern is
+        // read a note at a time on the scheduler's thread, a fifth of a second
+        // ahead of the audio clock, so a step is a number or it is nothing.
+        // The panel marks it as one whose drag is heard at the next run.
+        Value::Slider { .. } => Ok(Step::Value(slider_number(v).unwrap_or_default())),
         Value::Destination(_) => Err(
             "a MIDI destination is not a step — `midiout(..)` goes where the \
              instrument goes, not in the pattern".into()),

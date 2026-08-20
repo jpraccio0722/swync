@@ -29,11 +29,11 @@ function Glyph({ d }: { d: string }) {
 }
 
 /**
- * The seven views' icons, in one place so the two trays cannot drift apart.
+ * The eight views' icons, in one place so the two trays cannot drift apart.
  *
  * Each is meant to be recognisable at 20px with nothing but a tooltip to lean
  * on: a folder, a magnifier, books on a shelf, a warning sign, notes on a
- * roll, an open book, a gear.
+ * roll, an open book, a gear, and two faders on a desk.
  */
 export const icons = {
   project: <Glyph d="M4 4h5l2 2h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />,
@@ -45,6 +45,11 @@ export const icons = {
   patterns: <Glyph d="M3 5h9v3H3V5zm5 5.5h13v3H8v-3zM3 16h7v3H3v-3z" />,
   reference: (
     <Glyph d="M12 6.5C10.5 5.2 8.4 4.5 6 4.5c-1 0-2 .1-3 .4v13.6c1-.3 2-.4 3-.4 2.4 0 4.5.7 6 2 1.5-1.3 3.6-2 6-2 1 0 2 .1 3 .4V4.9c-1-.3-2-.4-3-.4-2.4 0-4.5.7-6 2zm-1 11.1c-1.4-.8-3.1-1.2-5-1.2-.7 0-1.4.1-2 .2V6.3c.6-.1 1.3-.2 2-.2 1.9 0 3.6.4 5 1.2v10.3zm2 0V7.3c1.4-.8 3.1-1.2 5-1.2.7 0 1.4.1 2 .2v10.3c-.6-.1-1.3-.2-2-.2-1.9 0-3.6.4-5 1.2z" />
+  ),
+  // Two faders, one up and one down: the shape a mixer strip has at a glance,
+  // and the one thing on this tray that could not be mistaken for the gear.
+  controls: (
+    <Glyph d="M7 3h2v7h2v3H9v8H7v-8H5v-3h2V3zm8 0h2v11h2v3h-2v4h-2v-4h-2v-3h2V3z" />
   ),
   settings: (
     <Glyph d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.01 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.04.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z" />
