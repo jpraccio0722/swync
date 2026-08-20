@@ -33,7 +33,8 @@ import {
   type RecordingState,
   type Settings,
 } from "./SettingsPanel";
-import { SearchPanel } from "./SearchPanel";
+import { SearchPanel, type Results as SearchResults } from "./SearchPanel";
+import { SlidersPanel, type Slider } from "./SlidersPanel";
 import { SidePanel, type SideTab } from "./SidePanel";
 import { toDiagnostic, type Diagnostic } from "./diagnostics";
 import { TransportPanel } from "./TransportPanel";
@@ -295,6 +296,11 @@ function App() {
   // editor is what usually brings that up.
   const [panelTab, setPanelTab] = useState<RightTab>("transport");
   const [docsFocus, setDocsFocus] = useState<DocsFocus | null>(null);
+  // The controls the last run declared. The app owns their positions between
+  // runs because it is the only thing that writes them — the backend's copy is
+  // what the audio graph reads, and the two agree because every move is sent
+  // there as it happens. See `SlidersPanel`.
+  const [sliders, setSliders] = useState<Slider[]>([]);
 
   // The left panel starts shut, on the project: there is nothing for it to say
   // until a folder is open or something has been run, and either of those
@@ -1534,6 +1540,12 @@ function App() {
         setDiagnostics(warnings);
         setRunStatus("ok");
         setSource(from);
+        // The panel's controls are this program's, so they are replaced
+        // wholesale rather than merged: a run is the one moment the backend
+        // knows more about a slider's position than this side does, because a
+        // range edited narrower clamps whatever was dialled in under it.
+        void invoke<Slider[]>("sliders").then(setSliders).catch((e) =>
+          console.error("could not read the sliders:", e));
         // The engine is holding this program until something stops it, which
         // is what the lit play button says. Here rather than beside the
         // `return` below, because that answers true for a file never run.
@@ -1582,6 +1594,90 @@ function App() {
   const playCurrent = useCallback(
     (): Promise<boolean> => run(currentTarget()),
     [currentTarget, run],
+  );
+
+  /**
+   * A slider moved.
+   *
+   * Kept here rather than in the panel because this side is the position's
+   * owner between runs: the backend's copy is what the audio graph reads, and
+   * one relaxed store is the whole of what a live slider costs — nothing is
+   * recompiled and nothing is crossfaded, which is why a drag is heard under
+   * the finger.
+   */
+  const moveSlider = useCallback((name: string, value: number) => {
+    setSliders((all) =>
+      all.map((s) => (s.name === name ? { ...s, at: value } : s)));
+    void invoke("set_slider", { name, value }).catch((e) =>
+      console.error(`could not move the ${name} slider:`, e));
+  }, []);
+
+  /**
+   * A drag ended.
+   *
+   * Nothing to do for the ordinary slider — every position on the way here was
+   * already heard. A **baked** one is the other case: the program read it as a
+   * number, so what the graph holds is the number it stood at when the program
+   * last compiled, and the only way to hear a new one is to compile again.
+   *
+   * Which is why this waits for the end of the drag rather than following it.
+   * A run swaps the graph over a crossfade and republishes every pattern; one
+   * per pointer event would be hundreds of compiles and a continuous stutter,
+   * which is a worse answer than a slider that catches up when you let go.
+   *
+   * Only while something is playing: a run is how a program is heard, and
+   * starting one from a panel would be a play button nobody pressed.
+   */
+  const commitSlider = useCallback(
+    (slider: Slider) => {
+      if (!slider.baked || !playing) return;
+      // What is playing, which is not always what is in front — play runs the
+      // project's `main.swync`, and ⇧⌘, runs the tab. Re-running the file the
+      // last run was of is the only reading that cannot surprise anybody.
+      const tab = source?.tabId
+        ? (tabsRef.current.find((t) => t.id === source.tabId) ?? null)
+        : null;
+      if (tab && isCode(tab)) {
+        void run({ code: tab.content, path: tab.path, tabId: tab.id });
+        return;
+      }
+      void play();
+    },
+    [playing, source, run, play],
+  );
+
+  /**
+   * Go to where a slider is written.
+   *
+   * A search rather than something the compiler carried here, and the reason
+   * is worth keeping: `imports::expand` folds every file into one program
+   * before anything is lowered, and it is the last pass that knows which file
+   * a definition came out of. Threading that back down to an expression inside
+   * a `fn` body — which is where a slider usually is — would undo a boundary
+   * that exists so nothing downstream has to know about files. A name written
+   * once, which is the ordinary case, is found exactly by looking for it.
+   */
+  const revealSlider = useCallback(
+    async (name: string) => {
+      if (projectRoot === null) return;
+      try {
+        const results = await invoke<SearchResults>("search_project", {
+          root: projectRoot,
+          query: `slider("${name}"`,
+          caseSensitive: true,
+          wholeWord: false,
+        });
+        const file = results.files[0];
+        const match = file?.matches[0];
+        if (!file || !match) return;
+        if (await openPath(file.path)) {
+          setPendingReveal({ line: match.line, column: match.column });
+        }
+      } catch (e) {
+        console.error(`could not find where ${name} is written:`, e);
+      }
+    },
+    [projectRoot, openPath],
   );
 
   const stop = useCallback(async () => {
@@ -1727,6 +1823,49 @@ function App() {
    * moment somebody is about to look at that list, which makes it the only
    * moment it has to be right — and is why there is no refresh button.
    */
+  /**
+   * The "on run" badges, while the controls are on screen.
+   *
+   * The one thing about a slider that can change without a run: whether the
+   * program read it as a number. A slider inside an instrument is not lowered
+   * until the scheduler builds a voice from it, so a `fn` nobody has triggered
+   * yet has not been read either way — and the moment the first note plays,
+   * the badge becomes true. Every other field is settled at the run, and the
+   * position is this side's own, so nothing here touches it: the merge below
+   * takes the badge and the shape and leaves `at` exactly where the finger put
+   * it.
+   *
+   * Only while the panel is showing them, and slowly, because what it is
+   * watching for happens once per program at most.
+   */
+  const controlsShowing = panelOpen && panelTab === "controls";
+  useEffect(() => {
+    if (!controlsShowing) return;
+    let live = true;
+
+    const tick = async () => {
+      try {
+        const fresh = await invoke<Slider[]>("sliders");
+        if (!live) return;
+        setSliders((all) =>
+          fresh.map((s) => {
+            const known = all.find((k) => k.name === s.name);
+            return known ? { ...s, at: known.at } : s;
+          }));
+      } catch {
+        // Nothing worth logging every second: the panel keeps what it has,
+        // and the next ask is a moment away.
+      }
+    };
+
+    void tick();
+    const timer = window.setInterval(() => void tick(), 1000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [controlsShowing]);
+
   const settingsShowing = panelTab === "settings";
   useEffect(() => {
     if (!settingsShowing) return;
@@ -2236,6 +2375,15 @@ function App() {
               patternsPath={patternsPath}
               hasProject={projectRoot !== null}
               beatsPerBar={beatsPerBar}
+            />
+          }
+          controls={
+            <SlidersPanel
+              sliders={sliders}
+              onChange={moveSlider}
+              onCommit={commitSlider}
+              onReveal={projectRoot === null ? null : (name) => void revealSlider(name)}
+              hasRun={runStatus !== "idle"}
             />
           }
           docs={<DocsPanel builtins={metadata.builtins} focus={docsFocus} />}

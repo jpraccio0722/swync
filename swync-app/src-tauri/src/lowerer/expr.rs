@@ -490,6 +490,9 @@ impl Lowerer {
     /// have the value rather than the expression — a comparison, which has to
     /// look at both sides before it knows whether it is comparing tags at all.
     pub(crate) fn as_number(&mut self, v: Value, what: &str) -> Result<f64, String> {
+        if let Some(n) = slider_number(&v) {
+            return Ok(n);
+        }
         if let Value::Number(n) = as_data(&v) {
             return Ok(*n);
         }
@@ -601,6 +604,10 @@ impl Lowerer {
         match v {
             Value::Number(n) => Ok(NodeInput::Const(n)),
             Value::Signal(id) => Ok(NodeInput::Node(id)),
+            // The ordinary use of a slider, and the one worth having: the node
+            // in the graph, read at audio rate, so the drag is heard without
+            // anything being compiled again.
+            Value::Slider { node, .. } => Ok(NodeInput::Node(node)),
             Value::Function(_) => Err("cannot use a function as a signal".into()),
             Value::List(_) => Err("cannot use a list as a signal (iterate it with `for`)".into()),
             Value::Stack(_) => Err(
@@ -666,6 +673,25 @@ pub(crate) fn unwrap_enum(v: &Value) -> Option<&Value> {
     }
 }
 
+/// Where a slider is standing, for the places that demand a number and can
+/// take nothing else.
+///
+/// `None` for everything else, so a caller that wants a signal never sees this
+/// and a caller that wants a number always does. The reading is **baked**: it
+/// is the position at the moment the program compiled, and the slot is marked
+/// so that the panel can say as much rather than leaving somebody dragging a
+/// control that stopped being connected the moment it was written here.
+///
+/// Deliberately not folded into [`as_data`], which every arithmetic operator
+/// runs both its sides through: `slider("level") * 0.5` has to build a
+/// multiply in the graph, and a slider that answered as data there would fold
+/// it to a constant and go quiet under the finger.
+pub(crate) fn slider_number(v: &Value) -> Option<f64> {
+    let Value::Slider { slot, at, .. } = v else { return None };
+    crate::controls::mark_baked(*slot);
+    Some(*at)
+}
+
 /// A value as data: what an enum member stands for, or the value itself.
 ///
 /// The one function every consumer of a number or a list runs its argument
@@ -719,6 +745,7 @@ pub(crate) fn describe(v: &Value) -> &'static str {
     match v {
         Value::Number(_) => "a number",
         Value::Signal(_) => "a signal",
+        Value::Slider { .. } => "a slider",
         Value::Function(_) => "a function",
         Value::List(_) => "a list",
         Value::Stack(_) => "a stack",

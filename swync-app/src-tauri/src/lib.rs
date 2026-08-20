@@ -22,6 +22,7 @@ use tauri::{Emitter, Manager};
 
 mod audio_in;
 mod audition;
+mod controls;
 mod devices;
 mod meter;
 mod pattern;
@@ -99,6 +100,17 @@ fn run_code(
     // the lowerer, the realizer and the scheduler all compile one flat file.
     let ast = imports::expand(parse(code.clone())?, &code, &workspace)?;
 
+    // Sliders before lowering, for the reason files are: a `slider` written
+    // inside an instrument is not lowered until the scheduler builds a voice
+    // from it, and the panel cannot wait for a note to be played before it can
+    // draw the control. So they are read off the syntax — see `controls` —
+    // which also settles the range and the slot the lowerer will then agree
+    // with. Interning touches nothing outside this process, so doing it before
+    // the program has been proved to compile costs nothing; what waits for the
+    // success path below is telling the panel.
+    controls::clear_baked();
+    let (sliders, slider_warnings) = controls::declare_in(&ast);
+
     // Files before lowering, and before the scheduler is told anything. A
     // `load` names a path relative to this file, exactly as a `use` does, and
     // this is the only thread allowed to read a disk — a voice is built per
@@ -133,6 +145,11 @@ fn run_code(
         .collect();
     warnings.extend(
         midi::input::ensure_open()
+            .into_iter()
+            .map(|w| Diagnostic::warning(Stage::Lower, w)),
+    );
+    warnings.extend(
+        slider_warnings
             .into_iter()
             .map(|w| Diagnostic::warning(Stage::Lower, w)),
     );
@@ -193,6 +210,13 @@ fn run_code(
     // from silence, which is not distinguishable from here without asking
     // twice.
     midi_out.transport(true);
+
+    // The panel last, on the success path, beside everything else this eval
+    // published: a program that did not compile leaves the controls alone for
+    // the reason it leaves the music alone. Which sliders were read as numbers
+    // rather than as signals is settled by now — the lowerer marked its own,
+    // and `realize` marked the parameters it baked.
+    controls::publish(&sliders);
 
     // What lowering had to say about a program it did not refuse. Returned on
     // the *success* path, which is the whole point: this eval published its
@@ -623,6 +647,35 @@ fn midi_clock_status() -> ClockStatus {
         status: midi::input::following().status(present),
         bpm: midi::input::following().bpm(),
     }
+}
+
+/// What the panel should be drawing: the sliders the last run declared, each
+/// carrying where it stands right now.
+///
+/// Polled rather than pushed, like the recording clock and the meters, and for
+/// the same reason — the panel is the only thing that wants it and it wants it
+/// only while it is on screen. Cheap enough to poll: a lock, a handful of
+/// relaxed loads, and usually an empty list, since most programs declare no
+/// controls at all.
+#[tauri::command]
+fn sliders() -> Vec<controls::Slider> {
+    controls::declared()
+}
+
+/// Move a slider, from the panel.
+///
+/// The whole of what a drag does when the slider is a signal: one relaxed
+/// store, heard on the next audio block, with nothing recompiled and nothing
+/// crossfaded. A slider the program read as a *number* takes the same store —
+/// so the panel keeps tracking under the finger — and it is `App.tsx` that
+/// then asks for a run when the drag ends, because only that value was baked
+/// into the graph.
+///
+/// A name the session does not know is not an error: the panel draws what the
+/// last run declared, and a run in between may have deleted the line.
+#[tauri::command]
+fn set_slider(name: String, value: f64) {
+    controls::set(&name, value);
 }
 
 /// Every MIDI port on this machine, with the number a program may name it by.
@@ -1555,6 +1608,8 @@ pub fn run() {
             recording_state,
             audio_devices,
             midi_ports,
+            sliders,
+            set_slider,
             midi_clock_status,
             audio_levels,
             set_input_device,

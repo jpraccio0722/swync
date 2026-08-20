@@ -1467,6 +1467,22 @@ pub static SPECIALS: &[ListBuiltin] = &[
         doc: "Channel pressure — how hard the keys are being leant on — as a signal, 0 to 1. Give a range to map it. Smoothed like `cc`. Zero on a keyboard that does not send it.",
     },
     ListBuiltin {
+        name: "slider",
+        params: &["name", "lo", "hi", "start"],
+        arities: &[1, 3, 4],
+        variadic: false,
+        // The name is written in quotes and read off the syntax, exactly as a
+        // `load` path is — so like `load`, nothing can stand to the left of
+        // this dot.
+        receives: ValueKind::Text,
+        // Both, and which one depends on where it is written: the node in the
+        // graph wherever a signal goes, and the position it is standing at
+        // wherever the language can only take a number. `sum` and `choice` are
+        // `Any` for the same reason.
+        returns: ValueKind::Any,
+        doc: "A control in the panel, named where it is used: `lowpass(saw(110), slider(\"cutoff\", 200, 5000), 1)` draws a slider called cutoff in the controls panel and reads it at audio rate, so dragging it is heard immediately with nothing recompiled. The range defaults to 0 to 1, and a fourth number says where it starts — otherwise it starts at the bottom. The name is what labels the control and what makes it the same control after an edit, so writing one name in two places is one slider moving both; a second range for a name already declared is ignored, with a warning. A slider keeps its position across an evaluation and forgets it when the app quits, which is why the number written here is a starting point rather than a value: you dial a filter in, edit the line above it, play again, and the filter is where you left it. Smoothed over a few milliseconds, because a drag wired straight to a cutoff zippers. Written where the language wants a compile-time number — a `;` length, a pattern step, a delay time — it is the position it stood at when the program compiled; the panel marks those, and letting go of one runs the program again.",
+    },
+    ListBuiltin {
         name: "midiout",
         params: &["device", "channel"],
         arities: &[1, 2],
@@ -2088,8 +2104,8 @@ mod tests {
         const BOUND: [&str; 3] = ["dur", "qvs", "qvh"];
         for b in SPECIALS {
             // Everything else is intercepted somewhere: the `play` family,
-            // `then`, `play_all`, `load`, the four MIDI names, `accel`, and
-            // the three that begin from a buffer.
+            // `then`, `play_all`, `load`, the four MIDI names, `slider`,
+            // `accel`, and the three that begin from a buffer.
             let intercepted = Lowerer::is_play(b.name)
                 || Lowerer::is_section(b.name)
                 || Lowerer::is_play_all(b.name)
@@ -2098,6 +2114,7 @@ mod tests {
                 || Lowerer::is_midiin(b.name)
                 || Lowerer::is_midi_control(b.name)
                 || Lowerer::is_midiclock(b.name)
+                || Lowerer::is_slider(b.name)
                 || Lowerer::is_buffer_builtin(b.name)
                 || Lowerer::is_rate(b.name);
             assert_eq!(

@@ -13,7 +13,7 @@
 //! silence much later, which is miserable to trace back.
 
 use crate::swync_graph::environment::Value;
-use crate::lowerer::expr::{as_data, not_this_member};
+use crate::lowerer::expr::{as_data, not_this_member, slider_number};
 use crate::lowerer::lists::check_arity;
 use crate::lowerer::lower::Lowerer;
 /// `bpm` is the transport's own conversion, so the two can never disagree.
@@ -28,6 +28,12 @@ const CENTS_PER_OCTAVE: f64 = 1200.0;
 /// Shared with `lowerer::random`, which draws numbers into the same fold and so
 /// has to reject a signal in the same words.
 pub(crate) fn number(func: &str, what: &str, v: &Value) -> Result<f64, String> {
+    // A slider is a number here, baked at the position it was standing —
+    // these fold during lowering and there is no node for a changing value to
+    // be part of. See `expr::slider_number`.
+    if let Some(n) = slider_number(v) {
+        return Ok(n);
+    }
     match as_data(v) {
         Value::Number(n) => Ok(*n),
         _ => Err(not_this_member(v, &format!("{func}: {what} must be a number"))

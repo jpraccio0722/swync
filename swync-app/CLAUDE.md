@@ -427,6 +427,25 @@ audio clock by *real elapsed time* — a fixed advance per `sleep` runs slow,
 which reads as 82 bpm at the far end, and that is a mistake worth not making
 twice.
 
+## Controls in the panel
+
+`src-tauri/src/controls.rs`, `lowerer/controls.rs`, `src/SlidersPanel.tsx`. `slider("cutoff", 200, 5000)` draws a control in the right panel and reads it from inside the graph at audio rate. It is **MIDI in read from the screen instead of a wire**, and nearly all of it is the same design: one atomic per control, written by one side and read by the audio callback without a lock; a name interned to a **slot**, because a node cannot hash a string on the callback; and interning that touches no hardware and no window, so a thousand tests can lower a slider and a program compiles the same wherever it is opened.
+
+**The panel has no way to add one**, and that is the design rather than an omission. A control exists by being written at the place it is used, so the control and the thing it controls are one line of text and a piece that travels takes its controls with it. It is the claim `midiout` makes about a port and the opposite of the one an audio device makes.
+
+Four things carry weight:
+
+- **Which sliders exist is read off the syntax, before lowering** (`controls::declare_in`, over `parser::walk`). An instrument's body is not lowered until the scheduler builds a voice from it, so a `slider` inside a `fn` would otherwise reach the panel only once a note had played — or never. That is the same argument `samples::paths_in` makes about `load`, which is why the walk is now one function they share rather than two copies of an exhaustive match.
+- **Slots are the session's memory, and that is what makes a slider usable.** A name keeps its slot and its position for the life of the process, so dialling a filter in, editing the line above it and evaluating leaves the filter where it was. The number written in the program is therefore a *starting point*, used the first time a session sees the name; a range edited narrower clamps whatever was dialled in under it. Quitting forgets.
+- **One name is one slider, and the first declaration wins.** Written into two instruments it is one control moving both, which is usually what was meant. A second, disagreeing range is a warning rather than an error — the same trade a missing MIDI port settles — and the lowerer honours the first by reading the table rather than its own arguments, so the rule is true of the sound and not only of the message.
+- **A slider is both a signal and a number**, and which one depends on where it is written. `Value::Slider` carries the node *and* the position, and only the places that demand a compile-time number unwrap it (`expr::slider_number`, and `realizer::constant` for a parameter baked into a unit at build). It is deliberately **not** folded into `as_data`, which every arithmetic operator runs both sides through — `slider("level") * 0.5` has to build a multiply in the graph, and folding it there would go quiet under the finger.
+
+That last split is what the panel's **"on run"** badge is about. A baked reading cannot follow a drag: the parameter is not a port, and what the graph holds is the number the slider stood at when the program compiled. So the slot is marked as it is read that way — from the lowerer, and from the realizer on whichever thread built the voice — and `App.tsx` runs the program again when such a slider is *released*. Not while it moves: a run crossfades the graph and republishes every pattern, so one per pointer event would stutter the music continuously, which is a worse answer than catching up when you let go.
+
+The panel polls only for that badge, slowly and only while it is showing, because a slider inside an instrument is not read either way until the first note plays. Everything else it knows comes from the run, and the *position* is the frontend's own: between runs it is the only writer, which is what keeps the poll from dragging a thumb back under somebody's finger.
+
+**Where a slider was written is answered by searching the project, not by the compiler** (`App.tsx`, `revealSlider`). `imports::expand` folds every file into one program and is the last pass that knows which file a definition came from; threading that back down to an expression inside a `fn` body would undo a boundary that exists so nothing downstream has to know about files. A name written once — the ordinary case — is found exactly by looking for it.
+
 ## Bars, passes, and the one place "cycle" survives
 
 Musical time is counted in **bars**. A **pass** is one trip through a pattern: a list of shares is one pass and fills the bar in any signature, while a pass written in note values is as long as its values add up to and rotates against the bar when they disagree. The two words are not interchangeable, and the tests say which they mean — `a_three_beat_pass_fills_a_three_four_bar` against `a_three_beat_pass_takes_three_quarters_of_a_four_four_bar` is the whole distinction in two cases.

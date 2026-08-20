@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { parentOf } from "./projectTree";
 
 /** One occurrence, as `search_project` reports it. */
-interface Match {
+export interface Match {
   /** 1-based, for the editor's own jump. */
   line: number;
   /** 1-based, counted in characters. */
@@ -15,13 +15,13 @@ interface Match {
   after: string;
 }
 
-interface FileMatches {
+export interface FileMatches {
   path: string;
   name: string;
   matches: Match[];
 }
 
-interface Results {
+export interface Results {
   files: FileMatches[];
   total: number;
   /** True when the search stopped at its own ceiling rather than at the end of

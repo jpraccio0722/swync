@@ -58,6 +58,29 @@ pub enum Value {
     /// destination there is nothing left to resolve: a slot is handed out at
     /// lowering time and is fixed for the life of the process.
     Source(crate::swync_graph::environment::Source),
+    /// A slider in the panel, as `slider` answers with it.
+    ///
+    /// Both a signal and a number, and it has to be both. As a **signal** it is
+    /// the node the graph reads at audio rate, which is what makes dragging one
+    /// audible without recompiling anything — that is the ordinary use, and
+    /// every place a signal goes takes it through [`Value::Signal`]'s own road.
+    /// As a **number** it is where the slider was standing when the program
+    /// compiled, which is the only answer available where the language demands
+    /// a compile-time number: a pattern's rate, a `;` length, anything that
+    /// folds during lowering. Those readings are baked in, and are marked as
+    /// such on the way past so the panel can say so — see
+    /// [`crate::controls::Slider::baked`].
+    ///
+    /// A variant of its own rather than a `Signal` with a number attached,
+    /// because the two are wanted in different places and a value that
+    /// silently picked one would pick wrong: `slider("level") * 0.5` is a
+    /// multiply in the graph, not a constant folded at compile time, and
+    /// nothing about the expression says so except which variant this is.
+    ///
+    /// It carries the slot as well as the node because the slot is what
+    /// outlives the graph — it is the session's memory of where this control
+    /// is, and it is what a reading-as-a-number has to mark.
+    Slider { node: NodeId, slot: usize, at: f64 },
     /// A loaded audio file, as `load` answers with it. Not a signal — nothing
     /// comes out of a buffer until `sample` reads it at a position.
     Buffer(Arc<Wave>),
