@@ -40,11 +40,12 @@ play([d2;q, f, g, e2;e, bf1], synth)
 So d2, f and g are all quarter notes and bf1 is an eighth note.
 
 
-We can modify rhythms in two ways:
+We can modify rhythms in three ways:
 
 | Marker | Meaning |
 |--------|---------|
 | `.dot` | Lengthens by half. Takes an optional count from 1 to 8 — `q.dot` is 3/2 beats, `q.dot(2)` is 7/4, following (2^(n+1) − 1)/2^n. |
+| `+` | Tie. Adds two values into a single held note — `h + e` is a half tied to an eighth. |
 | `;t` | Tuplet. Plays a bracketed group in the next lower power of two — three quarters in the time of two, five eighths in the time of four.
 
 
@@ -67,5 +68,43 @@ play([d2;q, f, g, e2;e, bf1, g2], synth)
 ```
 And yes, this produces a four and one half note pattern that would syncopate over the bar. 
 There are no guards to prevent interesting things like this.
+
+### Holding a note across
+
+A dot lengthens a value and a tuplet divides one, but neither reaches every
+length. Two and a half beats is not a note value western notation has a head
+and a flag for — it's written as two notes joined by a tie, struck once and
+held through both. Here, that's addition.
+
+```swync
+play([d2;h + e, f;e, g;q], synth)
+```
+
+That's a full bar in 4/4: one note held for two and a half beats, an eighth,
+and a quarter. The `h + e` is *one* note, not a half struck and then an eighth
+struck after it — the bar below is the same four beats and the same pitches,
+but you hear d2 twice.
+
+```swync
+play([d2;h, d2;e, f;e, g;q], synth)
+```
+
+Ties and dots overlap wherever both can spell the same length. `q + e` and
+`q.dot` are the same beat and a half, and you should write whichever one you
+read more easily.
+
+Addition is the only arithmetic a written value takes — `q * e` is an error
+rather than some shorter note, because there's nothing for notation to draw
+there.
+
+Nothing stops a tie from running past a whole note, which is the only way to
+write a note longer than one:
+
+```swync
+play([d2;w + h, f;h], synth)
+```
+
+That's a note held for a bar and a half, then a half note to finish out the
+second bar.
 
 Ok, that's all, right? Well, how do we make silence? What about drums?
