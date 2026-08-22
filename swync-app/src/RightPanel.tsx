@@ -37,8 +37,8 @@ interface RightPanelProps {
 }
 
 /**
- * The right-hand panel: the drawn patterns, the program's own controls, the
- * language reference, and what the app itself is set to.
+ * The right-hand panel: the program's own controls, the drawn patterns, the
+ * language reference, and what the app itself is set to, in that order.
  *
  * They share a panel because all of them are things you reach for *while*
  * writing a program, and all of them want to be reachable without giving up
@@ -87,17 +87,6 @@ export function RightPanel({
             is the one place a reader already looks. */}
         <PanelTitle>{LABELS[tab]}</PanelTitle>
 
-        {/* The transport scrolls as a whole: the patterns list has no bound, and
-            clipping the sliders off the bottom of a short window would be worse
-            than scrolling past them. */}
-        <div
-          className={
-            "min-h-0 flex-1 flex-col overflow-y-auto " +
-            (tab === "transport" ? "flex" : "hidden")
-          }
-        >
-          {transport}
-        </div>
         {/* Scrolls as a whole, like the patterns: a program may declare more
             controls than a short window has room for, and a slider clipped off
             the bottom is one that cannot be reached at all. */}
@@ -108,6 +97,17 @@ export function RightPanel({
           }
         >
           {controls}
+        </div>
+        {/* The transport scrolls as a whole: the patterns list has no bound, and
+            clipping the sliders off the bottom of a short window would be worse
+            than scrolling past them. */}
+        <div
+          className={
+            "min-h-0 flex-1 flex-col overflow-y-auto " +
+            (tab === "transport" ? "flex" : "hidden")
+          }
+        >
+          {transport}
         </div>
         {/* The reference does its own scrolling, so its search box can stay put
             while the list moves under it — a search that scrolls away is one
@@ -133,7 +133,7 @@ export function RightPanel({
       </aside>
 
       <ActivityBar side="right">
-        {(["transport", "controls", "docs", "settings"] as const).map((name) => (
+        {(["controls", "transport", "docs", "settings"] as const).map((name) => (
           <ActivityIcon
             key={name}
             side="right"

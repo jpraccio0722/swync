@@ -1,0 +1,124 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: controls
+---
+To get more control over live sound, swync has two UI controls: a **slider** and a **button**.
+
+They live in the **Controls** panel, on the right.
+
+## A slider
+
+To use a slider, write one where any number would go.
+
+```swync
+lowpass(saw(110), slider("cutoff", 200, 5000), 1)
+```
+
+When compiled, a slider called cutoff will appear on the controls panel. 
+A slider will default to a range from 0 to 1 if you only provide a name.
+
+The fourth argument supplies a default value. 
+
+```swync
+slider("cutoff", 200, 5000)        // starts at 200
+slider("cutoff", 200, 5000, 800)   // starts at 800
+```
+## One name is one control
+
+Write the same name twice and you get one slider moving both places.
+
+```swync
+fn lead(n) = saw(n.m2h) * slider("level") * perc(0.01, 0.4)
+fn pad(n)  = sin(n.m2h) * slider("level") * env(0.4, 0.2, 0.7, 1, dur)
+```
+
+The two places don't have to agree on a range. Each name maps to the provided range.
+
+```swync
+lowpass(saw(110), slider("colour", 200, 5000), 1) * slider("colour", 0.2, 1)
+```
+
+## Where a slider can go
+
+Anywhere a signal goes, which is most places.
+
+```swync
+sin(slider("freq", 120, 1200))
+```
+
+Drag that and the pitch follows your finger. A filter cutoff, a level, a send — all the same.
+These are numbers the sound reads over and over, so a new one is picked up on the next sample.
+
+A few numbers aren't read like that. They're what the sound is *built out of*, looked at once
+when it's made and never again: how long a delay line is, how long an envelope's release
+lasts, how fast a pattern runs.
+
+```swync
+saw(110) * perc(0.01, 0.2) >> delay(slider("echo", 0.05, 0.5))
+```
+
+That compiles and plays fine. But drag **echo** and nothing moves — a delay line is a piece of
+memory sized when it was made, and dragging can't stretch it. Let go and the echo jumps to its
+new length: letting go of one of these runs the program for you.
+
+The panel marks them with a small **on run** badge, so you can tell at a glance which sliders
+you're hearing and which are waiting.
+
+Inside an instrument it's softer, because an instrument is rebuilt for every note:
+
+```swync
+fn pad(n) = saw(n.m2h) * env(0.01, 0.1, 0.7, slider("release", 0.1, 2), dur)
+
+play([c4;h, e4], pad)
+```
+
+The note already sounding keeps the release it was born with. The next one gets the new value,
+without a run.
+
+When you want one of these to move while it sounds, look for the version that takes a signal.
+`tap` is the delay that does:
+
+```swync
+saw(110) * perc(0.01, 0.2) >> tap(slider("echo", 0.05, 0.5), 0.05, 0.5)
+```
+
+## Buttons
+
+A **toggle** is off or on.
+
+```swync
+sin(220) * toggle("mute")
+```
+
+It is 0 or 1, so multiplying by it is the ordinary use: a part that is in or out, with no
+number to choose. It starts off unless you say otherwise.
+
+```swync
+toggle("lead", 1)   // starts on
+```
+
+There's no range to give it — its ends are its two states. Both ends are smoothed, like a
+slider, so switching a part in doesn't click.
+
+## Firing a section
+
+A **trigger** is a button that execute a function.
+
+```swync
+fn snare(n) = noise() * perc(0.001, 0.15)
+
+fn fill() = play_once([\;s, \, \, \, \, \, \, \], snare)
+
+trigger("fill", fill)
+```
+
+Play that, then hit **fire** in the panel. The fill plays once, on the next beat.
+
+How long it lasts is what the section says. A `play_once` or `playn` inside it is a one-shot;
+a plain `play` keeps going until something stops it.
+
+```swync
+fn drone() = play([c2], pad)   // keeps going
+```
+
+Hitting it again restarts it from the top. 

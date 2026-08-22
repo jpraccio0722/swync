@@ -291,10 +291,12 @@ function App() {
   const lastCodeId = useRef<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL);
-  // The right panel opens on the patterns, which is the view that is drawn in
-  // rather than read. The reference is one icon below it, and a ⌘-click in the
-  // editor is what usually brings that up.
-  const [panelTab, setPanelTab] = useState<RightTab>("transport");
+  // The right panel opens on the controls, which is the view you reach for
+  // while something is playing rather than while it is being written — the
+  // panel is beside the transport for the same reason the tempo is. The
+  // patterns are one icon below, and the reference below that, which a ⌘-click
+  // in the editor brings up anyway.
+  const [panelTab, setPanelTab] = useState<RightTab>("controls");
   const [docsFocus, setDocsFocus] = useState<DocsFocus | null>(null);
   // The controls the last run declared. The app owns their positions between
   // runs because it is the only thing that writes them — the backend's copy is

@@ -96,6 +96,11 @@ export const TUTORIAL: TutorialPage[] = [
 		title: "MIDI",
 		blurb: "Playing your hardware, and letting your hardware play you",
 	},
+	{
+		slug: "controls",
+		title: "Controls",
+		blurb: "Sliders and buttons, written into the piece rather than added to a panel",
+	},
 ];
 
 export function pageBySlug(slug: string): TutorialPage | undefined {
