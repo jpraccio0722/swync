@@ -122,6 +122,10 @@ export function ControlsPanel({
 
         return (
           <div key={control.name} className="flex flex-col gap-1">
+            {/* Skipped for a trigger, which wears its name on the button
+                itself — a second copy of it up here would be the same word
+                twice with nothing to tell the two apart. */}
+            {control.kind !== "trigger" && (
             <div className="flex items-baseline justify-between gap-2">
               {/* The name is the control's identity in the program, so it is
                   also the way back to the line that wrote it. */}
@@ -139,7 +143,7 @@ export function ControlsPanel({
                 {control.name}
               </button>
               <div className="flex shrink-0 items-baseline gap-1.5">
-                {control.baked && control.kind !== "trigger" && (
+                {control.baked && (
                   // Not a warning: it is a fact about where this control was
                   // written, and the only thing that would make it go away is
                   // writing it somewhere else. What it saves is the minute
@@ -152,26 +156,26 @@ export function ControlsPanel({
                     on run
                   </span>
                 )}
-                {/* A trigger has no value: what it does is not read but
-                    written, so there is nothing here to put a number to. */}
-                {control.kind !== "trigger" && (
-                  <span className="font-mono text-xs tabular-nums text-neutral-400">
-                    {control.kind === "toggle" ? (on ? "on" : "off") : value.toFixed(decimals)}
-                  </span>
-                )}
+                <span className="font-mono text-xs tabular-nums text-neutral-400">
+                  {control.kind === "toggle" ? (on ? "on" : "off") : value.toFixed(decimals)}
+                </span>
               </div>
             </div>
+            )}
 
             {control.kind === "trigger" ? (
-              // Wide and plain, because a trigger is hit rather than set: the
-              // whole row is the target, so it can be found without looking
-              // while something else is being played.
+              // Wide, and wearing its own name: a trigger is hit rather than
+              // set, so the whole row is the target and can be found without
+              // looking while something else is being played. The name is what
+              // the program calls it, which is the only label that could tell
+              // one button from the next.
               <button
                 type="button"
                 onClick={() => onPress(control.name)}
-                className="h-5 w-full rounded bg-neutral-800 text-[11px] text-neutral-300 transition-colors hover:bg-blue-500 hover:text-white active:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                title={`Play ${control.name}`}
+                className="w-full truncate rounded bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:bg-blue-500 hover:text-white active:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
-                fire
+                {control.name}
               </button>
             ) : control.kind === "toggle" ? (
               // A switch rather than a two-step slider, because the two mean
@@ -189,14 +193,14 @@ export function ControlsPanel({
                   onCommit(control);
                 }}
                 className={
-                  "relative h-4 w-8 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 " +
+                  "relative my-0.5 h-5 w-9 shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 " +
                   (on ? "bg-blue-400" : "bg-neutral-700")
                 }
               >
                 <span
                   className={
-                    "absolute top-0.5 h-3 w-3 rounded-full bg-neutral-200 transition-all " +
-                    (on ? "left-4.5" : "left-0.5")
+                    "absolute top-1 h-3 w-3 rounded-full bg-neutral-200 transition-all " +
+                    (on ? "left-5" : "left-1")
                   }
                 />
               </button>
