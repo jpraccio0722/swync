@@ -1281,12 +1281,45 @@ function App() {
   /**
    * Point the app at a folder, however the folder was chosen.
    *
-   * Open tabs are left alone: they are files, and a file does not stop being
-   * open because the tree beside it moved. Everything that belongs to the
-   * project — its patterns, its settings — is read by the effects above, which
-   * this sets going.
+   * The tabs that belong to somewhere else close. A tab is a file, so a file
+   * inside the folder stays open — the tree beside it moved, and it is still
+   * the same file, being edited in the project it lives in. One from the
+   * project you just left is another project's work sitting in front of this
+   * one, and it is the tab ⌘S and ⌘⇧, are aimed at: a project is opened to
+   * work in it, not to have the last one still in front. Composers go with
+   * them, because the patterns they draw are the old project's file — two
+   * projects may each have a `hats`, and `loadPatterns` mints this one's ids
+   * fresh, so the tab would be left saying the pattern no longer exists.
+   *
+   * What is only in the app stays, wherever it came from. A dirty buffer is
+   * the last copy of that work — the same reason a deleted file keeps its tab
+   * — and an untitled tab that has been typed in has never been anywhere
+   * else at all. What that leaves to close is a tab whose file is on disk,
+   * unedited, in another folder: reopening it costs a click in the tree.
+   *
+   * Everything that belongs to the project — its patterns, its settings — is
+   * read by the effects above, which this sets going.
    */
   const chooseProject = useCallback((root: string) => {
+    // Reopening the project that is already open is not a move between two of
+    // them: its own composers are still drawing its own patterns.
+    const moved = projectRootRef.current !== root;
+    const kept = tabsRef.current.filter((tab) => {
+      if (tab.dirty) return true;
+      if (tab.patternId || tab.patternName) return !moved;
+      return tab.path !== null && isWithin(tab.path, root);
+    });
+    setTabs(kept);
+    // Closing the tab that was in front hands the editor to what is left, the
+    // way closing one by hand does; closing all of them shows the empty state.
+    setActiveId((current) =>
+      kept.some((t) => t.id === current)
+        ? current
+        : kept.length === 0
+          ? null
+          : kept[kept.length - 1].id,
+    );
+
     setProjectRoot(root);
     setProjectVersion((v) => v + 1);
     setSideOpen(true);
