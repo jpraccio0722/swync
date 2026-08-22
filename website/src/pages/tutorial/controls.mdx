@@ -1,0 +1,131 @@
+---
+layout: ../../layouts/Chapter.astro
+slug: controls
+---
+
+Some things you want to decide while the music is running, with your hand rather than with a
+number. Swync has two of them: a **slider** and a **button**.
+
+They live in the **Controls** panel, on the right, and there is no way to add one there. You
+write a control into the program, at the place it is used — so the control and the thing it
+controls are the same line of text, and a piece you send to somebody arrives with its panel
+already built.
+
+## A slider
+
+Write one where a number would go.
+
+```swync
+lowpass(saw(110), slider("cutoff", 200, 5000), 1)
+```
+
+Play that and open the Controls panel. There is a slider called cutoff. Drag it and the
+filter moves under your finger — nothing recompiles, nothing stops.
+
+The name is the only part you have to write. Left alone, a slider runs from 0 to 1.
+
+```swync
+sin(220) * slider("level")
+```
+
+A range is both ends or neither, and a fourth number says where it starts. Without one it
+starts at the bottom, which for a level or a send is the same as off.
+
+```swync
+slider("cutoff", 200, 5000)        // starts at 200
+slider("cutoff", 200, 5000, 800)   // starts at 800
+```
+
+That number is a *starting* point, not a value. Dial the filter in, edit the line above it,
+play again — the filter is where you left it. Quitting forgets; nothing else does.
+
+## One name is one control
+
+Write the same name twice and you get one slider moving both places.
+
+```swync
+fn lead(n) = saw(n.m2h) * slider("level") * perc(0.01, 0.4)
+fn pad(n)  = sin(n.m2h) * slider("level") * env(0.4, 0.2, 0.7, 1, dur)
+```
+
+One row in the panel, one hand, both parts.
+
+The two places don't have to agree on a range. What a slider holds is a *position* along its
+travel, and each place maps it into the range written there.
+
+```swync
+lowpass(saw(110), slider("colour", 200, 5000), 1) * slider("colour", 0.2, 1)
+```
+
+At halfway that's a cutoff of 2600 and a gain of 0.6 — one control opening the filter and
+bringing the level up together. The panel draws the range you wrote first.
+
+## Where a slider can go
+
+Anywhere a signal goes. That is the ordinary case, and it is the one where dragging is heard
+immediately.
+
+Some places in the language need a number *before* the program runs — how long a delay line
+is, how long an envelope takes, how fast a pattern plays. A slider works there too, but what
+gets used is where it was standing when you last pressed play. The panel marks those with a
+small **on run** badge, and letting go of one runs the program again so you hear the new
+value.
+
+```swync
+play([c4, e4, g4], lead, slider("speed", 1, 4, 1))   // on run
+```
+
+If you want a filter you can sweep while it sounds, give it to something that takes a signal —
+`lowpass` does, and so does `tap`.
+
+## Buttons
+
+A **toggle** is off or on.
+
+```swync
+sin(220) * toggle("mute")
+```
+
+It is 0 or 1, so multiplying by it is the ordinary use: a part that is in or out, with no
+number to choose. It starts off unless you say otherwise.
+
+```swync
+toggle("lead", 1)   // starts on
+```
+
+There's no range to give it — its ends are its two states. Both ends are smoothed, like a
+slider, so switching a part in doesn't click.
+
+## Firing a section
+
+A **trigger** is a button that plays something when you hit it. Give it a `fn` by name — the
+same thing `then` takes.
+
+```swync
+fn snare(n) = noise() * perc(0.001, 0.15)
+
+fn fill() = play_once([38;s, 38, 38, 38, 38, 38, 38, 38], snare)
+
+trigger("fill", fill)
+```
+
+Play that, then hit **fire** in the panel. The fill plays once, on the next beat.
+
+How long it lasts is what the section says. A `play_once` or `playn` inside it is a one-shot;
+a plain `play` keeps going until something stops it.
+
+```swync
+fn drone() = play([c2], pad)   // keeps going
+```
+
+Hitting it again restarts it from the top. Nothing else stops — a fired section plays over
+what is already going.
+
+The section is worked out when you press play, not when you press the button. So hitting the
+button compiles nothing and can't fail at anything: by the time there's a button to hit, what
+it does is already decided.
+
+## What travels
+
+Every control is part of the program, so all of it travels with the file. What doesn't travel
+is where you left the sliders — that's tonight, not the piece, and it goes when you quit.
