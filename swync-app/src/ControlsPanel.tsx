@@ -138,7 +138,7 @@ export function ControlsPanel({
                     ? control.name
                     : `Go to where ${control.name} is written`
                 }
-                className="min-w-0 truncate text-left text-xs text-neutral-300 transition-colors enabled:hover:text-blue-400 enabled:hover:underline"
+                className="min-w-0 truncate text-left text-sm text-neutral-300 transition-colors enabled:hover:text-blue-400 enabled:hover:underline"
               >
                 {control.name}
               </button>
@@ -173,7 +173,7 @@ export function ControlsPanel({
                 type="button"
                 onClick={() => onPress(control.name)}
                 title={`Play ${control.name}`}
-                className="w-full truncate rounded bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 transition-colors hover:bg-blue-500 hover:text-white active:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                className="w-full truncate rounded bg-neutral-800 px-3 py-3 text-sm text-neutral-200 transition-colors hover:bg-blue-500 hover:text-white active:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
               >
                 {control.name}
               </button>
