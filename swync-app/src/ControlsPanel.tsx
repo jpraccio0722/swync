@@ -119,10 +119,10 @@ export function ControlsPanel({
     // reflow this whenever somebody resized the app with the panel untouched,
     // which is the wrong question asked of the right answer.
     //
-    // The panel opens at 288, so the first step up is above that: at the width
-    // it opens at, every control has a row to itself.
+    // Two columns at the width the panel opens at, and up to four when it is
+    // dragged wide — a slider taking two of them and a button one.
     <div className="@container px-3 py-3">
-      <div className="grid grid-cols-1 gap-x-3 gap-y-3 @sm:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-3 @md:grid-cols-3 @2xl:grid-cols-4">
       {controls.map((control) => {
         const step = stepFor(control.lo, control.hi);
         const decimals = decimalsFor(step);
@@ -130,19 +130,20 @@ export function ControlsPanel({
         const on = value >= 0.5;
 
         return (
-          // A slider takes the whole row however many columns there are: it is
-          // dragged along its length, and a quarter-width one is a control you
-          // have to aim at. A toggle and a trigger are hit rather than aimed,
-          // so they take a cell each and pack across.
+          // A slider takes two cells where a button takes one: it is dragged
+          // along its length, so it wants more room than something that is
+          // only hit — but not a whole row, which at four columns would leave
+          // three cells of nothing beside it. Two is safe at every width
+          // because the grid is never narrower than two.
           //
           // Spanning rather than sorting is what keeps the panel in the order
-          // the program writes them: a slider breaks the line where it is
-          // written, and the buttons either side fill the rows they land in.
+          // the program writes them: a slider takes the room it needs where it
+          // is written, and the buttons flow around it.
           <div
             key={control.name}
             className={
               "flex flex-col gap-1 " +
-              (control.kind === "slider" ? "col-span-full" : "")
+              (control.kind === "slider" ? "col-span-2" : "")
             }
           >
             {/* Skipped for a trigger, which wears its name on the button
